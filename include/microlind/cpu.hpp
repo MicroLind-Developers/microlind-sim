@@ -1,7 +1,10 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
+#include <string>
+#include <vector>
 
 namespace microlind {
 
@@ -59,6 +62,8 @@ public:
     [[nodiscard]] uint16_t last_pc() const { return last_pc_; }
     [[nodiscard]] uint8_t last_opcode() const { return last_opcode_; }
     [[nodiscard]] uint8_t last_prefix() const { return last_prefix_; }
+    const std::string& opcode_name(uint8_t prefix, uint8_t opcode) const;
+    uint8_t opcode_length(Bus& bus, uint16_t pc) const;
 
 private:
     friend uint16_t read_reg_for_dest(const Registers& regs, uint8_t src_code, bool dest_is_16);
@@ -527,6 +532,9 @@ private:
     Handler page0_[256]{};
     Handler page10_[256]{};
     Handler page11_[256]{};
+    std::string names0_[256]{};
+    std::string names10_[256]{};
+    std::string names11_[256]{};
     bool sync_wait_{false};
 };
 

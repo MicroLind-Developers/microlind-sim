@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <string>
 #include <utility>
 
 namespace microlind {
@@ -21,425 +22,440 @@ Cpu::Cpu(CpuMode mode) : mode_(mode) {
     std::fill(std::begin(page0_), std::end(page0_), &Cpu::op_invalid);
     std::fill(std::begin(page10_), std::end(page10_), &Cpu::op_invalid);
     std::fill(std::begin(page11_), std::end(page11_), &Cpu::op_invalid);
+    auto make_name = [](const char* fn) {
+        std::string s(fn);
+        if (s.rfind("op_", 0) == 0) s = s.substr(3);
+        std::replace(s.begin(), s.end(), '_', ' ');
+        return s;
+    };
+    auto set0 = [&](uint8_t op, Handler h, std::string nm) { page0_[op] = h; names0_[op] = std::move(nm); };
+    auto set10 = [&](uint8_t op, Handler h, std::string nm) { page10_[op] = h; names10_[op] = std::move(nm); };
+    auto set11 = [&](uint8_t op, Handler h, std::string nm) { page11_[op] = h; names11_[op] = std::move(nm); };
+#define SET0(op, fn) set0(op, &Cpu::fn, make_name(#fn))
+#define SET10(op, fn) set10(op, &Cpu::fn, make_name(#fn))
+#define SET11(op, fn) set11(op, &Cpu::fn, make_name(#fn))
 
     // Inherent
-    page0_[0x12] = &Cpu::op_nop;
-    page0_[0x4F] = &Cpu::op_clra;
-    page0_[0x5F] = &Cpu::op_clrb;
-    page0_[0x39] = &Cpu::op_rts;
+    SET0(0x12, op_nop);
+    SET0(0x4F, op_clra);
+    SET0(0x5F, op_clrb);
+    SET0(0x39, op_rts);
 
     // Branches
-    page0_[0x20] = &Cpu::op_bra;
-    page0_[0x8D] = &Cpu::op_bsr;
-    page0_[0x26] = &Cpu::op_bne;
-    page0_[0x27] = &Cpu::op_beq;
-    page0_[0x22] = &Cpu::op_bhi;
-    page0_[0x23] = &Cpu::op_bls;
-    page0_[0x24] = &Cpu::op_bcc;
-    page0_[0x25] = &Cpu::op_bcs;
-    page0_[0x2A] = &Cpu::op_bpl;
-    page0_[0x2B] = &Cpu::op_bmi;
-    page0_[0x28] = &Cpu::op_bvc;
-    page0_[0x29] = &Cpu::op_bvs;
-    page0_[0x2C] = &Cpu::op_bge;
-    page0_[0x2D] = &Cpu::op_blt;
-    page0_[0x2E] = &Cpu::op_bgt;
-    page0_[0x2F] = &Cpu::op_ble;
+    SET0(0x20, op_bra);
+    SET0(0x8D, op_bsr);
+    SET0(0x26, op_bne);
+    SET0(0x27, op_beq);
+    SET0(0x22, op_bhi);
+    SET0(0x23, op_bls);
+    SET0(0x24, op_bcc);
+    SET0(0x25, op_bcs);
+    SET0(0x2A, op_bpl);
+    SET0(0x2B, op_bmi);
+    SET0(0x28, op_bvc);
+    SET0(0x29, op_bvs);
+    SET0(0x2C, op_bge);
+    SET0(0x2D, op_blt);
+    SET0(0x2E, op_bgt);
+    SET0(0x2F, op_ble);
 
     // Jumps
-    page0_[0x0E] = &Cpu::op_jmp_dir;
-    page0_[0x7E] = &Cpu::op_jmp_ext;
-    page0_[0x6E] = &Cpu::op_jmp_idx;
-    page0_[0x9D] = &Cpu::op_jsr_dir;
-    page0_[0xBD] = &Cpu::op_jsr_ext;
-    page0_[0xAD] = &Cpu::op_jsr_idx;
-    page0_[0x39] = &Cpu::op_rts;
-    page0_[0x3B] = &Cpu::op_rti;
-    page0_[0x3F] = &Cpu::op_swi;
-    page10_[0x3F] = &Cpu::op_swi2;
-    page11_[0x3F] = &Cpu::op_swi3;
-    page0_[0x3C] = &Cpu::op_cwai;
-    page0_[0x13] = &Cpu::op_sync;
-    page0_[0x3D] = &Cpu::op_mul;
+    SET0(0x0E, op_jmp_dir);
+    SET0(0x7E, op_jmp_ext);
+    SET0(0x6E, op_jmp_idx);
+    SET0(0x9D, op_jsr_dir);
+    SET0(0xBD, op_jsr_ext);
+    SET0(0xAD, op_jsr_idx);
+    SET0(0x39, op_rts);
+    SET0(0x3B, op_rti);
+    SET0(0x3F, op_swi);
+    SET10(0x3F, op_swi2);
+    SET11(0x3F, op_swi3);
+    SET0(0x3C, op_cwai);
+    SET0(0x13, op_sync);
+    SET0(0x3D, op_mul);
 
     // Loads / Stores
-    page0_[0x86] = &Cpu::op_lda_imm;
-    page0_[0x96] = &Cpu::op_lda_dir;
-    page0_[0xB6] = &Cpu::op_lda_ext;
-    page0_[0xA6] = &Cpu::op_lda_idx;
-    page0_[0xC6] = &Cpu::op_ldb_imm;
-    page0_[0xD6] = &Cpu::op_ldb_dir;
-    page0_[0xF6] = &Cpu::op_ldb_ext;
-    page0_[0xE6] = &Cpu::op_ldb_idx;
-    page0_[0xCC] = &Cpu::op_ldd_imm;
-    page0_[0xDC] = &Cpu::op_ldd_dir;
-    page0_[0xFC] = &Cpu::op_ldd_ext;
-    page0_[0xEC] = &Cpu::op_ldd_idx;
+    SET0(0x86, op_lda_imm);
+    SET0(0x96, op_lda_dir);
+    SET0(0xB6, op_lda_ext);
+    SET0(0xA6, op_lda_idx);
+    SET0(0xC6, op_ldb_imm);
+    SET0(0xD6, op_ldb_dir);
+    SET0(0xF6, op_ldb_ext);
+    SET0(0xE6, op_ldb_idx);
+    SET0(0xCC, op_ldd_imm);
+    SET0(0xDC, op_ldd_dir);
+    SET0(0xFC, op_ldd_ext);
+    SET0(0xEC, op_ldd_idx);
 
-    page0_[0x97] = &Cpu::op_sta_dir;
-    page0_[0xB7] = &Cpu::op_sta_ext;
-    page0_[0xD7] = &Cpu::op_stb_dir;
-    page0_[0xF7] = &Cpu::op_stb_ext;
-    page0_[0xA7] = &Cpu::op_sta_idx;
-    page0_[0xE7] = &Cpu::op_stb_idx;
-    page0_[0xDD] = &Cpu::op_std_dir;
-    page0_[0xFD] = &Cpu::op_std_ext;
-    page0_[0xED] = &Cpu::op_std_idx;
+    SET0(0x97, op_sta_dir);
+    SET0(0xB7, op_sta_ext);
+    SET0(0xD7, op_stb_dir);
+    SET0(0xF7, op_stb_ext);
+    SET0(0xA7, op_sta_idx);
+    SET0(0xE7, op_stb_idx);
+    SET0(0xDD, op_std_dir);
+    SET0(0xFD, op_std_ext);
+    SET0(0xED, op_std_idx);
 
-    page0_[0x1E] = &Cpu::op_exg;
-    page0_[0x1F] = &Cpu::op_tfr;
+    SET0(0x1E, op_exg);
+    SET0(0x1F, op_tfr);
 
     // Logical
-    page0_[0x84] = &Cpu::op_anda_imm;
-    page0_[0x94] = &Cpu::op_anda_dir;
-    page0_[0xB4] = &Cpu::op_anda_ext;
-    page0_[0xA4] = &Cpu::op_anda_idx;
-    page0_[0xC4] = &Cpu::op_andb_imm;
-    page0_[0xD4] = &Cpu::op_andb_dir;
-    page0_[0xF4] = &Cpu::op_andb_ext;
-    page0_[0xE4] = &Cpu::op_andb_idx;
+    SET0(0x84, op_anda_imm);
+    SET0(0x94, op_anda_dir);
+    SET0(0xB4, op_anda_ext);
+    SET0(0xA4, op_anda_idx);
+    SET0(0xC4, op_andb_imm);
+    SET0(0xD4, op_andb_dir);
+    SET0(0xF4, op_andb_ext);
+    SET0(0xE4, op_andb_idx);
 
-    page0_[0x8A] = &Cpu::op_ora_imm;
-    page0_[0x9A] = &Cpu::op_ora_dir;
-    page0_[0xBA] = &Cpu::op_ora_ext;
-    page0_[0xAA] = &Cpu::op_ora_idx;
-    page0_[0xCA] = &Cpu::op_orb_imm;
-    page0_[0xDA] = &Cpu::op_orb_dir;
-    page0_[0xFA] = &Cpu::op_orb_ext;
-    page0_[0xEA] = &Cpu::op_orb_idx;
+    SET0(0x8A, op_ora_imm);
+    SET0(0x9A, op_ora_dir);
+    SET0(0xBA, op_ora_ext);
+    SET0(0xAA, op_ora_idx);
+    SET0(0xCA, op_orb_imm);
+    SET0(0xDA, op_orb_dir);
+    SET0(0xFA, op_orb_ext);
+    SET0(0xEA, op_orb_idx);
 
-    page0_[0x88] = &Cpu::op_eora_imm;
-    page0_[0x98] = &Cpu::op_eora_dir;
-    page0_[0xB8] = &Cpu::op_eora_ext;
-    page0_[0xA8] = &Cpu::op_eora_idx;
-    page0_[0xC8] = &Cpu::op_eorb_imm;
-    page0_[0xD8] = &Cpu::op_eorb_dir;
-    page0_[0xF8] = &Cpu::op_eorb_ext;
-    page0_[0xE8] = &Cpu::op_eorb_idx;
+    SET0(0x88, op_eora_imm);
+    SET0(0x98, op_eora_dir);
+    SET0(0xB8, op_eora_ext);
+    SET0(0xA8, op_eora_idx);
+    SET0(0xC8, op_eorb_imm);
+    SET0(0xD8, op_eorb_dir);
+    SET0(0xF8, op_eorb_ext);
+    SET0(0xE8, op_eorb_idx);
 
     // Arithmetic
-    page0_[0x8B] = &Cpu::op_adda_imm;
-    page0_[0x9B] = &Cpu::op_adda_dir;
-    page0_[0xBB] = &Cpu::op_adda_ext;
-    page0_[0xAB] = &Cpu::op_adda_idx;
-    page0_[0xCB] = &Cpu::op_addb_imm;
-    page0_[0xDB] = &Cpu::op_addb_dir;
-    page0_[0xFB] = &Cpu::op_addb_ext;
-    page0_[0xEB] = &Cpu::op_addb_idx;
-    page0_[0xC3] = &Cpu::op_addd_imm;
-    page0_[0xD3] = &Cpu::op_addd_dir;
-    page0_[0xF3] = &Cpu::op_addd_ext;
-    page0_[0xE3] = &Cpu::op_addd_idx;
+    SET0(0x8B, op_adda_imm);
+    SET0(0x9B, op_adda_dir);
+    SET0(0xBB, op_adda_ext);
+    SET0(0xAB, op_adda_idx);
+    SET0(0xCB, op_addb_imm);
+    SET0(0xDB, op_addb_dir);
+    SET0(0xFB, op_addb_ext);
+    SET0(0xEB, op_addb_idx);
+    SET0(0xC3, op_addd_imm);
+    SET0(0xD3, op_addd_dir);
+    SET0(0xF3, op_addd_ext);
+    SET0(0xE3, op_addd_idx);
 
-    page0_[0x80] = &Cpu::op_suba_imm;
-    page0_[0x90] = &Cpu::op_suba_dir;
-    page0_[0xB0] = &Cpu::op_suba_ext;
-    page0_[0xA0] = &Cpu::op_suba_idx;
-    page0_[0xC0] = &Cpu::op_subb_imm;
-    page0_[0xD0] = &Cpu::op_subb_dir;
-    page0_[0xF0] = &Cpu::op_subb_ext;
-    page0_[0xE0] = &Cpu::op_subb_idx;
-    page0_[0x83] = &Cpu::op_subd_imm;
-    page0_[0x93] = &Cpu::op_subd_dir;
-    page0_[0xB3] = &Cpu::op_subd_ext;
-    page0_[0xA3] = &Cpu::op_subd_idx;
+    SET0(0x80, op_suba_imm);
+    SET0(0x90, op_suba_dir);
+    SET0(0xB0, op_suba_ext);
+    SET0(0xA0, op_suba_idx);
+    SET0(0xC0, op_subb_imm);
+    SET0(0xD0, op_subb_dir);
+    SET0(0xF0, op_subb_ext);
+    SET0(0xE0, op_subb_idx);
+    SET0(0x83, op_subd_imm);
+    SET0(0x93, op_subd_dir);
+    SET0(0xB3, op_subd_ext);
+    SET0(0xA3, op_subd_idx);
 
-    page0_[0x81] = &Cpu::op_cmpa_imm;
-    page0_[0x91] = &Cpu::op_cmpa_dir;
-    page0_[0xB1] = &Cpu::op_cmpa_ext;
-    page0_[0xA1] = &Cpu::op_cmpa_idx;
-    page0_[0xC1] = &Cpu::op_cmpb_imm;
-    page0_[0xD1] = &Cpu::op_cmpb_dir;
-    page0_[0xF1] = &Cpu::op_cmpb_ext;
-    page0_[0xE1] = &Cpu::op_cmpb_idx;
-    page10_[0x83] = &Cpu::op_cmpd_imm;
-    page10_[0x93] = &Cpu::op_cmpd_dir;
-    page10_[0xB3] = &Cpu::op_cmpd_ext;
-    page10_[0xA3] = &Cpu::op_cmpd_idx;
+    SET0(0x81, op_cmpa_imm);
+    SET0(0x91, op_cmpa_dir);
+    SET0(0xB1, op_cmpa_ext);
+    SET0(0xA1, op_cmpa_idx);
+    SET0(0xC1, op_cmpb_imm);
+    SET0(0xD1, op_cmpb_dir);
+    SET0(0xF1, op_cmpb_ext);
+    SET0(0xE1, op_cmpb_idx);
+    SET10(0x83, op_cmpd_imm);
+    SET10(0x93, op_cmpd_dir);
+    SET10(0xB3, op_cmpd_ext);
+    SET10(0xA3, op_cmpd_idx);
 
     // 6309 arithmetic / logic extensions
-    page0_[0xCD] = &Cpu::op_ldq_imm;
-    page10_[0xDC] = &Cpu::op_ldq_dir;
-    page10_[0xEC] = &Cpu::op_ldq_idx;
-    page10_[0xFC] = &Cpu::op_ldq_ext;
-    page10_[0xDD] = &Cpu::op_stq_dir;
-    page10_[0xED] = &Cpu::op_stq_idx;
-    page10_[0xFD] = &Cpu::op_stq_ext;
+    SET0(0xCD, op_ldq_imm);
+    SET10(0xDC, op_ldq_dir);
+    SET10(0xEC, op_ldq_idx);
+    SET10(0xFC, op_ldq_ext);
+    SET10(0xDD, op_stq_dir);
+    SET10(0xED, op_stq_idx);
+    SET10(0xFD, op_stq_ext);
 
-    page10_[0x86] = &Cpu::op_ldw_imm;
-    page10_[0x96] = &Cpu::op_ldw_dir;
-    page10_[0xA6] = &Cpu::op_ldw_idx;
-    page10_[0xB6] = &Cpu::op_ldw_ext;
-    page10_[0x97] = &Cpu::op_stw_dir;
-    page10_[0xA7] = &Cpu::op_stw_idx;
-    page10_[0xB7] = &Cpu::op_stw_ext;
+    SET10(0x86, op_ldw_imm);
+    SET10(0x96, op_ldw_dir);
+    SET10(0xA6, op_ldw_idx);
+    SET10(0xB6, op_ldw_ext);
+    SET10(0x97, op_stw_dir);
+    SET10(0xA7, op_stw_idx);
+    SET10(0xB7, op_stw_ext);
 
-    page10_[0x8B] = &Cpu::op_addw_imm;
-    page10_[0x9B] = &Cpu::op_addw_dir;
-    page10_[0xAB] = &Cpu::op_addw_idx;
-    page10_[0xBB] = &Cpu::op_addw_ext;
-    page10_[0x80] = &Cpu::op_subw_imm;
-    page10_[0x90] = &Cpu::op_subw_dir;
-    page10_[0xA0] = &Cpu::op_subw_idx;
-    page10_[0xB0] = &Cpu::op_subw_ext;
-    page10_[0x81] = &Cpu::op_cmpw_imm;
-    page10_[0x91] = &Cpu::op_cmpw_dir;
-    page10_[0xA1] = &Cpu::op_cmpw_idx;
-    page10_[0xB1] = &Cpu::op_cmpw_ext;
+    SET10(0x8B, op_addw_imm);
+    SET10(0x9B, op_addw_dir);
+    SET10(0xAB, op_addw_idx);
+    SET10(0xBB, op_addw_ext);
+    SET10(0x80, op_subw_imm);
+    SET10(0x90, op_subw_dir);
+    SET10(0xA0, op_subw_idx);
+    SET10(0xB0, op_subw_ext);
+    SET10(0x81, op_cmpw_imm);
+    SET10(0x91, op_cmpw_dir);
+    SET10(0xA1, op_cmpw_idx);
+    SET10(0xB1, op_cmpw_ext);
 
-    page11_[0x8B] = &Cpu::op_adde_imm;
-    page11_[0x9B] = &Cpu::op_adde_dir;
-    page11_[0xAB] = &Cpu::op_adde_idx;
-    page11_[0xBB] = &Cpu::op_adde_ext;
-    page11_[0xCB] = &Cpu::op_addf_imm;
-    page11_[0xDB] = &Cpu::op_addf_dir;
-    page11_[0xEB] = &Cpu::op_addf_idx;
-    page11_[0xFB] = &Cpu::op_addf_ext;
+    SET11(0x8B, op_adde_imm);
+    SET11(0x9B, op_adde_dir);
+    SET11(0xAB, op_adde_idx);
+    SET11(0xBB, op_adde_ext);
+    SET11(0xCB, op_addf_imm);
+    SET11(0xDB, op_addf_dir);
+    SET11(0xEB, op_addf_idx);
+    SET11(0xFB, op_addf_ext);
 
-    page11_[0x80] = &Cpu::op_sube_imm;
-    page11_[0x90] = &Cpu::op_sube_dir;
-    page11_[0xA0] = &Cpu::op_sube_idx;
-    page11_[0xB0] = &Cpu::op_sube_ext;
-    page11_[0xC0] = &Cpu::op_subf_imm;
-    page11_[0xD0] = &Cpu::op_subf_dir;
-    page11_[0xE0] = &Cpu::op_subf_idx;
-    page11_[0xF0] = &Cpu::op_subf_ext;
+    SET11(0x80, op_sube_imm);
+    SET11(0x90, op_sube_dir);
+    SET11(0xA0, op_sube_idx);
+    SET11(0xB0, op_sube_ext);
+    SET11(0xC0, op_subf_imm);
+    SET11(0xD0, op_subf_dir);
+    SET11(0xE0, op_subf_idx);
+    SET11(0xF0, op_subf_ext);
 
-    page11_[0x81] = &Cpu::op_cmpe_imm;
-    page11_[0x91] = &Cpu::op_cmpe_dir;
-    page11_[0xA1] = &Cpu::op_cmpe_idx;
-    page11_[0xB1] = &Cpu::op_cmpe_ext;
-    page11_[0xC1] = &Cpu::op_cmpf_imm;
-    page11_[0xD1] = &Cpu::op_cmpf_dir;
-    page11_[0xE1] = &Cpu::op_cmpf_idx;
-    page11_[0xF1] = &Cpu::op_cmpf_ext;
+    SET11(0x81, op_cmpe_imm);
+    SET11(0x91, op_cmpe_dir);
+    SET11(0xA1, op_cmpe_idx);
+    SET11(0xB1, op_cmpe_ext);
+    SET11(0xC1, op_cmpf_imm);
+    SET11(0xD1, op_cmpf_dir);
+    SET11(0xE1, op_cmpf_idx);
+    SET11(0xF1, op_cmpf_ext);
 
-    page10_[0x89] = &Cpu::op_adcd_imm;
-    page10_[0x99] = &Cpu::op_adcd_dir;
-    page10_[0xA9] = &Cpu::op_adcd_idx;
-    page10_[0xB9] = &Cpu::op_adcd_ext;
-    page10_[0x82] = &Cpu::op_sbcd_imm;
-    page10_[0x92] = &Cpu::op_sbcd_dir;
-    page10_[0xA2] = &Cpu::op_sbcd_idx;
-    page10_[0xB2] = &Cpu::op_sbcd_ext;
-    page10_[0x8A] = &Cpu::op_ord_imm;
-    page10_[0x9A] = &Cpu::op_ord_dir;
-    page10_[0xAA] = &Cpu::op_ord_idx;
-    page10_[0xBA] = &Cpu::op_ord_ext;
+    SET10(0x89, op_adcd_imm);
+    SET10(0x99, op_adcd_dir);
+    SET10(0xA9, op_adcd_idx);
+    SET10(0xB9, op_adcd_ext);
+    SET10(0x82, op_sbcd_imm);
+    SET10(0x92, op_sbcd_dir);
+    SET10(0xA2, op_sbcd_idx);
+    SET10(0xB2, op_sbcd_ext);
+    SET10(0x8A, op_ord_imm);
+    SET10(0x9A, op_ord_dir);
+    SET10(0xAA, op_ord_idx);
+    SET10(0xBA, op_ord_ext);
 
-    page11_[0x8E] = &Cpu::op_divq_imm;
-    page11_[0x9E] = &Cpu::op_divq_dir;
-    page11_[0xAE] = &Cpu::op_divq_idx;
-    page11_[0xBE] = &Cpu::op_divq_ext;
+    SET11(0x8E, op_divq_imm);
+    SET11(0x9E, op_divq_dir);
+    SET11(0xAE, op_divq_idx);
+    SET11(0xBE, op_divq_ext);
 
-    page11_[0x8F] = &Cpu::op_muld_imm;
-    page11_[0x9F] = &Cpu::op_muld_dir;
-    page11_[0xAF] = &Cpu::op_muld_idx;
-    page11_[0xBF] = &Cpu::op_muld_ext;
+    SET11(0x8F, op_muld_imm);
+    SET11(0x9F, op_muld_dir);
+    SET11(0xAF, op_muld_idx);
+    SET11(0xBF, op_muld_ext);
 
-    page10_[0x30] = &Cpu::op_addr;
-    page10_[0x32] = &Cpu::op_subr;
-    page10_[0x37] = &Cpu::op_cmpr;
-    page10_[0x33] = &Cpu::op_sbcr;
-    page10_[0x31] = &Cpu::op_adcr;
-    page10_[0x35] = &Cpu::op_orr;
+    SET10(0x30, op_addr);
+    SET10(0x32, op_subr);
+    SET10(0x37, op_cmpr);
+    SET10(0x33, op_sbcr);
+    SET10(0x31, op_adcr);
+    SET10(0x35, op_orr);
 
     // Shift/rotate 6309
-    page10_[0x48] = &Cpu::op_lsl_d;
-    page10_[0x49] = &Cpu::op_rold;
-    page10_[0x46] = &Cpu::op_rord;
-    page10_[0x58] = &Cpu::op_lslw_inh;
-    page10_[0x59] = &Cpu::op_rolw;
-    page10_[0x56] = &Cpu::op_rorw;
-    page10_[0x5C] = &Cpu::op_incw_inh;
-    page10_[0x5D] = &Cpu::op_tstw_inh;
-    page10_[0x5F] = &Cpu::op_clrw_inh;
+    SET10(0x48, op_lsl_d);
+    SET10(0x49, op_rold);
+    SET10(0x46, op_rord);
+    SET10(0x58, op_lslw_inh);
+    SET10(0x59, op_rolw);
+    SET10(0x56, op_rorw);
+    SET10(0x5C, op_incw_inh);
+    SET10(0x5D, op_tstw_inh);
+    SET10(0x5F, op_clrw_inh);
 
     // LDMD / SEXW
-    page11_[0x3D] = &Cpu::op_ldmd;
-    page0_[0x14] = &Cpu::op_sexw;
+    SET11(0x3D, op_ldmd);
+    SET0(0x14, op_sexw);
 
     // TFM
-    page11_[0x38] = &Cpu::op_tfm_pp;
-    page11_[0x39] = &Cpu::op_tfm_mm;
-    page11_[0x3A] = &Cpu::op_tfm_pn;
-    page11_[0x3B] = &Cpu::op_tfm_np;
+    SET11(0x38, op_tfm_pp);
+    SET11(0x39, op_tfm_mm);
+    SET11(0x3A, op_tfm_pn);
+    SET11(0x3B, op_tfm_np);
 
     // Bit ops
-    page0_[0x01] = &Cpu::op_oim_dir;
-    page0_[0x61] = &Cpu::op_oim_idx;
-    page0_[0x71] = &Cpu::op_oim_ext;
-    page0_[0x02] = &Cpu::op_aim_dir;
-    page0_[0x62] = &Cpu::op_aim_idx;
-    page0_[0x72] = &Cpu::op_aim_ext;
-    page0_[0x05] = &Cpu::op_eim_dir;
-    page0_[0x65] = &Cpu::op_eim_idx;
-    page0_[0x75] = &Cpu::op_eim_ext;
-    page0_[0x0B] = &Cpu::op_tim_dir;
-    page0_[0x6B] = &Cpu::op_tim_idx;
-    page0_[0x7B] = &Cpu::op_tim_ext;
+    SET0(0x01, op_oim_dir);
+    SET0(0x61, op_oim_idx);
+    SET0(0x71, op_oim_ext);
+    SET0(0x02, op_aim_dir);
+    SET0(0x62, op_aim_idx);
+    SET0(0x72, op_aim_ext);
+    SET0(0x05, op_eim_dir);
+    SET0(0x65, op_eim_idx);
+    SET0(0x75, op_eim_ext);
+    SET0(0x0B, op_tim_dir);
+    SET0(0x6B, op_tim_idx);
+    SET0(0x7B, op_tim_ext);
 
     // Bit transfer/logic (direct only) 0x11 prefix
-    page11_[0x30] = &Cpu::op_band;
-    page11_[0x31] = &Cpu::op_biand;
-    page11_[0x32] = &Cpu::op_bor;
-    page11_[0x33] = &Cpu::op_bior;
-    page11_[0x34] = &Cpu::op_beor;
-    page11_[0x35] = &Cpu::op_bieor;
-    page11_[0x36] = &Cpu::op_ldbt;
-    page11_[0x37] = &Cpu::op_stbt;
+    SET11(0x30, op_band);
+    SET11(0x31, op_biand);
+    SET11(0x32, op_bor);
+    SET11(0x33, op_bior);
+    SET11(0x34, op_beor);
+    SET11(0x35, op_bieor);
+    SET11(0x36, op_ldbt);
+    SET11(0x37, op_stbt);
 
-    page0_[0x89] = &Cpu::op_adca_imm;
-    page0_[0x99] = &Cpu::op_adca_dir;
-    page0_[0xB9] = &Cpu::op_adca_ext;
-    page0_[0xA9] = &Cpu::op_adca_idx;
-    page0_[0xC9] = &Cpu::op_adcb_imm;
-    page0_[0xD9] = &Cpu::op_adcb_dir;
-    page0_[0xF9] = &Cpu::op_adcb_ext;
-    page0_[0xE9] = &Cpu::op_adcb_idx;
+    SET0(0x89, op_adca_imm);
+    SET0(0x99, op_adca_dir);
+    SET0(0xB9, op_adca_ext);
+    SET0(0xA9, op_adca_idx);
+    SET0(0xC9, op_adcb_imm);
+    SET0(0xD9, op_adcb_dir);
+    SET0(0xF9, op_adcb_ext);
+    SET0(0xE9, op_adcb_idx);
 
-    page0_[0x82] = &Cpu::op_sbca_imm;
-    page0_[0x92] = &Cpu::op_sbca_dir;
-    page0_[0xB2] = &Cpu::op_sbca_ext;
-    page0_[0xA2] = &Cpu::op_sbca_idx;
-    page0_[0xC2] = &Cpu::op_sbcb_imm;
-    page0_[0xD2] = &Cpu::op_sbcb_dir;
-    page0_[0xF2] = &Cpu::op_sbcb_ext;
-    page0_[0xE2] = &Cpu::op_sbcb_idx;
+    SET0(0x82, op_sbca_imm);
+    SET0(0x92, op_sbca_dir);
+    SET0(0xB2, op_sbca_ext);
+    SET0(0xA2, op_sbca_idx);
+    SET0(0xC2, op_sbcb_imm);
+    SET0(0xD2, op_sbcb_dir);
+    SET0(0xF2, op_sbcb_ext);
+    SET0(0xE2, op_sbcb_idx);
 
-    page0_[0x85] = &Cpu::op_bita_imm;
-    page0_[0x95] = &Cpu::op_bita_dir;
-    page0_[0xB5] = &Cpu::op_bita_ext;
-    page0_[0xA5] = &Cpu::op_bita_idx;
-    page0_[0xC5] = &Cpu::op_bitb_imm;
-    page0_[0xD5] = &Cpu::op_bitb_dir;
-    page0_[0xF5] = &Cpu::op_bitb_ext;
-    page0_[0xE5] = &Cpu::op_bitb_idx;
+    SET0(0x85, op_bita_imm);
+    SET0(0x95, op_bita_dir);
+    SET0(0xB5, op_bita_ext);
+    SET0(0xA5, op_bita_idx);
+    SET0(0xC5, op_bitb_imm);
+    SET0(0xD5, op_bitb_dir);
+    SET0(0xF5, op_bitb_ext);
+    SET0(0xE5, op_bitb_idx);
 
     // LEA
-    page0_[0x30] = &Cpu::op_leax;
-    page0_[0x31] = &Cpu::op_leay;
-    page0_[0x32] = &Cpu::op_leas;
-    page0_[0x33] = &Cpu::op_leau;
+    SET0(0x30, op_leax);
+    SET0(0x31, op_leay);
+    SET0(0x32, op_leas);
+    SET0(0x33, op_leau);
 
     // 16-bit loads/stores
-    page0_[0x8E] = &Cpu::op_ldx_imm;
-    page0_[0x9E] = &Cpu::op_ldx_dir;
-    page0_[0xBE] = &Cpu::op_ldx_ext;
-    page0_[0xAE] = &Cpu::op_ldx_idx;
-    page0_[0xCE] = &Cpu::op_ldu_imm;
-    page0_[0xDE] = &Cpu::op_ldu_dir;
-    page0_[0xFE] = &Cpu::op_ldu_ext;
-    page0_[0xEE] = &Cpu::op_ldu_idx;
-    page10_[0x8E] = &Cpu::op_ldy_imm;
-    page10_[0x9E] = &Cpu::op_ldy_dir;
-    page10_[0xBE] = &Cpu::op_ldy_ext;
-    page10_[0xAE] = &Cpu::op_ldy_idx;
-    page10_[0xCE] = &Cpu::op_lds_imm;
-    page10_[0xDE] = &Cpu::op_lds_dir;
-    page10_[0xFE] = &Cpu::op_lds_ext;
-    page10_[0xEE] = &Cpu::op_lds_idx;
+    SET0(0x8E, op_ldx_imm);
+    SET0(0x9E, op_ldx_dir);
+    SET0(0xBE, op_ldx_ext);
+    SET0(0xAE, op_ldx_idx);
+    SET0(0xCE, op_ldu_imm);
+    SET0(0xDE, op_ldu_dir);
+    SET0(0xFE, op_ldu_ext);
+    SET0(0xEE, op_ldu_idx);
+    SET10(0x8E, op_ldy_imm);
+    SET10(0x9E, op_ldy_dir);
+    SET10(0xBE, op_ldy_ext);
+    SET10(0xAE, op_ldy_idx);
+    SET10(0xCE, op_lds_imm);
+    SET10(0xDE, op_lds_dir);
+    SET10(0xFE, op_lds_ext);
+    SET10(0xEE, op_lds_idx);
 
-    page0_[0x9F] = &Cpu::op_stx_dir;
-    page0_[0xBF] = &Cpu::op_stx_ext;
-    page0_[0xAF] = &Cpu::op_stx_idx;
-    page0_[0xDF] = &Cpu::op_stu_dir;
-    page0_[0xFF] = &Cpu::op_stu_ext;
-    page0_[0xEF] = &Cpu::op_stu_idx;
-    page10_[0x9F] = &Cpu::op_sty_dir;
-    page10_[0xBF] = &Cpu::op_sty_ext;
-    page10_[0xAF] = &Cpu::op_sty_idx;
-    page10_[0xDF] = &Cpu::op_sts_dir;
-    page10_[0xFF] = &Cpu::op_sts_ext;
-    page10_[0xEF] = &Cpu::op_sts_idx;
+    SET0(0x9F, op_stx_dir);
+    SET0(0xBF, op_stx_ext);
+    SET0(0xAF, op_stx_idx);
+    SET0(0xDF, op_stu_dir);
+    SET0(0xFF, op_stu_ext);
+    SET0(0xEF, op_stu_idx);
+    SET10(0x9F, op_sty_dir);
+    SET10(0xBF, op_sty_ext);
+    SET10(0xAF, op_sty_idx);
+    SET10(0xDF, op_sts_dir);
+    SET10(0xFF, op_sts_ext);
+    SET10(0xEF, op_sts_idx);
 
     // Compare 16-bit
-    page0_[0x8C] = &Cpu::op_cmpx_imm;
-    page0_[0x9C] = &Cpu::op_cmpx_dir;
-    page0_[0xBC] = &Cpu::op_cmpx_ext;
-    page0_[0xAC] = &Cpu::op_cmpx_idx;
-    page10_[0x8C] = &Cpu::op_cmpy_imm;
-    page10_[0x9C] = &Cpu::op_cmpy_dir;
-    page10_[0xBC] = &Cpu::op_cmpy_ext;
-    page10_[0xAC] = &Cpu::op_cmpy_idx;
-    page11_[0x8C] = &Cpu::op_cmpu_imm;
-    page11_[0x9C] = &Cpu::op_cmpu_dir;
-    page11_[0xBC] = &Cpu::op_cmpu_ext;
-    page11_[0xAC] = &Cpu::op_cmpu_idx;
-    page11_[0x8E] = &Cpu::op_cmps_imm;
-    page11_[0x9E] = &Cpu::op_cmps_dir;
-    page11_[0xBE] = &Cpu::op_cmps_ext;
-    page11_[0xAE] = &Cpu::op_cmps_idx;
+    SET0(0x8C, op_cmpx_imm);
+    SET0(0x9C, op_cmpx_dir);
+    SET0(0xBC, op_cmpx_ext);
+    SET0(0xAC, op_cmpx_idx);
+    SET10(0x8C, op_cmpy_imm);
+    SET10(0x9C, op_cmpy_dir);
+    SET10(0xBC, op_cmpy_ext);
+    SET10(0xAC, op_cmpy_idx);
+    SET11(0x8C, op_cmpu_imm);
+    SET11(0x9C, op_cmpu_dir);
+    SET11(0xBC, op_cmpu_ext);
+    SET11(0xAC, op_cmpu_idx);
+    SET11(0x8E, op_cmps_imm);
+    SET11(0x9E, op_cmps_dir);
+    SET11(0xBE, op_cmps_ext);
+    SET11(0xAE, op_cmps_idx);
 
     // Misc
-    page0_[0x3A] = &Cpu::op_abx;
-    page0_[0x1D] = &Cpu::op_sex;
-    page0_[0x1C] = &Cpu::op_andcc;
-    page0_[0x1A] = &Cpu::op_orcc;
-    page0_[0x19] = &Cpu::op_daa;
+    SET0(0x3A, op_abx);
+    SET0(0x1D, op_sex);
+    SET0(0x1C, op_andcc);
+    SET0(0x1A, op_orcc);
+    SET0(0x19, op_daa);
 
     // Stack
-    page0_[0x34] = &Cpu::op_pshs;
-    page0_[0x35] = &Cpu::op_puls;
-    page0_[0x36] = &Cpu::op_pshu;
-    page0_[0x37] = &Cpu::op_pulu;
+    SET0(0x34, op_pshs);
+    SET0(0x35, op_puls);
+    SET0(0x36, op_pshu);
+    SET0(0x37, op_pulu);
 
     // Accumulator unary/shift
-    page0_[0x40] = &Cpu::op_nega;
-    page0_[0x50] = &Cpu::op_negb;
-    page0_[0x43] = &Cpu::op_coma;
-    page0_[0x53] = &Cpu::op_comb;
-    page0_[0x44] = &Cpu::op_lsra;
-    page0_[0x54] = &Cpu::op_lsrb;
-    page0_[0x46] = &Cpu::op_rora;
-    page0_[0x56] = &Cpu::op_rorb;
-    page0_[0x47] = &Cpu::op_asra;
-    page0_[0x57] = &Cpu::op_asrb;
-    page0_[0x48] = &Cpu::op_asla;
-    page0_[0x58] = &Cpu::op_aslb;
-    page0_[0x49] = &Cpu::op_rola;
-    page0_[0x59] = &Cpu::op_rolb;
-    page0_[0x4A] = &Cpu::op_deca;
-    page0_[0x5A] = &Cpu::op_decb;
-    page0_[0x4C] = &Cpu::op_inca;
-    page0_[0x5C] = &Cpu::op_incb;
-    page0_[0x4D] = &Cpu::op_tsta;
-    page0_[0x5D] = &Cpu::op_tstb;
+    SET0(0x40, op_nega);
+    SET0(0x50, op_negb);
+    SET0(0x43, op_coma);
+    SET0(0x53, op_comb);
+    SET0(0x44, op_lsra);
+    SET0(0x54, op_lsrb);
+    SET0(0x46, op_rora);
+    SET0(0x56, op_rorb);
+    SET0(0x47, op_asra);
+    SET0(0x57, op_asrb);
+    SET0(0x48, op_asla);
+    SET0(0x58, op_aslb);
+    SET0(0x49, op_rola);
+    SET0(0x59, op_rolb);
+    SET0(0x4A, op_deca);
+    SET0(0x5A, op_decb);
+    SET0(0x4C, op_inca);
+    SET0(0x5C, op_incb);
+    SET0(0x4D, op_tsta);
+    SET0(0x5D, op_tstb);
 
     // Memory unary/shift
-    page0_[0x00] = &Cpu::op_neg_dir;
-    page0_[0x60] = &Cpu::op_neg_idx;
-    page0_[0x70] = &Cpu::op_neg_ext;
-    page0_[0x03] = &Cpu::op_com_dir;
-    page0_[0x63] = &Cpu::op_com_idx;
-    page0_[0x73] = &Cpu::op_com_ext;
-    page0_[0x04] = &Cpu::op_lsr_dir;
-    page0_[0x64] = &Cpu::op_lsr_idx;
-    page0_[0x74] = &Cpu::op_lsr_ext;
-    page0_[0x06] = &Cpu::op_ror_dir;
-    page0_[0x66] = &Cpu::op_ror_idx;
-    page0_[0x76] = &Cpu::op_ror_ext;
-    page0_[0x07] = &Cpu::op_asr_dir;
-    page0_[0x67] = &Cpu::op_asr_idx;
-    page0_[0x77] = &Cpu::op_asr_ext;
-    page0_[0x08] = &Cpu::op_asl_dir;
-    page0_[0x68] = &Cpu::op_asl_idx;
-    page0_[0x78] = &Cpu::op_asl_ext;
-    page0_[0x09] = &Cpu::op_rol_dir;
-    page0_[0x69] = &Cpu::op_rol_idx;
-    page0_[0x79] = &Cpu::op_rol_ext;
-    page0_[0x0A] = &Cpu::op_dec_dir;
-    page0_[0x6A] = &Cpu::op_dec_idx;
-    page0_[0x7A] = &Cpu::op_dec_ext;
-    page0_[0x0C] = &Cpu::op_inc_dir;
-    page0_[0x6C] = &Cpu::op_inc_idx;
-    page0_[0x7C] = &Cpu::op_inc_ext;
-    page0_[0x0D] = &Cpu::op_tst_dir;
-    page0_[0x6D] = &Cpu::op_tst_idx;
-    page0_[0x7D] = &Cpu::op_tst_ext;
-    page0_[0x0F] = &Cpu::op_clr_dir;
-    page0_[0x6F] = &Cpu::op_clr_idx;
-    page0_[0x7F] = &Cpu::op_clr_ext;
+    SET0(0x00, op_neg_dir);
+    SET0(0x60, op_neg_idx);
+    SET0(0x70, op_neg_ext);
+    SET0(0x03, op_com_dir);
+    SET0(0x63, op_com_idx);
+    SET0(0x73, op_com_ext);
+    SET0(0x04, op_lsr_dir);
+    SET0(0x64, op_lsr_idx);
+    SET0(0x74, op_lsr_ext);
+    SET0(0x06, op_ror_dir);
+    SET0(0x66, op_ror_idx);
+    SET0(0x76, op_ror_ext);
+    SET0(0x07, op_asr_dir);
+    SET0(0x67, op_asr_idx);
+    SET0(0x77, op_asr_ext);
+    SET0(0x08, op_asl_dir);
+    SET0(0x68, op_asl_idx);
+    SET0(0x78, op_asl_ext);
+    SET0(0x09, op_rol_dir);
+    SET0(0x69, op_rol_idx);
+    SET0(0x79, op_rol_ext);
+    SET0(0x0A, op_dec_dir);
+    SET0(0x6A, op_dec_idx);
+    SET0(0x7A, op_dec_ext);
+    SET0(0x0C, op_inc_dir);
+    SET0(0x6C, op_inc_idx);
+    SET0(0x7C, op_inc_ext);
+    SET0(0x0D, op_tst_dir);
+    SET0(0x6D, op_tst_idx);
+    SET0(0x7D, op_tst_ext);
+    SET0(0x0F, op_clr_dir);
+    SET0(0x6F, op_clr_idx);
+    SET0(0x7F, op_clr_ext);
+#undef SET0
+#undef SET10
+#undef SET11
 }
 
 CpuTickResult Cpu::tick(Bus& bus) {
@@ -465,6 +481,32 @@ CpuTickResult Cpu::tick(Bus& bus) {
     const uint8_t cycles = (this->*handler)(bus);
     cycles_executed_ += cycles;
     return CpuTickResult{cycles};
+}
+
+const std::string& Cpu::opcode_name(uint8_t prefix, uint8_t opcode) const {
+    if (prefix == 0x10) return names10_[opcode];
+    if (prefix == 0x11) return names11_[opcode];
+    return names0_[opcode];
+}
+
+uint8_t Cpu::opcode_length(Bus& bus, uint16_t pc) const {
+    uint8_t op0 = bus.read8(pc);
+    if (op0 == 0x10 || op0 == 0x11) {
+        const uint8_t op1 = bus.read8(static_cast<uint16_t>(pc + 1));
+        if (op0 == 0x11 && op1 == 0x3D) return 3; // LDMD immediate
+        return static_cast<uint8_t>(2); // prefixes; we don't encode full length table yet
+    }
+    // Quick length hints for some instructions; default 1.
+    switch (op0) {
+    case 0x16: // LBRA
+    case 0x17: // LBSR
+        return 3;
+    case 0x8D: // BSR
+        return 2;
+    default:
+        break;
+    }
+    return 1;
 }
 
 uint8_t Cpu::fetch_byte(Bus& bus) {

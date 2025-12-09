@@ -23,6 +23,11 @@ void Simulator::run_cycles(uint64_t count) {
     }
 }
 
+void Simulator::tick_clock(uint64_t cycles) {
+    bus_.tick_devices(static_cast<uint32_t>(cycles));
+    clock_.advance_cycles(cycles);
+}
+
 void Simulator::reset_from_vector() {
     const uint8_t hi = bus_.read8(0xFFFE);
     const uint8_t lo = bus_.read8(0xFFFF);

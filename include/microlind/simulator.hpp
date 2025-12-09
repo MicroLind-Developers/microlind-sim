@@ -26,6 +26,9 @@ public:
     // Set PC from the reset vector at $FFFE/$FFFF.
     void reset_from_vector();
 
+    // Advance only the clock/devices by a number of cycles (CPU not executed).
+    void tick_clock(uint64_t cycles);
+
 private:
     Cpu cpu_;
     Bus bus_;

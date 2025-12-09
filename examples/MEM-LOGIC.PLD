@@ -1,0 +1,44 @@
+Name     Memory-Logic ;
+PartNo   00 ;
+Date     2025-03-19 ;
+Revision 02 ;
+Designer Engineer ;
+Company  Sperly Retro Electronics ;
+Assembly None ;
+Location  ;
+Device   g22v10 ;
+
+/* *************** INPUT PINS *********************/
+PIN 1    = A10            ; /*                                 */ 
+PIN 2    = A11            ; /*                                 */ 
+PIN 3    = A12            ; /*                                 */ 
+PIN 4    = A13            ; /*                                 */ 
+PIN 5    = A14            ; /*                                 */ 
+PIN 6    = A15            ; /*                                 */ 
+PIN 7    = AM19            ; /* AM19 - AM21                     */
+PIN 8    = AM20            ; /* AM19 - AM21                     */
+PIN 9    = AM21            ; /* AM19 - AM21                     */
+PIN 10   = A0                        ; /*                                 */
+PIN 11   = A1                        ; /*                                 */
+PIN 13   = !MEM_RD                   ; /*                                 */ 
+PIN 14   = !MAP_EN                   ; /*                                 */ 
+
+/* *************** OUTPUT PINS *********************/
+PIN 23    = !ROM_EN                   ; /* Enable ROM                      */
+PIN 22    = !RAML_EN                  ; /* Enable Low RAM                  */
+PIN 21    = !RAMH_EN                  ; /* Enable High RAM                 */ 
+PIN 20    = !RAMX_EN                  ; /* Enable Exp. RAM                 */
+PIN 19    = !IO_EN                    ; /* Enable IO                       */
+PIN 18    = !MAP_RD                   ; /* Enable High RAM                 */
+PIN 17    = BANK_SEL0                 ; /* Bank Reg select 0               */
+PIN 16    = BANK_SEL1                 ; /* Bank Reg select 1               */
+
+
+ROM_EN    = (!A10 #  A11 # !A12) & A13   & A14   & A15		; 
+RAML_EN   = (!A13 # !A14 # !A15) & !AM19 & !AM20 & !AM21		;
+RAMH_EN   = (!A13 # !A14 # !A15) &  AM19 & !AM20 & !AM21		;
+RAMX_EN   = (!A13 # !A14 # !A15) & (AM20 # AM21) 			;
+IO_EN     =   A10 & !A11 & A12   & A13   & A14   & A15		;
+MAP_RD    = (!A13 # !A14 # !A15  # MEM_RD) & 	MAP_EN		;/* Sets AM14 - AM21 */
+BANK_SEL0 = (MEM_RD & A0) # (!MEM_RD & A14) 				;
+BANK_SEL1 = (MEM_RD & A1) # (!MEM_RD & A15) 				;

@@ -1,0 +1,35 @@
+Name     Signal-Logic ;
+PartNo   00 ;
+Date     2025-03-19 ;
+Revision 04 ;
+Designer Engineer ;
+Company  Sperly Retro Electronics ;
+Assembly None ;
+Location  ;
+Device   G16V8S ;
+
+/* *************** INPUT PINS *********************/
+PIN 1    =  E                         ; 
+PIN 2    =  Q                         ; 
+PIN 3    =  RW                        ; 
+PIN 4    =  BA                        ;
+PIN 5    =  BS                        ;
+PIN 6    = !MEM_EN                    ; 
+PIN 11   = !BREQ                      ; 
+
+/* *************** OUTPUT PINS *********************/
+PIN 13    = RW1                      ; 
+PIN 15    = !MEM_WR                  ;
+PIN 16    = !MEM_RD                  ;
+PIN 17    = BAVAIL                   ; 
+PIN 18    = !RD                      ;
+PIN 19    = !WR                      ; 
+
+
+/* ********************* LOGIC *********************/
+RW1    =  RW 								; 
+MEM_WR =  MEM_EN & !RW & !Q & E			; 
+MEM_RD =  MEM_EN & RW & E					;
+BAVAIL =  BA & BS & BREQ					; 
+RD     =  RW & E							;
+WR     = !RW & E & !Q						; 
