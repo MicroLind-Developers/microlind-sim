@@ -46,6 +46,8 @@ struct Registers {
     uint16_t x{};
     uint16_t y{};
     uint16_t u{};
+    uint16_t v{};
+    uint16_t z{};
     uint16_t s{};
     uint16_t pc{};
 };
@@ -68,7 +70,18 @@ public:
 private:
     friend uint16_t read_reg_for_dest(const Registers& regs, uint8_t src_code, bool dest_is_16);
     friend void write_reg_sized(Cpu& cpu, uint8_t dest_code, uint16_t value, bool dest_is_16);
+
     using Handler = uint8_t (Cpu::*)(Bus&);
+    enum class AddressMode : uint8_t {NONE, IMMEDIATE, DIRECT, INDEXED, EXTENDED };
+
+    struct Instruction {
+        uint8_t op{};
+        std::string name;
+        uint8_t bytes{};
+        uint8_t cycles{};
+        AddressMode address_mode{AddressMode::NONE};
+        Handler handler{nullptr};
+    };
 
     enum class IndexReg : uint8_t { X = 0, Y, U, S, PC };
 
@@ -529,12 +542,9 @@ private:
     uint8_t last_opcode_{};
     uint8_t last_prefix_{};
 
-    Handler page0_[256]{};
-    Handler page10_[256]{};
-    Handler page11_[256]{};
-    std::string names0_[256]{};
-    std::string names10_[256]{};
-    std::string names11_[256]{};
+    Instruction instructions0_[256]{};
+    Instruction instructions10_[256]{};
+    Instruction instructions11_[256]{};
     bool sync_wait_{false};
 };
 

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -19,21 +20,47 @@ Cpu::Cpu(CpuMode mode) : mode_(mode) {
     regs_.s = 0xFFFF;
     regs_.cc = CC_I; // IRQ masked on reset by default.
 
-    std::fill(std::begin(page0_), std::end(page0_), &Cpu::op_invalid);
-    std::fill(std::begin(page10_), std::end(page10_), &Cpu::op_invalid);
-    std::fill(std::begin(page11_), std::end(page11_), &Cpu::op_invalid);
     auto make_name = [](const char* fn) {
         std::string s(fn);
         if (s.rfind("op_", 0) == 0) s = s.substr(3);
         std::replace(s.begin(), s.end(), '_', ' ');
         return s;
     };
-    auto set0 = [&](uint8_t op, Handler h, std::string nm) { page0_[op] = h; names0_[op] = std::move(nm); };
-    auto set10 = [&](uint8_t op, Handler h, std::string nm) { page10_[op] = h; names10_[op] = std::move(nm); };
-    auto set11 = [&](uint8_t op, Handler h, std::string nm) { page11_[op] = h; names11_[op] = std::move(nm); };
-#define SET0(op, fn) set0(op, &Cpu::fn, make_name(#fn))
-#define SET10(op, fn) set10(op, &Cpu::fn, make_name(#fn))
-#define SET11(op, fn) set11(op, &Cpu::fn, make_name(#fn))
+
+    auto deduce_address_mode = [](const std::string& name) {
+        if (name.size() >= 4 && name.rfind(" imm") == name.size() - 4) return AddressMode::IMMEDIATE;
+        if (name.size() >= 4 && name.rfind(" dir") == name.size() - 4) return AddressMode::DIRECT;
+        if (name.size() >= 4 && name.rfind(" idx") == name.size() - 4) return AddressMode::INDEXED;
+        if (name.size() >= 4 && name.rfind(" ext") == name.size() - 4) return AddressMode::EXTENDED;
+        return AddressMode::IMMEDIATE;
+    };
+
+    auto make_instruction = [&](uint8_t op, Handler h, std::string nm, std::optional<AddressMode> mode = std::nullopt,
+                                uint8_t bytes = 0, uint8_t cycles = 0) {
+        Instruction inst{};
+        inst.op = op;
+        inst.name = std::move(nm);
+        inst.bytes = bytes;
+        inst.cycles = cycles;
+        inst.address_mode = mode.value_or(deduce_address_mode(inst.name));
+        inst.handler = h;
+        return inst;
+    };
+
+    const Instruction invalid = make_instruction(0, &Cpu::op_invalid, "invalid");
+    std::fill(std::begin(instructions0_), std::end(instructions0_), invalid);
+    std::fill(std::begin(instructions10_), std::end(instructions10_), invalid);
+    std::fill(std::begin(instructions11_), std::end(instructions11_), invalid);
+
+    auto set0 = [&](uint8_t op, Handler h, std::string nm, std::optional<AddressMode> mode = std::nullopt,
+                    uint8_t bytes = 0, uint8_t cycles = 0) { instructions0_[op] = make_instruction(op, h, std::move(nm), mode, bytes, cycles); };
+    auto set10 = [&](uint8_t op, Handler h, std::string nm, std::optional<AddressMode> mode = std::nullopt,
+                     uint8_t bytes = 0, uint8_t cycles = 0) { instructions10_[op] = make_instruction(op, h, std::move(nm), mode, bytes, cycles); };
+    auto set11 = [&](uint8_t op, Handler h, std::string nm, std::optional<AddressMode> mode = std::nullopt,
+                     uint8_t bytes = 0, uint8_t cycles = 0) { instructions11_[op] = make_instruction(op, h, std::move(nm), mode, bytes, cycles); };
+#define SET0(op, fn, ...) set0(op, &Cpu::fn, make_name(#fn), ##__VA_ARGS__)
+#define SET10(op, fn, ...) set10(op, &Cpu::fn, make_name(#fn), ##__VA_ARGS__)
+#define SET11(op, fn, ...) set11(op, &Cpu::fn, make_name(#fn), ##__VA_ARGS__)
 
     // Inherent
     SET0(0x12, op_nop);
@@ -463,39 +490,42 @@ CpuTickResult Cpu::tick(Bus& bus) {
     const uint8_t opcode = fetch_byte(bus);
     last_prefix_ = 0x00;
     last_opcode_ = opcode;
-    Handler handler = &Cpu::op_invalid;
+    const Instruction* inst = &instructions0_[opcode];
     if (opcode == 0x10) {
         const uint8_t next = fetch_byte(bus);
-        handler = page10_[next];
+        inst = &instructions10_[next];
         last_prefix_ = 0x10;
         last_opcode_ = next;
     } else if (opcode == 0x11) {
         const uint8_t next = fetch_byte(bus);
-        handler = page11_[next];
+        inst = &instructions11_[next];
         last_prefix_ = 0x11;
         last_opcode_ = next;
-    } else {
-        handler = page0_[opcode];
     }
 
+    const Handler handler = inst && inst->handler ? inst->handler : &Cpu::op_invalid;
     const uint8_t cycles = (this->*handler)(bus);
     cycles_executed_ += cycles;
     return CpuTickResult{cycles};
 }
 
 const std::string& Cpu::opcode_name(uint8_t prefix, uint8_t opcode) const {
-    if (prefix == 0x10) return names10_[opcode];
-    if (prefix == 0x11) return names11_[opcode];
-    return names0_[opcode];
+    if (prefix == 0x10) return instructions10_[opcode].name;
+    if (prefix == 0x11) return instructions11_[opcode].name;
+    return instructions0_[opcode].name;
 }
 
 uint8_t Cpu::opcode_length(Bus& bus, uint16_t pc) const {
     uint8_t op0 = bus.read8(pc);
     if (op0 == 0x10 || op0 == 0x11) {
         const uint8_t op1 = bus.read8(static_cast<uint16_t>(pc + 1));
+        const Instruction& inst = (op0 == 0x10) ? instructions10_[op1] : instructions11_[op1];
+        if (inst.bytes != 0) return inst.bytes;
         if (op0 == 0x11 && op1 == 0x3D) return 3; // LDMD immediate
         return static_cast<uint8_t>(2); // prefixes; we don't encode full length table yet
     }
+    const Instruction& inst = instructions0_[op0];
+    if (inst.bytes != 0) return inst.bytes;
     // Quick length hints for some instructions; default 1.
     switch (op0) {
     case 0x16: // LBRA
