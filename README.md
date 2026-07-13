@@ -6,7 +6,8 @@ Early C++ skeleton for a modular, cycle-ticked HD6309/MC6809 simulator with a pl
 - `include/microlind/` public headers for bus, CPU, clock, simulator, logic helper.
 - `src/` implementations.
 - `src/devices/memory.cpp` simple RAM/ROM device.
-- `src/cli/main.cpp` minimal driver to tick the simulator and optionally load a ROM image.
+- `src/devices/compact_flash.cpp` minimal CF-ATA storage device.
+- `src/cli/` interactive CLI, image loading, hardware config parsing, and simulator setup.
 
 ## Build
 ```
@@ -20,6 +21,29 @@ Run the CLI:
 ./build/microlind-sim-cli --6309 --srec --rom bios.s19
 ```
 
+## Hardware config
+`examples/hw.cfg` maps the current microLind I/O layout. CompactFlash is configured with:
+
+```
+[CF]
+IO_START_ADDRESS=0xF418
+IO_END_ADDRESS=0xF41F
+SECTORS=2048
+IMAGE=cf.img
+READ_ONLY=false
+```
+
+`IMAGE`, `SECTORS`, and `READ_ONLY` are optional. Without an image path, the CF device uses volatile zero-filled storage. With `IMAGE`, the image size becomes the disk size unless `SECTORS` is set as a larger minimum. The current model implements the 8-byte ATA/CF register window, `IDENTIFY DEVICE`, PIO read/write sector commands, read/write multiple, erase sectors, read verify, set features, set multiple mode, diagnostics, and common idle/standby/check-power commands.
+
+Raw disk images, such as files created with `dd`, can also be loaded at runtime:
+
+```
+loadcf path/to/cf.img
+loadcf path/to/cf.img 4096
+```
+
+The optional sector count is a minimum size. Images that are not an exact multiple of 512 bytes are padded to the next sector.
+
 ## Current CPU coverage
 - Core registers (plus 6309 E/F and MD), direct/extended/indexed addressing (common postbyte forms), DP register, CC flag updates for NZ and arithmetic flags on ALU ops.
 - Implemented instructions with cycle counts: NOP, CLRA/CLRB, LDA/B (imm/direct/extended/indexed), LDD (imm/direct/extended/indexed), STA/B/D (direct/extended/indexed), BRA/BSR plus full conditional branches, JMP/JSR (direct/extended/indexed), RTS/RTI, SWI/SWI2/SWI3, CWAI, SYNC (stub), MUL, TFR/EXG, logical ops AND/OR/EOR/BIT on A/B (imm/direct/extended/indexed), arithmetic ADD/SUB/ADC/SBC/COMPARE on A/B (imm/direct/extended/indexed), 16-bit ADDD/SUBD/CMPD, LEA X/Y/U/S, 16-bit loads/stores for X/Y/U/S (imm/direct/extended/indexed) and compares for X/Y/U/S, stack ops PSHS/PULS/PSHU/PULU, accumulator and memory unary/shift ops (NEG/COM/LSR/ROR/ASR/ASL/ROL/DEC/INC/TST/CLR) across accumulator, direct, indexed, extended, misc ABX/SEX/ANDCC/ORCC/DAA.
@@ -29,6 +53,6 @@ Run the CLI:
 ## Next steps
 - Implement the full HD6309/MC6809 core with cycle-accurate micro-ops and per-instruction timing.
 - Flesh out bus arbitration, interrupt lines, and wait states.
-- Add device modules: XR88C92 serial (with terminal frontend), parallel I/O, IDE/CF, video/sound stubs.
+- Add device modules: parallel I/O, video/sound stubs, and deeper CF timing/interrupt behavior.
 - Model ATF22V10/ATF16V8 logic: parse equations and expose signal outputs per cycle; drive address decode and R/W logic from those chips.
 - Add tests for bus overlap, memory behavior, and CPU instruction timing.

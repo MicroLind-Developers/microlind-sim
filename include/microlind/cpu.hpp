@@ -49,6 +49,7 @@ struct Registers {
     uint16_t v{};
     uint16_t z{};
     uint16_t s{};
+    uint16_t v{};
     uint16_t pc{};
 };
 
@@ -58,6 +59,7 @@ public:
 
     [[nodiscard]] CpuMode mode() const { return mode_; }
     CpuTickResult tick(Bus& bus);
+    void reset();
     Registers& regs() { return regs_; }
     const Registers& regs() const { return regs_; }
     void set_pc(uint16_t pc) { regs_.pc = pc; }
@@ -495,6 +497,7 @@ private:
     uint8_t op_sbcr(Bus&);
     uint8_t op_adcr(Bus&);
     uint8_t op_orr(Bus&);
+    uint8_t op_eorr(Bus&);
 
     uint8_t op_lsl_d(Bus&);
     uint8_t op_rold(Bus&);

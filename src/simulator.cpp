@@ -29,6 +29,7 @@ void Simulator::tick_clock(uint64_t cycles) {
 }
 
 void Simulator::reset_from_vector() {
+    cpu_.reset();
     const uint8_t hi = bus_.read8(0xFFFE);
     const uint8_t lo = bus_.read8(0xFFFF);
     cpu_.set_pc(static_cast<uint16_t>((hi << 8) | lo));

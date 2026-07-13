@@ -9,6 +9,7 @@ add_library(microlind-sim
     src/bus.cpp
     src/clock.cpp
     src/cpu.cpp
+    src/devices/compact_flash.cpp
     src/simulator.cpp
     src/devices/memory.cpp
     src/devices/memory_mapper.cpp
@@ -18,7 +19,14 @@ add_library(microlind-sim
 
 target_include_directories(microlind-sim PUBLIC include)
 
-add_executable(microlind-sim-cli src/cli/main.cpp)
+add_executable(microlind-sim-cli
+    src/cli/main.cpp
+    src/cli/disassembler.cpp
+    src/cli/hardware_config.cpp
+    src/cli/image_loader.cpp
+    src/cli/sim_builder.cpp
+    src/cli/util.cpp
+)
 target_link_libraries(microlind-sim-cli PRIVATE microlind-sim)
 
 option(MICROLIND_WARNINGS "Enable extra warnings" ON)

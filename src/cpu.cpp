@@ -16,9 +16,7 @@ uint8_t lo(uint16_t value) { return static_cast<uint8_t>(value & 0xFF); }
 } // namespace
 
 Cpu::Cpu(CpuMode mode) : mode_(mode) {
-    // Default stack high for quick use; user can override by writing regs().s.
-    regs_.s = 0xFFFF;
-    regs_.cc = CC_I; // IRQ masked on reset by default.
+    reset();
 
     auto make_name = [](const char* fn) {
         std::string s(fn);
@@ -283,6 +281,7 @@ Cpu::Cpu(CpuMode mode) : mode_(mode) {
     SET10(0x33, op_sbcr);
     SET10(0x31, op_adcr);
     SET10(0x35, op_orr);
+    SET10(0x36, op_eorr);
 
     // Shift/rotate 6309
     SET10(0x48, op_lsl_d);
@@ -483,6 +482,20 @@ Cpu::Cpu(CpuMode mode) : mode_(mode) {
 #undef SET0
 #undef SET10
 #undef SET11
+}
+
+void Cpu::reset() {
+    const uint16_t preserved_v = regs_.v;
+    regs_ = Registers{};
+    regs_.v = preserved_v;
+    // Default stack high for quick use; user can override by writing regs().s.
+    regs_.s = 0xFFFF;
+    regs_.cc = CC_I; // IRQ masked on reset by default.
+    cycles_executed_ = 0;
+    last_pc_ = 0;
+    last_opcode_ = 0;
+    last_prefix_ = 0;
+    sync_wait_ = false;
 }
 
 CpuTickResult Cpu::tick(Bus& bus) {
@@ -943,14 +956,14 @@ uint16_t Cpu::index_value(IndexReg reg) const {
 }
 
 uint8_t* Cpu::reg8_by_code(uint8_t code) {
-    // 0:D,1:X,2:Y,3:U,4:S,5:PC,8:A,9:B,A:CC,B:DP (per 6809 rules)
+    // 0:D,1:X,2:Y,3:U,4:S,5:PC,6:W,7:V,8:A,9:B,A:CC,B:DP,C/D:0,E:E,F:F.
     switch (code & 0x0F) {
     case 0x08: return &regs_.a;
     case 0x09: return &regs_.b;
     case 0x0A: return &regs_.cc;
     case 0x0B: return &regs_.dp;
-    case 0x0C: return &regs_.e; // 6309
-    case 0x0D: return &regs_.f; // 6309
+    case 0x0E: return &regs_.e; // 6309
+    case 0x0F: return &regs_.f; // 6309
     default: return nullptr;
     }
 }
@@ -964,7 +977,9 @@ bool Cpu::get_reg16_by_code(uint8_t code, uint16_t& out) const {
     case 0x04: out = regs_.s; return true;
     case 0x05: out = regs_.pc; return true;
     case 0x06: out = reg_w(); return true; // W (E:F)
-    case 0x07: out = 0; return true;       // V treated as zero register
+    case 0x07: out = regs_.v; return true; // V
+    case 0x0C:
+    case 0x0D: out = 0; return true;       // zero registers
     default: return false;
     }
 }
@@ -978,7 +993,9 @@ bool Cpu::set_reg16_by_code(uint8_t code, uint16_t value) {
     case 0x04: regs_.s = value; return true;
     case 0x05: regs_.pc = value; return true;
     case 0x06: set_reg_w(value); return true;
-    case 0x07: return true; // V ignored
+    case 0x07: regs_.v = value; return true;
+    case 0x0C:
+    case 0x0D: return true; // zero registers ignore writes
     default: return false;
     }
 }
@@ -1015,7 +1032,7 @@ void Cpu::set_reg_q(uint32_t value) {
 
 bool reg_is_16bit(uint8_t code) {
     const uint8_t c = code & 0x0F;
-    return c <= 0x07; // D,X,Y,U,S,PC,W,V(ignored)
+    return c <= 0x07; // D,X,Y,U,S,PC,W,V
 }
 
 uint16_t read_reg_for_dest(const Registers& regs, uint8_t src_code, bool dest_is_16) {
@@ -1029,13 +1046,15 @@ uint16_t read_reg_for_dest(const Registers& regs, uint8_t src_code, bool dest_is
         case 0x04: return regs.s;
         case 0x05: return regs.pc;
         case 0x06: return static_cast<uint16_t>((regs.e << 8) | regs.f); // W
-        case 0x07: return 0;                                            // V
+        case 0x07: return regs.v;
         case 0x08: return static_cast<uint16_t>((regs.a << 8) | regs.b); // A -> D
         case 0x09: return static_cast<uint16_t>((regs.a << 8) | regs.b); // B -> D
         case 0x0A: return regs.cc;
         case 0x0B: return static_cast<uint16_t>(regs.dp) << 8;
-        case 0x0C: return static_cast<uint16_t>((regs.e << 8) | regs.f); // E -> W
-        case 0x0D: return static_cast<uint16_t>((regs.e << 8) | regs.f); // F -> W
+        case 0x0C:
+        case 0x0D: return 0;                                             // zero registers
+        case 0x0E: return static_cast<uint16_t>((regs.e << 8) | regs.f); // E -> W
+        case 0x0F: return static_cast<uint16_t>((regs.e << 8) | regs.f); // F -> W
         default: return 0;
         }
     }
@@ -1048,13 +1067,15 @@ uint16_t read_reg_for_dest(const Registers& regs, uint8_t src_code, bool dest_is
     case 0x04: return regs.s & 0xFF;
     case 0x05: return regs.pc & 0xFF;
     case 0x06: return regs.f; // W low
-    case 0x07: return 0;
+    case 0x07: return regs.v & 0xFF;
     case 0x08: return regs.a;
     case 0x09: return regs.b;
     case 0x0A: return regs.cc;
     case 0x0B: return regs.dp;
-    case 0x0C: return regs.e;
-    case 0x0D: return regs.f;
+    case 0x0C:
+    case 0x0D: return 0;
+    case 0x0E: return regs.e;
+    case 0x0F: return regs.f;
     default: return 0;
     }
 }
@@ -2627,17 +2648,9 @@ uint8_t Cpu::op_tfr(Bus& bus) {
     const uint8_t src = post >> 4;
     const uint8_t dst = post & 0x0F;
 
-    uint16_t value16{};
-    if (get_reg16_by_code(src, value16)) {
-        set_reg16_by_code(dst, value16);
-        return 6;
-    }
-    if (auto* s8 = reg8_by_code(src)) {
-        if (auto* d8 = reg8_by_code(dst)) {
-            *d8 = *s8;
-        }
-        return 6;
-    }
+    const bool dest16 = reg_is_16bit(dst);
+    const uint16_t value = read_reg_for_dest(regs_, src, dest16);
+    write_reg_sized(*this, dst, value, dest16);
     return 6;
 }
 
@@ -2647,18 +2660,11 @@ uint8_t Cpu::op_exg(Bus& bus) {
     const uint8_t r1c = post >> 4;
     const uint8_t r2c = post & 0x0F;
 
-    uint16_t v1{}, v2{};
-    if (get_reg16_by_code(r1c, v1) && get_reg16_by_code(r2c, v2)) {
-        set_reg16_by_code(r1c, v2);
-        set_reg16_by_code(r2c, v1);
-        return 8;
-    }
-
-    if (auto* r1 = reg8_by_code(r1c)) {
-        if (auto* r2 = reg8_by_code(r2c)) {
-            std::swap(*r1, *r2);
-        }
-    }
+    const bool wide = reg_is_16bit(r1c) || reg_is_16bit(r2c);
+    const uint16_t v1 = read_reg_for_dest(regs_, r1c, wide);
+    const uint16_t v2 = read_reg_for_dest(regs_, r2c, wide);
+    write_reg_sized(*this, r1c, v2, wide);
+    write_reg_sized(*this, r2c, v1, wide);
     return 8;
 }
 
@@ -3181,6 +3187,25 @@ uint8_t Cpu::op_orr(Bus& bus) {
     const uint16_t s = read_reg_for_dest(regs_, src, dest16);
     const uint16_t d = read_reg_for_dest(regs_, dst, dest16);
     const uint16_t res = static_cast<uint16_t>(d | s);
+    regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V));
+    if (dest16) {
+        if (res & 0x8000) regs_.cc |= CC_N;
+        if (res == 0) regs_.cc |= CC_Z;
+    } else {
+        if (res & 0x80) regs_.cc |= CC_N;
+        if ((res & 0xFF) == 0) regs_.cc |= CC_Z;
+    }
+    write_reg_sized(*this, dst, res, dest16);
+    return 4;
+}
+uint8_t Cpu::op_eorr(Bus& bus) {
+    const uint8_t post = fetch_byte(bus);
+    const uint8_t dst = post & 0x0F;
+    const uint8_t src = post >> 4;
+    const bool dest16 = reg_is_16bit(dst);
+    const uint16_t s = read_reg_for_dest(regs_, src, dest16);
+    const uint16_t d = read_reg_for_dest(regs_, dst, dest16);
+    const uint16_t res = static_cast<uint16_t>(d ^ s);
     regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V));
     if (dest16) {
         if (res & 0x8000) regs_.cc |= CC_N;
