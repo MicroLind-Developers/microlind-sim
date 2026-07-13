@@ -21,33 +21,43 @@ void MemoryMapper::write8(uint16_t offset, uint8_t value) {
     state_->bank[idx] = value;
 }
 
-BankedMemory::BankedMemory(std::shared_ptr<MapperState> state, std::size_t bank_size, std::size_t total_size, std::size_t window_count)
+BankedMemory::BankedMemory(
+    std::shared_ptr<MapperState> state,
+    std::size_t bank_size,
+    std::size_t total_size,
+    std::size_t window_count,
+    std::size_t first_window,
+    BackingStore backing)
     : state_(std::move(state)),
-      data_(total_size, 0x00),
+      data_(std::move(backing)),
       bank_size_(bank_size ? bank_size : 1),
-      window_count_(window_count ? window_count : 1) {
+      window_count_(window_count ? window_count : 1),
+      first_window_(first_window) {
+    if (!data_) {
+        data_ = std::make_shared<std::vector<uint8_t>>(total_size, 0x00);
+    }
     const std::size_t bank_count = bank_size_ ? (total_size / bank_size_) : 0;
     bank_mask_ = bank_count ? (bank_count - 1) : 0;
 }
 
 uint8_t BankedMemory::read8(uint16_t offset) {
-    const std::size_t window = offset / bank_size_;
+    const std::size_t window = first_window_ + (offset / bank_size_);
     if (window >= window_count_) return 0xFF;
     const std::size_t bank = static_cast<std::size_t>(state_->bank[window]);
     std::size_t selected = bank_mask_ ? (bank & bank_mask_) : bank;
     const std::size_t phys = selected * bank_size_ + (offset % bank_size_);
-    if (phys >= data_.size()) return 0xFF;
-    return data_[phys];
+    if (phys >= data_->size()) return 0xFF;
+    return (*data_)[phys];
 }
 
 void BankedMemory::write8(uint16_t offset, uint8_t value) {
-    const std::size_t window = offset / bank_size_;
+    const std::size_t window = first_window_ + (offset / bank_size_);
     if (window >= window_count_) return;
     const std::size_t bank = static_cast<std::size_t>(state_->bank[window]);
     std::size_t selected = bank_mask_ ? (bank & bank_mask_) : bank;
     const std::size_t phys = selected * bank_size_ + (offset % bank_size_);
-    if (phys >= data_.size()) return;
-    data_[phys] = value;
+    if (phys >= data_->size()) return;
+    (*data_)[phys] = value;
 }
 
 } // namespace microlind::devices

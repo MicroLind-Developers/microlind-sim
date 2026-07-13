@@ -21,6 +21,30 @@ Run the CLI:
 ./build/microlind-sim-cli --6309 --srec --rom bios.s19
 ```
 
+## GUI
+An experimental Dear ImGui/SDL GUI is available as a separate executable beside
+the CLI. It is disabled by default so the core simulator can still build without
+GUI dependencies installed.
+
+To build it, install SDL2 development files. CMake will fetch Dear ImGui into
+the build tree:
+
+```
+cmake -S . -B build -DMICROLIND_BUILD_GUI=ON
+cmake --build build --target microlind-sim-gui
+```
+
+You can use a local Dear ImGui checkout instead with
+`-DMICROLIND_IMGUI_DIR=/path/to/imgui`, or change the fetched branch/tag with
+`-DMICROLIND_IMGUI_GIT_TAG=...`.
+
+The initial GUI is a simulator workbench with text path fields and browse
+dialogs for ROM, hardware config, and CF image loading; run, pause, step,
+step-over, run-until-address, run-until-return, registers, flags, disassembly,
+memory inspection/write, stack inspection, serial RX/TX, breakpoints,
+watchpoints, memory mapper display, instruction trace, mapped-device display,
+and an event log.
+
 ## Hardware config
 `examples/hw.cfg` maps the current microLind I/O layout. CompactFlash is configured with:
 

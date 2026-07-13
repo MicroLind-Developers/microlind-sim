@@ -39,3 +39,24 @@
 
 # debug information files
 *.dwo
+
+# CMake build outputs
+/build/
+/cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# Local dependency checkouts
+/external/
+/_deps/
+
+# Local editor/OS files
+.cache/
+.vscode/
+.idea/
+.DS_Store
+imgui.ini

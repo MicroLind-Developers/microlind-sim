@@ -27,6 +27,17 @@ struct BusError {
     uint16_t end;
 };
 
+enum class BusAccessType {
+    Read,
+    Write,
+};
+
+struct BusAccess {
+    BusAccessType type;
+    uint16_t address{};
+    uint8_t value{};
+};
+
 class Bus {
 public:
     Bus() = default;
@@ -38,6 +49,8 @@ public:
     void tick_devices(uint32_t cycles);
 
     std::vector<std::string> map_summary() const;
+    void clear_access_log() { access_log_.clear(); }
+    [[nodiscard]] const std::vector<BusAccess>& access_log() const { return access_log_; }
 
 private:
     struct MappedDevice {
@@ -55,6 +68,7 @@ private:
     };
 
     std::vector<MappedDevice> devices_{};
+    std::vector<BusAccess> access_log_{};
 };
 
 } // namespace microlind

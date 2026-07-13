@@ -12,10 +12,36 @@ namespace microlind::devices {
 
 class CompactFlash : public BusDevice {
 public:
+    enum class TransferMode {
+        None,
+        Read,
+        Write,
+    };
+
     struct Options {
         std::filesystem::path image_path{};
         uint32_t sectors{2048};
         bool read_only{false};
+    };
+
+    struct Snapshot {
+        std::filesystem::path image_path{};
+        uint32_t sector_count{};
+        bool read_only{};
+        uint8_t error{};
+        uint8_t features{};
+        uint8_t sector_count_reg{};
+        uint8_t sector_number{};
+        uint8_t cylinder_low{};
+        uint8_t cylinder_high{};
+        uint8_t drive_head{};
+        uint8_t status{};
+        uint8_t command{};
+        uint32_t selected_lba{};
+        uint32_t requested_sector_count{};
+        TransferMode transfer_mode{TransferMode::None};
+        std::size_t transfer_size{};
+        std::size_t transfer_index{};
     };
 
     CompactFlash();
@@ -29,15 +55,10 @@ public:
 
     [[nodiscard]] const std::filesystem::path& image_path() const { return options_.image_path; }
     [[nodiscard]] uint32_t sector_count() const { return sector_count_; }
+    [[nodiscard]] Snapshot snapshot() const;
 
 private:
     static constexpr std::size_t SectorSize = 512;
-
-    enum class TransferMode {
-        None,
-        Read,
-        Write,
-    };
 
     bool load_image(std::string* error = nullptr);
     void flush_image();
@@ -68,6 +89,7 @@ private:
     uint8_t cylinder_high_{0};
     uint8_t drive_head_{0xE0};
     uint8_t status_{0x50};
+    uint8_t command_{0};
 
     TransferMode transfer_mode_{TransferMode::None};
     std::vector<uint8_t> transfer_buffer_;

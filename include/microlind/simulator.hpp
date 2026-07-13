@@ -22,9 +22,13 @@ public:
     Cpu& cpu() { return cpu_; }
     Bus& bus() { return bus_; }
     Clock& clock() { return clock_; }
+    const Cpu& cpu() const { return cpu_; }
+    const Bus& bus() const { return bus_; }
+    const Clock& clock() const { return clock_; }
 
     // Set PC from the reset vector at $FFFE/$FFFF.
     void reset_from_vector();
+    void reset_clock();
 
     // Advance only the clock/devices by a number of cycles (CPU not executed).
     void tick_clock(uint64_t cycles);

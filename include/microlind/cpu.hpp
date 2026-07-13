@@ -49,7 +49,6 @@ struct Registers {
     uint16_t v{};
     uint16_t z{};
     uint16_t s{};
-    uint16_t v{};
     uint16_t pc{};
 };
 

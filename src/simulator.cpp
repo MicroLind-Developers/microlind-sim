@@ -35,6 +35,10 @@ void Simulator::reset_from_vector() {
     cpu_.set_pc(static_cast<uint16_t>((hi << 8) | lo));
 }
 
+void Simulator::reset_clock() {
+    clock_.reset();
+}
+
 bool default_memory_map(
     Simulator& sim,
     std::size_t ram_size,

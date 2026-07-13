@@ -30,17 +30,28 @@ private:
 // Banked RAM that uses mapper registers to select which bank is visible.
 class BankedMemory : public microlind::BusDevice {
 public:
-    BankedMemory(std::shared_ptr<MapperState> state, std::size_t bank_size, std::size_t total_size, std::size_t window_count);
+    using BackingStore = std::shared_ptr<std::vector<uint8_t>>;
+
+    BankedMemory(
+        std::shared_ptr<MapperState> state,
+        std::size_t bank_size,
+        std::size_t total_size,
+        std::size_t window_count,
+        std::size_t first_window = 0,
+        BackingStore backing = nullptr);
 
     uint8_t read8(uint16_t offset) override;
     void write8(uint16_t offset, uint8_t value) override;
 
+    [[nodiscard]] BackingStore backing_store() const { return data_; }
+
 private:
     std::shared_ptr<MapperState> state_;
-    std::vector<uint8_t> data_;
+    BackingStore data_;
     std::size_t bank_size_;
     std::size_t bank_mask_;
     std::size_t window_count_;
+    std::size_t first_window_;
 };
 
 } // namespace microlind::devices

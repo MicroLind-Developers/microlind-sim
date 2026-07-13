@@ -1,0 +1,6 @@
+CONFIG=hw.cfg
+ROM=bios.ihex
+ROM_FORMAT=ihex
+RAW_BASE=0x8000
+CF=sim.img
+CF_SECTORS=512

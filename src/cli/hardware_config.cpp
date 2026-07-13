@@ -1,11 +1,45 @@
-#include "hardware_config.hpp"
+#include "microlind/app/hardware_config.hpp"
 
-#include "util.hpp"
+#include "microlind/app/util.hpp"
 
 #include <cstddef>
+#include <cctype>
 #include <fstream>
+#include <string_view>
 
 namespace microlind::cli {
+
+namespace {
+
+std::optional<int> mapper_window_index(const std::string& key, std::string* suffix = nullptr) {
+    constexpr std::string_view prefix = "WINDOW_";
+    if (key.size() < prefix.size() + 1) return std::nullopt;
+    for (std::size_t i = 0; i < prefix.size(); ++i) {
+        if (std::toupper(static_cast<unsigned char>(key[i])) != prefix[i]) return std::nullopt;
+    }
+    if (!std::isdigit(static_cast<unsigned char>(key[prefix.size()]))) return std::nullopt;
+    const int index = key[prefix.size()] - '0';
+    if (index < 0 || index >= 4) return std::nullopt;
+    if (suffix) {
+        *suffix = key.substr(prefix.size() + 1);
+    }
+    return index;
+}
+
+bool parse_range(const std::string& value, uint16_t& start, uint16_t& end) {
+    const auto dash = value.find('-');
+    if (dash == std::string::npos) return false;
+    const auto parsed_start = parse_number(trim(value.substr(0, dash)));
+    const auto parsed_end = parse_number(trim(value.substr(dash + 1)));
+    if (!parsed_start || !parsed_end || *parsed_start > 0xFFFF || *parsed_end > 0xFFFF || *parsed_start > *parsed_end) {
+        return false;
+    }
+    start = static_cast<uint16_t>(*parsed_start);
+    end = static_cast<uint16_t>(*parsed_end);
+    return true;
+}
+
+} // namespace
 
 std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& path, std::string& error) {
     std::ifstream file(path);
@@ -106,6 +140,34 @@ std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& 
                 if (auto v = parse_number(value)) cfg.mapper.bank_reg[2] = static_cast<uint16_t>(*v); else { error = "Bad BANK_2_REGISTER at line " + std::to_string(lineno); return std::nullopt; }
             } else if (iequals(key, "BANK_3_REGISTER")) {
                 if (auto v = parse_number(value)) cfg.mapper.bank_reg[3] = static_cast<uint16_t>(*v); else { error = "Bad BANK_3_REGISTER at line " + std::to_string(lineno); return std::nullopt; }
+            } else {
+                std::string suffix;
+                if (const auto window = mapper_window_index(key, &suffix)) {
+                    auto& cfg_window = cfg.mapper.windows[static_cast<std::size_t>(*window)];
+                    if (suffix.empty()) {
+                        if (!parse_range(value, cfg_window.start, cfg_window.end)) {
+                            error = "Bad WINDOW_" + std::to_string(*window) + " range at line " + std::to_string(lineno);
+                            return std::nullopt;
+                        }
+                        cfg_window.present = true;
+                    } else if (iequals(suffix, "_START")) {
+                        if (auto v = parse_number(value)) {
+                            cfg_window.start = static_cast<uint16_t>(*v);
+                            cfg_window.present = true;
+                        } else {
+                            error = "Bad WINDOW_" + std::to_string(*window) + "_START at line " + std::to_string(lineno);
+                            return std::nullopt;
+                        }
+                    } else if (iequals(suffix, "_END")) {
+                        if (auto v = parse_number(value)) {
+                            cfg_window.end = static_cast<uint16_t>(*v);
+                            cfg_window.present = true;
+                        } else {
+                            error = "Bad WINDOW_" + std::to_string(*window) + "_END at line " + std::to_string(lineno);
+                            return std::nullopt;
+                        }
+                    }
+                }
             }
         }
     }

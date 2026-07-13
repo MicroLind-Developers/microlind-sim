@@ -9,11 +9,11 @@
 #include <string>
 #include <utility>
 
-#include "disassembler.hpp"
-#include "hardware_config.hpp"
-#include "image_loader.hpp"
-#include "sim_builder.hpp"
-#include "util.hpp"
+#include "microlind/app/disassembler.hpp"
+#include "microlind/app/hardware_config.hpp"
+#include "microlind/app/image_loader.hpp"
+#include "microlind/app/sim_builder.hpp"
+#include "microlind/app/util.hpp"
 
 #include "microlind/devices/serial.hpp"
 #include "microlind/simulator.hpp"

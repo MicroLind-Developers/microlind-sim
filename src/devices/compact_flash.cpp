@@ -74,6 +74,28 @@ bool CompactFlash::load_disk_image(const std::filesystem::path& path, uint32_t m
     return true;
 }
 
+CompactFlash::Snapshot CompactFlash::snapshot() const {
+    return Snapshot{
+        options_.image_path,
+        sector_count_,
+        options_.read_only,
+        error_,
+        features_,
+        sector_count_reg_,
+        sector_number_,
+        cylinder_low_,
+        cylinder_high_,
+        drive_head_,
+        status_,
+        command_,
+        selected_lba(),
+        requested_sector_count(),
+        transfer_mode_,
+        transfer_buffer_.size(),
+        transfer_index_,
+    };
+}
+
 bool CompactFlash::load_image(std::string* error) {
     storage_.clear();
     if (!options_.image_path.empty()) {
@@ -129,6 +151,7 @@ void CompactFlash::reset_registers() {
     cylinder_high_ = 0;
     drive_head_ = 0xE0;
     status_ = STATUS_DRDY | STATUS_DSC;
+    command_ = 0;
     transfer_mode_ = TransferMode::None;
     transfer_buffer_.clear();
     transfer_index_ = 0;
@@ -197,6 +220,7 @@ void CompactFlash::write8(uint16_t offset, uint8_t value) {
 }
 
 void CompactFlash::execute_command(uint8_t command) {
+    command_ = command;
     error_ = 0;
     status_ = STATUS_DRDY | STATUS_DSC;
     transfer_mode_ = TransferMode::None;

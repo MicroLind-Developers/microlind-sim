@@ -38,13 +38,17 @@ std::optional<BusError> Bus::map_device(uint16_t start, uint16_t end, std::uniqu
 uint8_t Bus::read8(uint16_t address) {
     for (auto& m : devices_) {
         if (m.contains(address)) {
-            return m.device->read8(m.offset(address));
+            const uint8_t value = m.device->read8(m.offset(address));
+            access_log_.push_back(BusAccess{BusAccessType::Read, address, value});
+            return value;
         }
     }
+    access_log_.push_back(BusAccess{BusAccessType::Read, address, 0xFF});
     return 0xFF;
 }
 
 void Bus::write8(uint16_t address, uint8_t value) {
+    access_log_.push_back(BusAccess{BusAccessType::Write, address, value});
     for (auto& m : devices_) {
         if (m.contains(address)) {
             m.device->write8(m.offset(address), value);

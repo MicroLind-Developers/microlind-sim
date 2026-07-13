@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -36,8 +37,15 @@ struct CfConfig {
     bool present{false};
 };
 
+struct MapperWindowConfig {
+    uint16_t start{};
+    uint16_t end{};
+    bool present{false};
+};
+
 struct MapperConfig {
     uint16_t bank_reg[4]{};
+    std::array<MapperWindowConfig, 4> windows{};
     bool present{false};
 };
 
