@@ -237,10 +237,13 @@ std::optional<microlind::cli::RomFormat> parse_rom_format(std::string value) {
     return std::nullopt;
 }
 
+std::optional<std::string> hex_decode(std::string_view value);
+
 struct SessionDefinition {
     std::filesystem::path config_path;
     std::filesystem::path rom_path;
     std::filesystem::path cf_path;
+    std::string layout_ini;
     microlind::cli::RomFormat rom_format{microlind::cli::RomFormat::Ihex};
     uint16_t raw_base{0x8000};
     uint32_t cf_sectors{};
@@ -315,6 +318,13 @@ std::optional<SessionDefinition> load_session_definition(const std::filesystem::
                 error = "Bad CPU mode at line " + std::to_string(lineno);
                 return std::nullopt;
             }
+        } else if (microlind::cli::iequals(key, "LAYOUT_HEX")) {
+            const auto decoded = hex_decode(value);
+            if (!decoded) {
+                error = "Bad LAYOUT_HEX at line " + std::to_string(lineno);
+                return std::nullopt;
+            }
+            session.layout_ini = *decoded;
         }
     }
 
@@ -343,6 +353,41 @@ const char* cpu_mode_name(microlind::CpuMode mode) {
     return mode == microlind::CpuMode::HD6309 ? "HD6309" : "MC6809";
 }
 
+char hex_digit(uint8_t value) {
+    return static_cast<char>(value < 10 ? ('0' + value) : ('A' + value - 10));
+}
+
+std::string hex_encode(std::string_view value) {
+    std::string out;
+    out.reserve(value.size() * 2);
+    for (unsigned char ch : value) {
+        out.push_back(hex_digit(static_cast<uint8_t>(ch >> 4)));
+        out.push_back(hex_digit(static_cast<uint8_t>(ch & 0x0F)));
+    }
+    return out;
+}
+
+std::optional<uint8_t> hex_nibble(char ch) {
+    if (ch >= '0' && ch <= '9') return static_cast<uint8_t>(ch - '0');
+    if (ch >= 'a' && ch <= 'f') return static_cast<uint8_t>(ch - 'a' + 10);
+    if (ch >= 'A' && ch <= 'F') return static_cast<uint8_t>(ch - 'A' + 10);
+    return std::nullopt;
+}
+
+std::optional<std::string> hex_decode(std::string_view value) {
+    if ((value.size() % 2) != 0) return std::nullopt;
+
+    std::string out;
+    out.reserve(value.size() / 2);
+    for (std::size_t i = 0; i < value.size(); i += 2) {
+        const auto high = hex_nibble(value[i]);
+        const auto low = hex_nibble(value[i + 1]);
+        if (!high || !low) return std::nullopt;
+        out.push_back(static_cast<char>((*high << 4) | *low));
+    }
+    return out;
+}
+
 std::filesystem::path session_relative_path(
     const std::filesystem::path& session_path,
     const std::filesystem::path& value) {
@@ -368,13 +413,14 @@ struct GuiState {
     std::array<char, 512> cf_path{};
     std::array<char, 512> session_path{};
     std::array<char, 256> serial_input{};
+    std::string pending_layout_ini;
     int rom_format_index{1};
     int raw_base{0x8000};
     int cf_min_sectors{0};
     int steps_per_frame{100};
     int memory_start{0x0000};
-    int poke_address{0x0000};
-    int poke_value{0x00};
+    int memory_rows{16};
+    bool memory_follow_pc{false};
     int breakpoint_address{0x0000};
     int run_until_address{0x0000};
     int watchpoint_address{0x0000};
@@ -442,6 +488,7 @@ struct GuiState {
             session.attach_cf_image(loaded->cf_path, loaded->cf_sectors);
         }
         if (config_ok && rom_ok) {
+            pending_layout_ini = loaded->layout_ini;
             session.add_log("Loaded session: " + path.string());
         }
     }
@@ -476,6 +523,12 @@ struct GuiState {
             file << "CF_SECTORS=" << std::max(cf_min_sectors, 0) << '\n';
         }
         file << "CPU=" << cpu_mode_name(session.mode()) << '\n';
+
+        std::size_t layout_size = 0;
+        const char* layout = ImGui::SaveIniSettingsToMemory(&layout_size);
+        if (layout != nullptr && layout_size > 0) {
+            file << "LAYOUT_HEX=" << hex_encode(std::string_view(layout, layout_size)) << '\n';
+        }
 
         if (!file) {
             session.add_log("Failed while saving session: " + path.string());
@@ -787,45 +840,120 @@ void draw_memory_map(const GuiState& state) {
 }
 
 void draw_memory_viewer(GuiState& state) {
-    set_next_window_defaults(944.0f, 528.0f, 480.0f, 160.0f);
+    set_next_window_defaults(944.0f, 528.0f, 560.0f, 260.0f);
     ImGui::Begin("Memory");
 
-    ImGui::InputInt("Address", &state.memory_start, 16, 256, ImGuiInputTextFlags_CharsHexadecimal);
-    state.memory_start = std::clamp(state.memory_start, 0, 0xFFFF);
+    auto& sim = state.session.simulator();
+    const auto& regs = sim.cpu().regs();
 
-    ImGui::InputInt("Poke address", &state.poke_address, 1, 256, ImGuiInputTextFlags_CharsHexadecimal);
-    state.poke_address = std::clamp(state.poke_address, 0, 0xFFFF);
-    ImGui::InputInt("Poke value", &state.poke_value, 1, 16, ImGuiInputTextFlags_CharsHexadecimal);
-    state.poke_value = std::clamp(state.poke_value, 0, 0xFF);
-    if (ImGui::Button("Write Byte")) {
-        state.session.write_memory(static_cast<uint16_t>(state.poke_address), static_cast<uint8_t>(state.poke_value));
-        state.session.add_log("Wrote " + hex_value(static_cast<uint8_t>(state.poke_value), 2) + " to " +
-                              hex_value(static_cast<uint16_t>(state.poke_address), 4) + ".");
+    if (state.memory_follow_pc) {
+        state.memory_start = regs.pc & 0xFFF0;
     }
 
-    constexpr int kRows = 16;
+    ImGui::SetNextItemWidth(96.0f);
+    ImGui::InputInt("Start", &state.memory_start, 16, 256, ImGuiInputTextFlags_CharsHexadecimal);
+    state.memory_start = std::clamp(state.memory_start, 0, 0xFFFF);
+    state.memory_start &= 0xFFF0;
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(86.0f);
+    ImGui::SliderInt("Rows", &state.memory_rows, 4, 64);
+
+    ImGui::SameLine();
+    ImGui::Checkbox("Follow PC", &state.memory_follow_pc);
+
+    ImGui::SameLine();
+    if (ImGui::Button("PC")) {
+        state.memory_follow_pc = false;
+        state.memory_start = regs.pc & 0xFFF0;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("S")) {
+        state.memory_follow_pc = false;
+        state.memory_start = regs.s & 0xFFF0;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("U")) {
+        state.memory_follow_pc = false;
+        state.memory_start = regs.u & 0xFFF0;
+    }
+
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("mem_prev", ImGuiDir_Left)) {
+        state.memory_follow_pc = false;
+        state.memory_start = std::clamp(state.memory_start - 0x100, 0, 0xFFFF) & 0xFFF0;
+    }
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("mem_next", ImGuiDir_Right)) {
+        state.memory_follow_pc = false;
+        state.memory_start = std::clamp(state.memory_start + 0x100, 0, 0xFFFF) & 0xFFF0;
+    }
+
     constexpr int kCols = 16;
-    if (ImGui::BeginTable("memory_view", kCols + 1, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
-        ImGui::TableSetupColumn("Address");
+    const ImGuiTableFlags flags = ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY |
+                                  ImGuiTableFlags_SizingFixedFit;
+    const float line_height = ImGui::GetTextLineHeightWithSpacing();
+    const float table_height = std::max(line_height * 6.0f, ImGui::GetContentRegionAvail().y);
+    if (ImGui::BeginTable("memory_view", kCols + 2, flags, ImVec2(0.0f, table_height))) {
+        ImGui::TableSetupScrollFreeze(1, 1);
+        ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed, 64.0f);
         for (int col = 0; col < kCols; ++col) {
             char label[4]{};
             std::snprintf(label, sizeof(label), "%X", col);
-            ImGui::TableSetupColumn(label);
+            ImGui::TableSetupColumn(
+                label,
+                ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize,
+                32.0f);
         }
+        ImGui::TableSetupColumn("ASCII", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableHeadersRow();
 
-        for (int row = 0; row < kRows; ++row) {
+        for (int row = 0; row < state.memory_rows; ++row) {
             ImGui::TableNextRow();
             const uint16_t row_address = static_cast<uint16_t>(state.memory_start + row * kCols);
             ImGui::TableNextColumn();
             ImGui::Text("%04X", row_address);
 
+            std::array<char, kCols + 1> ascii{};
             for (int col = 0; col < kCols; ++col) {
                 ImGui::TableNextColumn();
                 const uint16_t address = static_cast<uint16_t>(row_address + col);
-                const uint8_t value = state.session.read_memory(address);
-                ImGui::Text("%02X", value);
+                uint8_t value = state.session.read_memory(address);
+                ascii[static_cast<std::size_t>(col)] =
+                    std::isprint(static_cast<unsigned char>(value)) ? static_cast<char>(value) : '.';
+
+                const bool at_pc = address == regs.pc;
+                const bool at_s = address == regs.s;
+                const bool at_u = address == regs.u;
+                const bool watched = state.session.is_watchpoint(address, microlind::app::WatchpointType::Read) ||
+                                     state.session.is_watchpoint(address, microlind::app::WatchpointType::Write);
+                if (at_pc) {
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, IM_COL32(38, 96, 56, 180));
+                } else if (at_s || at_u) {
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, IM_COL32(72, 72, 116, 180));
+                } else if (watched) {
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, IM_COL32(120, 92, 38, 180));
+                }
+
+                ImGui::PushID(static_cast<int>(address));
+                ImGui::SetNextItemWidth(30.0f);
+                if (ImGui::InputScalar(
+                        "##byte",
+                        ImGuiDataType_U8,
+                        &value,
+                        nullptr,
+                        nullptr,
+                        "%02X",
+                        ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_AutoSelectAll)) {
+                    state.session.write_memory(address, value);
+                    state.session.add_log("Wrote " + hex_value(value, 2) + " to " + hex_value(address, 4) + ".");
+                }
+                ImGui::PopID();
             }
+
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(ascii.data());
         }
         ImGui::EndTable();
     }
@@ -1294,6 +1422,12 @@ void draw_status_bar(GuiState& state) {
 }
 
 void draw_workbench(GuiState& state) {
+    if (!state.pending_layout_ini.empty()) {
+        ImGui::LoadIniSettingsFromMemory(state.pending_layout_ini.data(), state.pending_layout_ini.size());
+        state.pending_layout_ini.clear();
+        state.session.add_log("Restored session window layout.");
+    }
+
 #ifdef IMGUI_HAS_DOCK
     ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
 #endif
