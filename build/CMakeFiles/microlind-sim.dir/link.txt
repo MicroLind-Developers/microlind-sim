@@ -1,2 +1,0 @@
-/usr/bin/ar qc libmicrolind-sim.a "CMakeFiles/microlind-sim.dir/src/bus.cpp.o" "CMakeFiles/microlind-sim.dir/src/clock.cpp.o" "CMakeFiles/microlind-sim.dir/src/cpu.cpp.o" "CMakeFiles/microlind-sim.dir/src/devices/compact_flash.cpp.o" "CMakeFiles/microlind-sim.dir/src/simulator.cpp.o" "CMakeFiles/microlind-sim.dir/src/devices/memory.cpp.o" "CMakeFiles/microlind-sim.dir/src/devices/memory_mapper.cpp.o" "CMakeFiles/microlind-sim.dir/src/devices/serial.cpp.o" "CMakeFiles/microlind-sim.dir/src/logic.cpp.o"
-/usr/bin/ranlib libmicrolind-sim.a
