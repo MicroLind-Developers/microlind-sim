@@ -90,6 +90,7 @@ private:
     struct PostbyteResult {
         uint16_t address{};
         uint8_t cycles{};
+        bool valid{true};
     };
 
     uint8_t fetch_byte(Bus& bus);
@@ -99,6 +100,7 @@ private:
 
     uint16_t direct_address(Bus& bus);
     uint16_t extended_address(Bus& bus);
+    PostbyteResult unsupported_indexed_address(Bus& bus);
     PostbyteResult indexed_address(Bus& bus);
 
     void push_byte(Bus& bus, uint8_t value);

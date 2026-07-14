@@ -11,6 +11,7 @@ add_library(microlind-sim
     src/bus.cpp
     src/clock.cpp
     src/cpu.cpp
+    src/cpu_instructions.cpp
     src/devices/compact_flash.cpp
     src/simulator.cpp
     src/devices/memory.cpp

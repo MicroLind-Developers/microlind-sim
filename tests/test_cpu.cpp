@@ -18,6 +18,12 @@ void write_bytes(microlind::Bus& bus, uint16_t address, std::initializer_list<ui
     }
 }
 
+void write_bytes(microlind::Bus& bus, uint16_t address, const std::vector<uint8_t>& bytes) {
+    for (uint8_t byte : bytes) {
+        bus.write8(address++, byte);
+    }
+}
+
 void prime_hd6309_test_state(microlind::Bus& bus, microlind::Cpu& cpu) {
     bus.write8(0xFFF0, 0x34);
     bus.write8(0xFFF1, 0x56);
@@ -140,6 +146,271 @@ TEST(CpuExecutionTest, HD6309ExecutesHD6309SingleByteOpcode) {
     EXPECT_EQ(cpu.regs().b, 0x34);
     EXPECT_EQ(cpu.regs().e, 0x56);
     EXPECT_EQ(cpu.regs().f, 0x78);
+}
+
+TEST(CpuExecutionTest, UsesDocumentedIndexedCycleAdditions) {
+    struct CycleCase {
+        std::string name;
+        std::vector<uint8_t> bytes;
+        uint16_t x{};
+        uint8_t a{};
+        uint8_t b{};
+        uint8_t md{};
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+    };
+
+    const std::vector<CycleCase> cases = {
+        {"LDB ,X", {0xE6, 0x84}, 0x2000, 0x00, 0x00, 0x00, 4, 0x0102},
+        {"LDB 5-bit,X", {0xE6, 0x01}, 0x2000, 0x00, 0x00, 0x00, 5, 0x0102},
+        {"LDB 8-bit,X", {0xE6, 0x88, 0x01}, 0x2000, 0x00, 0x00, 0x00, 5, 0x0103},
+        {"LDB 16-bit,X emulation", {0xE6, 0x89, 0x00, 0x01}, 0x2000, 0x00, 0x00, 0x00, 8, 0x0104},
+        {"LDB 16-bit,X native", {0xE6, 0x89, 0x00, 0x01}, 0x2000, 0x00, 0x00, 0x01, 7, 0x0104},
+        {"LDB D,X emulation", {0xE6, 0x8B}, 0x2000, 0x00, 0x01, 0x00, 8, 0x0102},
+        {"LDB D,X native", {0xE6, 0x8B}, 0x2000, 0x00, 0x01, 0x01, 6, 0x0102},
+        {"JMP ,X", {0x6E, 0x84}, 0x2100, 0x00, 0x00, 0x00, 3, 0x2100},
+        {"JMP 16-bit,PC emulation", {0x6E, 0x8D, 0x00, 0x04}, 0x2000, 0x00, 0x00, 0x00, 8, 0x0108},
+        {"JMP 16-bit,PC native", {0x6E, 0x8D, 0x00, 0x04}, 0x2000, 0x00, 0x00, 0x01, 6, 0x0108},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, test.bytes);
+        bus.write8(0x2000, 0x5A);
+        bus.write8(0x2001, 0xA5);
+        bus.write8(0x2100, 0x12);
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().x = test.x;
+        cpu.regs().a = test.a;
+        cpu.regs().b = test.b;
+        cpu.regs().md = test.md;
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, test.expected_cycles);
+        EXPECT_EQ(cpu.regs().pc, test.expected_pc);
+    }
+}
+
+TEST(CpuExecutionTest, UsesDocumentedIndexedIndirectCycleExceptions) {
+    struct CycleCase {
+        std::string name;
+        std::vector<uint8_t> bytes;
+        uint16_t x{};
+        uint8_t a{};
+        uint8_t b{};
+        uint8_t expected_cycles{};
+    };
+
+    const std::vector<CycleCase> cases = {
+        {"LDB [D,X]", {0xE6, 0x9B}, 0x2000, 0x00, 0x10, 8},
+        {"LDB [16-bit,PC]", {0xE6, 0x9D, 0x20, 0x00}, 0x2000, 0x00, 0x00, 12},
+        {"LDB [extended]", {0xE6, 0x9F, 0x20, 0x10}, 0x2000, 0x00, 0x00, 9},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, test.bytes);
+        bus.write8(0x2010, 0x21);
+        bus.write8(0x2011, 0x00);
+        bus.write8(0x2100, 0xA5);
+        bus.write8(0x2104, 0x21);
+        bus.write8(0x2105, 0x00);
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().x = test.x;
+        cpu.regs().a = test.a;
+        cpu.regs().b = test.b;
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, test.expected_cycles);
+        EXPECT_EQ(cpu.regs().b, 0xA5);
+    }
+}
+
+TEST(CpuExecutionTest, UnsupportedIndexedPostbytesTrapWithoutMemorySideEffects) {
+    struct TrapCase {
+        std::string name;
+        std::vector<uint8_t> bytes;
+    };
+
+    const std::vector<TrapCase> cases = {
+        {"LDB [,-X]", {0xE6, 0x92}},
+        {"STA [,-X]", {0xA7, 0x92}},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, test.bytes);
+        bus.write8(0xFFF0, 0x45);
+        bus.write8(0xFFF1, 0x67);
+        bus.write8(0x1FFF, 0x11);
+        bus.write8(0x2000, 0x22);
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().a = 0x99;
+        cpu.regs().b = 0x88;
+        cpu.regs().x = 0x2000;
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, 1u);
+        EXPECT_EQ(cpu.regs().pc, 0x4567);
+        EXPECT_NE(cpu.regs().md & 0x40, 0);
+        EXPECT_EQ(cpu.regs().x, 0x2000);
+        EXPECT_EQ(cpu.regs().a, 0x99);
+        EXPECT_EQ(cpu.regs().b, 0x88);
+        EXPECT_EQ(bus.read8(0x1FFF), 0x11);
+        EXPECT_EQ(bus.read8(0x2000), 0x22);
+    }
+}
+
+TEST(CpuExecutionTest, MC6809RejectsHD6309OnlyIndexedPostbytes) {
+    microlind::Bus bus;
+    microlind::test::map_flat_ram(bus);
+    write_bytes(bus, 0x0100, {0xE6, 0x87}); // LDB E,X on HD6309; unsupported on MC6809.
+    bus.write8(0x2000, 0x55);
+
+    microlind::Cpu cpu(microlind::CpuMode::MC6809);
+    cpu.set_pc(0x0100);
+    cpu.regs().b = 0x88;
+    cpu.regs().e = 0x00;
+    cpu.regs().x = 0x2000;
+
+    const auto result = cpu.tick(bus);
+    EXPECT_EQ(result.cycles, 1u);
+    EXPECT_EQ(cpu.regs().pc, 0x0102);
+    EXPECT_EQ(cpu.regs().b, 0x88);
+    EXPECT_EQ(cpu.regs().md & 0x40, 0);
+}
+
+TEST(CpuExecutionTest, ResolvesHD6309EFWRegisterIndexedAddresses) {
+    struct AddressCase {
+        std::string name;
+        std::vector<uint8_t> bytes;
+        uint8_t e{};
+        uint8_t f{};
+        uint16_t w{};
+        uint8_t expected_value{};
+        uint8_t expected_cycles{};
+    };
+
+    const std::vector<AddressCase> cases = {
+        {"LDB E,X", {0xE6, 0x87}, 0x05, 0x00, 0x0000, 0xE5, 5},
+        {"LDB F,X", {0xE6, 0x8A}, 0x00, 0xFC, 0x0000, 0xF2, 5},
+        {"LDB W,X", {0xE6, 0x8E}, 0x00, 0x00, 0x0010, 0xA1, 8},
+        {"LDB [E,X]", {0xE6, 0x97}, 0x06, 0x00, 0x0000, 0x5E, 5},
+        {"LDB [F,X]", {0xE6, 0x9A}, 0x00, 0xFD, 0x0000, 0x5F, 5},
+        {"LDB [W,X]", {0xE6, 0x9E}, 0x00, 0x00, 0x0012, 0x5A, 8},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, test.bytes);
+        bus.write8(0x2005, 0xE5);
+        bus.write8(0x1FFC, 0xF2);
+        bus.write8(0x2010, 0xA1);
+        bus.write8(0x2006, 0x21);
+        bus.write8(0x2007, 0x5E);
+        bus.write8(0x1FFD, 0x21);
+        bus.write8(0x1FFE, 0x5F);
+        bus.write8(0x2012, 0x21);
+        bus.write8(0x2013, 0x5A);
+        bus.write8(0x215A, 0x5A);
+        bus.write8(0x215E, 0x5E);
+        bus.write8(0x215F, 0x5F);
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().x = 0x2000;
+        cpu.regs().e = test.e;
+        cpu.regs().f = test.f;
+        cpu.regs().md = 0x00;
+        if (test.w != 0) {
+            cpu.regs().e = static_cast<uint8_t>((test.w >> 8) & 0xFF);
+            cpu.regs().f = static_cast<uint8_t>(test.w & 0xFF);
+        }
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, test.expected_cycles);
+        EXPECT_EQ(cpu.regs().b, test.expected_value);
+    }
+}
+
+TEST(CpuExecutionTest, ResolvesHD6309WRelativeIndexedAddresses) {
+    struct AddressCase {
+        std::string name;
+        std::vector<uint8_t> bytes;
+        uint16_t w{};
+        uint8_t md{};
+        uint8_t expected_value{};
+        uint8_t expected_cycles{};
+        uint16_t expected_w{};
+    };
+
+    const std::vector<AddressCase> cases = {
+        {"LDB ,W", {0xE6, 0x8F}, 0x2100, 0x00, 0xA0, 4, 0x2100},
+        {"LDB n,W emulation", {0xE6, 0xAF, 0x00, 0x04}, 0x2100, 0x00, 0xA4, 9, 0x2100},
+        {"LDB n,W native", {0xE6, 0xAF, 0x00, 0x04}, 0x2100, 0x01, 0xA4, 6, 0x2100},
+        {"LDB ,W++", {0xE6, 0xCF}, 0x2100, 0x00, 0xA0, 7, 0x2102},
+        {"LDB ,--W", {0xE6, 0xEF}, 0x2102, 0x00, 0xA0, 7, 0x2100},
+        {"LDB [,W]", {0xE6, 0x90}, 0x2200, 0x00, 0xB0, 4, 0x2200},
+        {"LDB [n,W]", {0xE6, 0xB0, 0x00, 0x04}, 0x2200, 0x00, 0xB4, 9, 0x2200},
+        {"LDB [,W++]", {0xE6, 0xD0}, 0x2200, 0x00, 0xB0, 7, 0x2202},
+        {"LDB [,--W]", {0xE6, 0xF0}, 0x2202, 0x00, 0xB0, 7, 0x2200},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, test.bytes);
+        bus.write8(0x2100, 0xA0);
+        bus.write8(0x2104, 0xA4);
+        bus.write8(0x2200, 0x23);
+        bus.write8(0x2201, 0x00);
+        bus.write8(0x2204, 0x23);
+        bus.write8(0x2205, 0x04);
+        bus.write8(0x2300, 0xB0);
+        bus.write8(0x2304, 0xB4);
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().e = static_cast<uint8_t>((test.w >> 8) & 0xFF);
+        cpu.regs().f = static_cast<uint8_t>(test.w & 0xFF);
+        cpu.regs().md = test.md;
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, test.expected_cycles);
+        EXPECT_EQ(cpu.regs().b, test.expected_value);
+        EXPECT_EQ(static_cast<uint16_t>((cpu.regs().e << 8) | cpu.regs().f), test.expected_w);
+    }
+}
+
+TEST(CpuExecutionTest, UsesDocumentedDivqImmediateCycles) {
+    microlind::Bus bus;
+    microlind::test::map_flat_ram(bus);
+    write_bytes(bus, 0x0100, {0x11, 0x8E, 0x00, 0x02});
+
+    microlind::Cpu cpu(microlind::CpuMode::HD6309);
+    cpu.set_pc(0x0100);
+    cpu.regs().e = 0x00;
+    cpu.regs().f = 0x10;
+
+    const auto result = cpu.tick(bus);
+    EXPECT_EQ(result.cycles, 36u);
+    EXPECT_EQ(cpu.regs().e, 0x00);
+    EXPECT_EQ(cpu.regs().f, 0x08);
 }
 
 TEST(CpuExecutionTest, HD6309OnlyOpcodesAreRejectedInMC6809AndAcceptedInHD6309) {
@@ -274,25 +545,25 @@ TEST(CpuExecutionTest, HD6309OnlyOpcodesAreRejectedInMC6809AndAcceptedInHD6309) 
         {"CMPE immediate", {0x11, 0x81, 0x01}},
         {"ADDE immediate", {0x11, 0x8B, 0x01}},
         {"DIVD immediate", {0x11, 0x8D, 0x02}},
-        {"CMPS immediate", {0x11, 0x8E, 0x00, 0x01}},
-        {"DIVQ immediate", {0x11, 0x8F, 0x00, 0x02}},
+        {"DIVQ immediate", {0x11, 0x8E, 0x00, 0x02}},
+        {"MULD immediate", {0x11, 0x8F, 0x00, 0x02}},
         {"SUBE direct", {0x11, 0x90, 0x20}},
         {"CMPE direct", {0x11, 0x91, 0x20}},
         {"ADDE direct", {0x11, 0x9B, 0x20}},
         {"DIVD direct", {0x11, 0x9D, 0x20}},
-        {"CMPS direct", {0x11, 0x9E, 0x20}},
+        {"DIVQ direct", {0x11, 0x9E, 0x20}},
         {"MULD direct", {0x11, 0x9F, 0x20}},
         {"SUBE indexed", {0x11, 0xA0, 0x84}},
         {"CMPE indexed", {0x11, 0xA1, 0x84}},
         {"ADDE indexed", {0x11, 0xAB, 0x84}},
         {"DIVD indexed", {0x11, 0xAD, 0x84}},
-        {"CMPS indexed", {0x11, 0xAE, 0x84}},
+        {"DIVQ indexed", {0x11, 0xAE, 0x84}},
         {"MULD indexed", {0x11, 0xAF, 0x84}},
         {"SUBE extended", {0x11, 0xB0, 0x20, 0x00}},
         {"CMPE extended", {0x11, 0xB1, 0x20, 0x00}},
         {"ADDE extended", {0x11, 0xBB, 0x20, 0x00}},
         {"DIVD extended", {0x11, 0xBD, 0x20, 0x00}},
-        {"CMPS extended", {0x11, 0xBE, 0x20, 0x00}},
+        {"DIVQ extended", {0x11, 0xBE, 0x20, 0x00}},
         {"MULD extended", {0x11, 0xBF, 0x20, 0x00}},
         {"SUBF immediate", {0x11, 0xC0, 0x01}},
         {"CMPF immediate", {0x11, 0xC1, 0x01}},
@@ -375,6 +646,53 @@ TEST(CpuExecutionTest, HD6309ExecutesDRegisterLogicInstructions) {
     EXPECT_EQ(cpu.regs().b, 0x00);
     EXPECT_NE(cpu.regs().cc & microlind::CC_N, 0);
     EXPECT_EQ(cpu.regs().cc & microlind::CC_Z, 0);
+}
+
+TEST(CpuExecutionTest, UpdatesArithmeticAndShiftFlags) {
+    microlind::Bus bus;
+    microlind::test::map_flat_ram(bus);
+    write_bytes(bus, 0x0100, {
+        0xC3, 0x00, 0x01,       // ADDD #$0001
+        0x83, 0x00, 0x01,       // SUBD #$0001
+        0x10, 0x48,             // LSLD
+        0x10, 0x8B, 0x00, 0x01, // ADDW #$0001
+    });
+
+    microlind::Cpu cpu(microlind::CpuMode::HD6309);
+    cpu.set_pc(0x0100);
+    cpu.regs().a = 0x7F;
+    cpu.regs().b = 0xFF;
+
+    EXPECT_EQ(cpu.tick(bus).cycles, 4u);
+    EXPECT_EQ(cpu.regs().a, 0x80);
+    EXPECT_EQ(cpu.regs().b, 0x00);
+    EXPECT_NE(cpu.regs().cc & microlind::CC_N, 0);
+    EXPECT_NE(cpu.regs().cc & microlind::CC_V, 0);
+    EXPECT_EQ(cpu.regs().cc & microlind::CC_C, 0);
+
+    cpu.regs().a = 0x00;
+    cpu.regs().b = 0x00;
+    EXPECT_EQ(cpu.tick(bus).cycles, 4u);
+    EXPECT_EQ(cpu.regs().a, 0xFF);
+    EXPECT_EQ(cpu.regs().b, 0xFF);
+    EXPECT_NE(cpu.regs().cc & microlind::CC_N, 0);
+    EXPECT_NE(cpu.regs().cc & microlind::CC_C, 0);
+
+    cpu.regs().a = 0x80;
+    cpu.regs().b = 0x01;
+    EXPECT_EQ(cpu.tick(bus).cycles, 3u);
+    EXPECT_EQ(cpu.regs().a, 0x00);
+    EXPECT_EQ(cpu.regs().b, 0x02);
+    EXPECT_NE(cpu.regs().cc & microlind::CC_C, 0);
+    EXPECT_NE(cpu.regs().cc & microlind::CC_V, 0);
+
+    cpu.regs().e = 0xFF;
+    cpu.regs().f = 0xFF;
+    EXPECT_EQ(cpu.tick(bus).cycles, 5u);
+    EXPECT_EQ(cpu.regs().e, 0x00);
+    EXPECT_EQ(cpu.regs().f, 0x00);
+    EXPECT_NE(cpu.regs().cc & microlind::CC_Z, 0);
+    EXPECT_NE(cpu.regs().cc & microlind::CC_C, 0);
 }
 
 TEST(CpuExecutionTest, HD6309ExecutesDAndEFUnaryInstructions) {
@@ -502,6 +820,51 @@ TEST(CpuExecutionTest, HD6309DivdByZeroTrapsThroughFFF0Vector) {
     EXPECT_EQ(cpu.tick(bus).cycles, 25u);
     EXPECT_EQ(cpu.regs().pc, 0x4567);
     EXPECT_NE(cpu.regs().md & 0x80, 0);
+}
+
+TEST(CpuExecutionTest, HD6309DivisionByZeroTrapsAcrossAddressingModes) {
+    struct TrapCase {
+        std::string name;
+        std::vector<uint8_t> bytes;
+        uint8_t expected_cycles{};
+    };
+
+    const std::vector<TrapCase> cases = {
+        {"DIVD immediate", {0x11, 0x8D, 0x00}, 25},
+        {"DIVD direct", {0x11, 0x9D, 0x20}, 27},
+        {"DIVD indexed", {0x11, 0xAD, 0x84}, 27},
+        {"DIVD extended", {0x11, 0xBD, 0x20, 0x00}, 28},
+        {"DIVQ immediate", {0x11, 0x8E, 0x00, 0x00}, 36},
+        {"DIVQ direct", {0x11, 0x9E, 0x20}, 36},
+        {"DIVQ indexed", {0x11, 0xAE, 0x84}, 36},
+        {"DIVQ extended", {0x11, 0xBE, 0x20, 0x00}, 37},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, test.bytes);
+        bus.write8(0xFFF0, 0x45);
+        bus.write8(0xFFF1, 0x67);
+        bus.write8(0x0020, 0x00);
+        bus.write8(0x0021, 0x00);
+        bus.write8(0x2000, 0x00);
+        bus.write8(0x2001, 0x00);
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().a = 0x12;
+        cpu.regs().b = 0x34;
+        cpu.regs().e = 0x56;
+        cpu.regs().f = 0x78;
+        cpu.regs().x = 0x2000;
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, test.expected_cycles);
+        EXPECT_EQ(cpu.regs().pc, 0x4567);
+        EXPECT_NE(cpu.regs().md & 0x80, 0);
+    }
 }
 
 TEST(CpuExecutionTest, HD6309ExecutesBitmdAndAndr) {
