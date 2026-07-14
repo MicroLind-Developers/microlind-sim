@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <initializer_list>
 #include <optional>
 #include <string>
@@ -14,6 +15,164 @@ namespace microlind {
 namespace {
 uint8_t hi(uint16_t value) { return static_cast<uint8_t>((value >> 8) & 0xFF); }
 uint8_t lo(uint16_t value) { return static_cast<uint8_t>(value & 0xFF); }
+
+int32_t sign_extend16(uint16_t value) {
+    return (value & 0x8000) ? static_cast<int32_t>(value) - 0x10000 : static_cast<int32_t>(value);
+}
+
+bool is_native_hd6309(const Registers& regs, CpuMode mode) {
+    return mode == CpuMode::HD6309 && (regs.md & 0x01) != 0;
+}
+
+void set_logic8_flags(Registers& regs, uint8_t value, bool clear_carry) {
+    regs.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | (clear_carry ? CC_C : 0)));
+    if (value == 0) {
+        regs.cc |= CC_Z;
+    }
+    if (value & 0x80) {
+        regs.cc |= CC_N;
+    }
+}
+
+uint8_t add8(Registers& regs, uint8_t left, uint8_t right, uint8_t carry) {
+    const uint16_t sum = static_cast<uint16_t>(left) + static_cast<uint16_t>(right) + carry;
+    const uint8_t result = static_cast<uint8_t>(sum & 0xFF);
+    regs.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C | CC_H));
+    if (result & 0x80) {
+        regs.cc |= CC_N;
+    }
+    if (result == 0) {
+        regs.cc |= CC_Z;
+    }
+    if (((left ^ right ^ result) & 0x80) && !((left ^ right) & 0x80)) {
+        regs.cc |= CC_V;
+    }
+    if (sum & 0x100) {
+        regs.cc |= CC_C;
+    }
+    if ((left ^ right ^ result) & 0x10) {
+        regs.cc |= CC_H;
+    }
+    return result;
+}
+
+uint8_t sub8(Registers& regs, uint8_t left, uint8_t right, uint8_t carry) {
+    const uint16_t diff = static_cast<uint16_t>(left) - static_cast<uint16_t>(right) - carry;
+    const uint8_t result = static_cast<uint8_t>(diff & 0xFF);
+    regs.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
+    if (result & 0x80) {
+        regs.cc |= CC_N;
+    }
+    if (result == 0) {
+        regs.cc |= CC_Z;
+    }
+    if (((left ^ right) & (left ^ result) & 0x80) != 0) {
+        regs.cc |= CC_V;
+    }
+    if (diff & 0x100) {
+        regs.cc |= CC_C;
+    }
+    return result;
+}
+
+bool is_alu8_immediate_opcode(uint8_t opcode) {
+    switch (opcode) {
+    case 0x80:
+    case 0x81:
+    case 0x82:
+    case 0x84:
+    case 0x85:
+    case 0x88:
+    case 0x89:
+    case 0x8A:
+    case 0x8B:
+    case 0xC0:
+    case 0xC1:
+    case 0xC2:
+    case 0xC4:
+    case 0xC5:
+    case 0xC8:
+    case 0xC9:
+    case 0xCA:
+    case 0xCB:
+        return true;
+    default:
+        return false;
+    }
+}
+
+void apply_alu8_immediate(Registers& regs, uint8_t opcode, uint8_t operand) {
+    const bool target_b = (opcode & 0x40) != 0;
+    uint8_t& target = target_b ? regs.b : regs.a;
+    switch (opcode & 0x8F) {
+    case 0x80:
+        target = sub8(regs, target, operand, 0);
+        break;
+    case 0x81:
+        sub8(regs, target, operand, 0);
+        break;
+    case 0x82:
+        target = sub8(regs, target, operand, (regs.cc & CC_C) ? 1 : 0);
+        break;
+    case 0x84:
+        target = static_cast<uint8_t>(target & operand);
+        set_logic8_flags(regs, target, true);
+        break;
+    case 0x85:
+        set_logic8_flags(regs, static_cast<uint8_t>(target & operand), false);
+        break;
+    case 0x88:
+        target = static_cast<uint8_t>(target ^ operand);
+        set_logic8_flags(regs, target, true);
+        break;
+    case 0x89:
+        target = add8(regs, target, operand, (regs.cc & CC_C) ? 1 : 0);
+        break;
+    case 0x8A:
+        target = static_cast<uint8_t>(target | operand);
+        set_logic8_flags(regs, target, true);
+        break;
+    case 0x8B:
+        target = add8(regs, target, operand, 0);
+        break;
+    default:
+        break;
+    }
+}
+
+BusSignals read_cycle(uint16_t address, BusCycleKind kind) {
+    BusSignals signals;
+    signals.rw = true;
+    signals.memory_enable = true;
+    signals.address = address;
+    signals.data = 0xFF;
+    signals.cycle_kind = kind;
+    signals.apply_read = true;
+    signals.log_access = true;
+    return signals;
+}
+
+BusSignals write_cycle(uint16_t address, uint8_t value, BusCycleKind kind) {
+    BusSignals signals;
+    signals.rw = false;
+    signals.memory_enable = true;
+    signals.address = address;
+    signals.data = value;
+    signals.cycle_kind = kind;
+    signals.apply_write = true;
+    signals.log_access = true;
+    return signals;
+}
+
+BusSignals internal_cycle(uint16_t address) {
+    BusSignals signals;
+    signals.rw = true;
+    signals.memory_enable = false;
+    signals.address = address;
+    signals.data = 0xFF;
+    signals.cycle_kind = BusCycleKind::Internal;
+    return signals;
+}
 } // namespace
 
 Cpu::Cpu(CpuMode mode) : mode_(mode) {
@@ -73,6 +232,8 @@ Cpu::Cpu(CpuMode mode) : mode_(mode) {
     SET0(0x39, op_rts);
 
     // Branches
+    SET0(0x16, op_lbra);
+    SET0(0x17, op_lbsr);
     SET0(0x20, op_bra);
     SET0(0x8D, op_bsr);
     SET0(0x26, op_bne);
@@ -576,22 +737,23 @@ void Cpu::reset() {
     last_pc_ = 0;
     last_opcode_ = 0;
     last_prefix_ = 0;
+    micro_op_ = {};
     sync_wait_ = false;
 }
 
 CpuTickResult Cpu::tick(Bus& bus) {
     last_pc_ = regs_.pc;
-    const uint8_t opcode = fetch_byte(bus);
+    const uint8_t opcode = fetch_opcode_byte(bus);
     last_prefix_ = 0x00;
     last_opcode_ = opcode;
     const Instruction* inst = &instructions0_[opcode];
     if (opcode == 0x10) {
-        const uint8_t next = fetch_byte(bus);
+        const uint8_t next = fetch_opcode_byte(bus);
         inst = &instructions10_[next];
         last_prefix_ = 0x10;
         last_opcode_ = next;
     } else if (opcode == 0x11) {
-        const uint8_t next = fetch_byte(bus);
+        const uint8_t next = fetch_opcode_byte(bus);
         inst = &instructions11_[next];
         last_prefix_ = 0x11;
         last_opcode_ = next;
@@ -612,9 +774,9 @@ const std::string& Cpu::opcode_name(uint8_t prefix, uint8_t opcode) const {
 }
 
 uint8_t Cpu::opcode_length(Bus& bus, uint16_t pc) const {
-    uint8_t op0 = bus.read8(pc);
+    uint8_t op0 = bus.peek8(pc);
     if (op0 == 0x10 || op0 == 0x11) {
-        const uint8_t op1 = bus.read8(static_cast<uint16_t>(pc + 1));
+        const uint8_t op1 = bus.peek8(static_cast<uint16_t>(pc + 1));
         const Instruction& inst = (op0 == 0x10) ? instructions10_[op1] : instructions11_[op1];
         if (inst.bytes != 0) return inst.bytes;
         if (op0 == 0x11 && op1 == 0x3D) return 3; // LDMD immediate
@@ -635,29 +797,916 @@ uint8_t Cpu::opcode_length(Bus& bus, uint16_t pc) const {
     return 1;
 }
 
+bool Cpu::has_pending_micro_ops() const {
+    return micro_op_.kind != MicroOpKind::None;
+}
+
+void Cpu::discard_micro_ops() {
+    micro_op_ = {};
+}
+
+bool Cpu::start_micro_op(uint8_t opcode) {
+    MicroOpKind kind = MicroOpKind::None;
+    uint8_t total_cycles = 0;
+    switch (opcode) {
+    case 0x12:
+        kind = MicroOpKind::Nop;
+        total_cycles = 2;
+        break;
+    case 0x86:
+        kind = MicroOpKind::LdaImmediate;
+        total_cycles = 2;
+        break;
+    case 0x96:
+        kind = MicroOpKind::LdaDirect;
+        total_cycles = 4;
+        break;
+    case 0x97:
+        kind = MicroOpKind::StaDirect;
+        total_cycles = 4;
+        break;
+    case 0xB6:
+        kind = MicroOpKind::LdaExtended;
+        total_cycles = 5;
+        break;
+    case 0xB7:
+        kind = MicroOpKind::StaExtended;
+        total_cycles = 5;
+        break;
+    case 0xC6:
+        kind = MicroOpKind::LdbImmediate;
+        total_cycles = 2;
+        break;
+    case 0xD6:
+        kind = MicroOpKind::LdbDirect;
+        total_cycles = 4;
+        break;
+    case 0xD7:
+        kind = MicroOpKind::StbDirect;
+        total_cycles = 4;
+        break;
+    case 0xF6:
+        kind = MicroOpKind::LdbExtended;
+        total_cycles = 5;
+        break;
+    case 0xF7:
+        kind = MicroOpKind::StbExtended;
+        total_cycles = 5;
+        break;
+    case 0xCC:
+        kind = MicroOpKind::LddImmediate;
+        total_cycles = 3;
+        break;
+    case 0xDC:
+        kind = MicroOpKind::LddDirect;
+        total_cycles = 5;
+        break;
+    case 0xFC:
+        kind = MicroOpKind::LddExtended;
+        total_cycles = 6;
+        break;
+    case 0xDD:
+        kind = MicroOpKind::StdDirect;
+        total_cycles = 5;
+        break;
+    case 0xFD:
+        kind = MicroOpKind::StdExtended;
+        total_cycles = 6;
+        break;
+    case 0x20:
+        kind = MicroOpKind::Bra;
+        total_cycles = 3;
+        break;
+    case 0x26:
+        kind = MicroOpKind::Bne;
+        total_cycles = (regs_.cc & CC_Z) == 0 ? 3 : 2;
+        break;
+    case 0x27:
+        kind = MicroOpKind::Beq;
+        total_cycles = (regs_.cc & CC_Z) != 0 ? 3 : 2;
+        break;
+    case 0x8D:
+        kind = MicroOpKind::Bsr;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 6 : 7;
+        break;
+    case 0x17:
+        kind = MicroOpKind::Lbsr;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 7 : 9;
+        break;
+    case 0x39:
+        kind = MicroOpKind::Rts;
+        total_cycles = 5;
+        break;
+    case 0x9D:
+        kind = MicroOpKind::JsrDirect;
+        total_cycles = 5;
+        break;
+    case 0xBD:
+        kind = MicroOpKind::JsrExtended;
+        total_cycles = 7;
+        break;
+    case 0x0E:
+        kind = MicroOpKind::JmpDirect;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 2 : 3;
+        break;
+    case 0x7E:
+        kind = MicroOpKind::JmpExtended;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 3 : 4;
+        break;
+    case 0x40:
+        kind = MicroOpKind::Nega;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x50:
+        kind = MicroOpKind::Negb;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x43:
+        kind = MicroOpKind::Coma;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x53:
+        kind = MicroOpKind::Comb;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x44:
+        kind = MicroOpKind::Lsra;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x54:
+        kind = MicroOpKind::Lsrb;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x46:
+        kind = MicroOpKind::Rora;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x56:
+        kind = MicroOpKind::Rorb;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x47:
+        kind = MicroOpKind::Asra;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x57:
+        kind = MicroOpKind::Asrb;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x48:
+        kind = MicroOpKind::Asla;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x58:
+        kind = MicroOpKind::Aslb;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x49:
+        kind = MicroOpKind::Rola;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x59:
+        kind = MicroOpKind::Rolb;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x4F:
+        kind = MicroOpKind::Clra;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x5F:
+        kind = MicroOpKind::Clrb;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x4D:
+        kind = MicroOpKind::Tsta;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x5D:
+        kind = MicroOpKind::Tstb;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x4A:
+        kind = MicroOpKind::Deca;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x5A:
+        kind = MicroOpKind::Decb;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x4C:
+        kind = MicroOpKind::Inca;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    case 0x5C:
+        kind = MicroOpKind::Incb;
+        total_cycles = is_native_hd6309(regs_, mode_) ? 1 : 2;
+        break;
+    default:
+        if (is_alu8_immediate_opcode(opcode)) {
+            kind = MicroOpKind::Alu8Immediate;
+            total_cycles = 2;
+            break;
+        }
+        return false;
+    }
+
+    last_pc_ = regs_.pc;
+    last_prefix_ = 0x00;
+    last_opcode_ = opcode;
+    micro_op_ = MicroOpState{
+        kind,
+        regs_.pc,
+        opcode,
+        0,
+        total_cycles,
+        0,
+        0,
+        0,
+        total_cycles == 3,
+    };
+    return true;
+}
+
+CpuMicrocycleStatus Cpu::micro_op_status(bool instruction_started, bool instruction_complete) const {
+    const std::size_t completed_cycles = instruction_complete ? micro_op_.total_cycles : micro_op_.step;
+    const std::size_t pending = micro_op_.total_cycles > completed_cycles
+        ? static_cast<std::size_t>(micro_op_.total_cycles - completed_cycles)
+        : 0u;
+    return CpuMicrocycleStatus{
+        instruction_started,
+        instruction_complete,
+        CpuTickResult{micro_op_.total_cycles},
+        pending,
+    };
+}
+
+BusSignals Cpu::micro_op_signals() const {
+    switch (micro_op_.kind) {
+    case MicroOpKind::Nop:
+        return micro_op_.step == 0
+            ? read_cycle(regs_.pc, BusCycleKind::OpcodeFetch)
+            : internal_cycle(regs_.pc);
+    case MicroOpKind::LdaImmediate:
+    case MicroOpKind::LdbImmediate:
+    case MicroOpKind::LddImmediate:
+    case MicroOpKind::Alu8Immediate:
+        return micro_op_.step == 0
+            ? read_cycle(regs_.pc, BusCycleKind::OpcodeFetch)
+            : read_cycle(regs_.pc, BusCycleKind::OperandRead);
+    case MicroOpKind::LdaDirect:
+    case MicroOpKind::LdbDirect:
+    case MicroOpKind::LddDirect:
+        if (micro_op_.step == 0) return read_cycle(regs_.pc, BusCycleKind::OpcodeFetch);
+        if (micro_op_.step == 1) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        if (micro_op_.step == 2) return read_cycle(micro_op_.effective_address, BusCycleKind::OperandRead);
+        if (micro_op_.kind == MicroOpKind::LddDirect && micro_op_.step == 3) {
+            return read_cycle(static_cast<uint16_t>(micro_op_.effective_address + 1), BusCycleKind::OperandRead);
+        }
+        return internal_cycle(regs_.pc);
+    case MicroOpKind::LdaExtended:
+    case MicroOpKind::LdbExtended:
+    case MicroOpKind::LddExtended:
+        if (micro_op_.step == 0) return read_cycle(regs_.pc, BusCycleKind::OpcodeFetch);
+        if (micro_op_.step == 1) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        if (micro_op_.step == 2) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        if (micro_op_.step == 3) return read_cycle(micro_op_.effective_address, BusCycleKind::OperandRead);
+        if (micro_op_.kind == MicroOpKind::LddExtended && micro_op_.step == 4) {
+            return read_cycle(static_cast<uint16_t>(micro_op_.effective_address + 1), BusCycleKind::OperandRead);
+        }
+        return internal_cycle(regs_.pc);
+    case MicroOpKind::StaDirect:
+    case MicroOpKind::StbDirect:
+    case MicroOpKind::StdDirect:
+        if (micro_op_.step == 0) return read_cycle(regs_.pc, BusCycleKind::OpcodeFetch);
+        if (micro_op_.step == 1) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        if (micro_op_.step == 2) {
+            const uint8_t value = micro_op_.kind == MicroOpKind::StbDirect ? regs_.b : regs_.a;
+            return write_cycle(micro_op_.effective_address, value, BusCycleKind::OperandWrite);
+        }
+        if (micro_op_.kind == MicroOpKind::StdDirect && micro_op_.step == 3) {
+            return write_cycle(static_cast<uint16_t>(micro_op_.effective_address + 1), regs_.b, BusCycleKind::OperandWrite);
+        }
+        return internal_cycle(regs_.pc);
+    case MicroOpKind::StaExtended:
+    case MicroOpKind::StbExtended:
+    case MicroOpKind::StdExtended:
+        if (micro_op_.step == 0) return read_cycle(regs_.pc, BusCycleKind::OpcodeFetch);
+        if (micro_op_.step == 1) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        if (micro_op_.step == 2) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        if (micro_op_.step == 3) {
+            const uint8_t value = micro_op_.kind == MicroOpKind::StbExtended ? regs_.b : regs_.a;
+            return write_cycle(micro_op_.effective_address, value, BusCycleKind::OperandWrite);
+        }
+        if (micro_op_.kind == MicroOpKind::StdExtended && micro_op_.step == 4) {
+            return write_cycle(static_cast<uint16_t>(micro_op_.effective_address + 1), regs_.b, BusCycleKind::OperandWrite);
+        }
+        return internal_cycle(regs_.pc);
+    case MicroOpKind::Bra:
+    case MicroOpKind::Bne:
+    case MicroOpKind::Beq:
+        if (micro_op_.step == 0) return read_cycle(regs_.pc, BusCycleKind::OpcodeFetch);
+        if (micro_op_.step == 1) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        return internal_cycle(regs_.pc);
+    case MicroOpKind::Bsr:
+        if (micro_op_.step == 0) return read_cycle(regs_.pc, BusCycleKind::OpcodeFetch);
+        if (micro_op_.step == 1) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        if (micro_op_.step == 2) {
+            return write_cycle(static_cast<uint16_t>(regs_.s - 1), lo(micro_op_.data), BusCycleKind::StackWrite);
+        }
+        if (micro_op_.step == 3) {
+            return write_cycle(static_cast<uint16_t>(regs_.s - 1), hi(micro_op_.data), BusCycleKind::StackWrite);
+        }
+        return internal_cycle(regs_.pc);
+    case MicroOpKind::Lbsr:
+        if (micro_op_.step == 0) return read_cycle(regs_.pc, BusCycleKind::OpcodeFetch);
+        if (micro_op_.step == 1) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        if (micro_op_.step == 2) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        if (micro_op_.step == 3) {
+            return write_cycle(static_cast<uint16_t>(regs_.s - 1), lo(micro_op_.data), BusCycleKind::StackWrite);
+        }
+        if (micro_op_.step == 4) {
+            return write_cycle(static_cast<uint16_t>(regs_.s - 1), hi(micro_op_.data), BusCycleKind::StackWrite);
+        }
+        return internal_cycle(regs_.pc);
+    case MicroOpKind::Rts:
+        if (micro_op_.step == 0) return read_cycle(regs_.pc, BusCycleKind::OpcodeFetch);
+        if (micro_op_.step == 1) return read_cycle(regs_.s, BusCycleKind::StackRead);
+        if (micro_op_.step == 2) return read_cycle(regs_.s, BusCycleKind::StackRead);
+        return internal_cycle(regs_.pc);
+    case MicroOpKind::JsrDirect:
+        if (micro_op_.step == 0) return read_cycle(regs_.pc, BusCycleKind::OpcodeFetch);
+        if (micro_op_.step == 1) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        if (micro_op_.step == 2) {
+            return write_cycle(static_cast<uint16_t>(regs_.s - 1), lo(micro_op_.data), BusCycleKind::StackWrite);
+        }
+        if (micro_op_.step == 3) {
+            return write_cycle(static_cast<uint16_t>(regs_.s - 1), hi(micro_op_.data), BusCycleKind::StackWrite);
+        }
+        return internal_cycle(regs_.pc);
+    case MicroOpKind::JsrExtended:
+        if (micro_op_.step == 0) return read_cycle(regs_.pc, BusCycleKind::OpcodeFetch);
+        if (micro_op_.step == 1) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        if (micro_op_.step == 2) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        if (micro_op_.step == 3) {
+            return write_cycle(static_cast<uint16_t>(regs_.s - 1), lo(micro_op_.data), BusCycleKind::StackWrite);
+        }
+        if (micro_op_.step == 4) {
+            return write_cycle(static_cast<uint16_t>(regs_.s - 1), hi(micro_op_.data), BusCycleKind::StackWrite);
+        }
+        return internal_cycle(regs_.pc);
+    case MicroOpKind::JmpDirect:
+        if (micro_op_.step == 0) return read_cycle(regs_.pc, BusCycleKind::OpcodeFetch);
+        if (micro_op_.step == 1) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        return internal_cycle(regs_.pc);
+    case MicroOpKind::JmpExtended:
+        if (micro_op_.step == 0) return read_cycle(regs_.pc, BusCycleKind::OpcodeFetch);
+        if (micro_op_.step == 1) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        if (micro_op_.step == 2) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
+        return internal_cycle(regs_.pc);
+    case MicroOpKind::Clra:
+    case MicroOpKind::Clrb:
+    case MicroOpKind::Tsta:
+    case MicroOpKind::Tstb:
+    case MicroOpKind::Deca:
+    case MicroOpKind::Decb:
+    case MicroOpKind::Inca:
+    case MicroOpKind::Incb:
+    case MicroOpKind::Coma:
+    case MicroOpKind::Comb:
+    case MicroOpKind::Nega:
+    case MicroOpKind::Negb:
+    case MicroOpKind::Lsra:
+    case MicroOpKind::Lsrb:
+    case MicroOpKind::Rora:
+    case MicroOpKind::Rorb:
+    case MicroOpKind::Asra:
+    case MicroOpKind::Asrb:
+    case MicroOpKind::Asla:
+    case MicroOpKind::Aslb:
+    case MicroOpKind::Rola:
+    case MicroOpKind::Rolb:
+        return micro_op_.step == 0
+            ? read_cycle(regs_.pc, BusCycleKind::OpcodeFetch)
+            : internal_cycle(regs_.pc);
+    case MicroOpKind::None:
+        break;
+    }
+    return {};
+}
+
+bool Cpu::prepare_microcycle(Bus& bus, BusSignals& signals, CpuMicrocycleStatus& status) {
+    bool instruction_started = false;
+    if (!has_pending_micro_ops()) {
+        const uint8_t opcode = bus.peek8(regs_.pc);
+        if (!start_micro_op(opcode)) {
+            return false;
+        }
+        instruction_started = true;
+    }
+
+    signals = micro_op_signals();
+    status = micro_op_status(instruction_started, false);
+    return true;
+}
+
+CpuMicrocycleStatus Cpu::complete_microcycle(const BusSignals& signals) {
+    if (!has_pending_micro_ops()) {
+        return {};
+    }
+
+    const uint8_t completed_step = micro_op_.step;
+    switch (micro_op_.kind) {
+    case MicroOpKind::Nop:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        }
+        break;
+    case MicroOpKind::LdaImmediate:
+    case MicroOpKind::LdbImmediate:
+    case MicroOpKind::LddImmediate:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 1) {
+            if (micro_op_.kind == MicroOpKind::LddImmediate) {
+                micro_op_.data = static_cast<uint16_t>(static_cast<uint16_t>(signals.data) << 8);
+            } else if (micro_op_.kind == MicroOpKind::LdaImmediate) {
+                regs_.a = signals.data;
+                set_flags_nz8(regs_.a);
+            } else {
+                regs_.b = signals.data;
+                set_flags_nz8(regs_.b);
+            }
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 2) {
+            micro_op_.data = static_cast<uint16_t>(micro_op_.data | signals.data);
+            regs_.a = static_cast<uint8_t>((micro_op_.data >> 8) & 0xFF);
+            regs_.b = static_cast<uint8_t>(micro_op_.data & 0xFF);
+            set_flags_nz16(micro_op_.data);
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        }
+        break;
+    case MicroOpKind::Alu8Immediate:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 1) {
+            apply_alu8_immediate(regs_, micro_op_.opcode, signals.data);
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        }
+        break;
+    case MicroOpKind::LdaDirect:
+    case MicroOpKind::LdbDirect:
+    case MicroOpKind::LddDirect:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 1) {
+            micro_op_.direct_offset = signals.data;
+            micro_op_.effective_address = static_cast<uint16_t>((static_cast<uint16_t>(regs_.dp) << 8) | signals.data);
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 2) {
+            if (micro_op_.kind == MicroOpKind::LddDirect) {
+                micro_op_.data = static_cast<uint16_t>(static_cast<uint16_t>(signals.data) << 8);
+            } else if (micro_op_.kind == MicroOpKind::LdaDirect) {
+                regs_.a = signals.data;
+                set_flags_nz8(regs_.a);
+            } else {
+                regs_.b = signals.data;
+                set_flags_nz8(regs_.b);
+            }
+        } else if (completed_step == 3 && micro_op_.kind == MicroOpKind::LddDirect) {
+            micro_op_.data = static_cast<uint16_t>(micro_op_.data | signals.data);
+            regs_.a = static_cast<uint8_t>((micro_op_.data >> 8) & 0xFF);
+            regs_.b = static_cast<uint8_t>(micro_op_.data & 0xFF);
+            set_flags_nz16(micro_op_.data);
+        }
+        break;
+    case MicroOpKind::LdaExtended:
+    case MicroOpKind::LdbExtended:
+    case MicroOpKind::LddExtended:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 1) {
+            micro_op_.effective_address = static_cast<uint16_t>(static_cast<uint16_t>(signals.data) << 8);
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 2) {
+            micro_op_.effective_address = static_cast<uint16_t>(micro_op_.effective_address | signals.data);
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 3) {
+            if (micro_op_.kind == MicroOpKind::LddExtended) {
+                micro_op_.data = static_cast<uint16_t>(static_cast<uint16_t>(signals.data) << 8);
+            } else if (micro_op_.kind == MicroOpKind::LdaExtended) {
+                regs_.a = signals.data;
+                set_flags_nz8(regs_.a);
+            } else {
+                regs_.b = signals.data;
+                set_flags_nz8(regs_.b);
+            }
+        } else if (completed_step == 4 && micro_op_.kind == MicroOpKind::LddExtended) {
+            micro_op_.data = static_cast<uint16_t>(micro_op_.data | signals.data);
+            regs_.a = static_cast<uint8_t>((micro_op_.data >> 8) & 0xFF);
+            regs_.b = static_cast<uint8_t>(micro_op_.data & 0xFF);
+            set_flags_nz16(micro_op_.data);
+        }
+        break;
+    case MicroOpKind::StaDirect:
+    case MicroOpKind::StbDirect:
+    case MicroOpKind::StdDirect:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 1) {
+            micro_op_.direct_offset = signals.data;
+            micro_op_.effective_address = static_cast<uint16_t>((static_cast<uint16_t>(regs_.dp) << 8) | signals.data);
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 2 && micro_op_.kind != MicroOpKind::StdDirect) {
+            const uint8_t value = micro_op_.kind == MicroOpKind::StaDirect ? regs_.a : regs_.b;
+            set_flags_nz8(value);
+        } else if (completed_step == 3 && micro_op_.kind == MicroOpKind::StdDirect) {
+            set_flags_nz16(static_cast<uint16_t>((static_cast<uint16_t>(regs_.a) << 8) | regs_.b));
+        }
+        break;
+    case MicroOpKind::StaExtended:
+    case MicroOpKind::StbExtended:
+    case MicroOpKind::StdExtended:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 1) {
+            micro_op_.effective_address = static_cast<uint16_t>(static_cast<uint16_t>(signals.data) << 8);
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 2) {
+            micro_op_.effective_address = static_cast<uint16_t>(micro_op_.effective_address | signals.data);
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 3 && micro_op_.kind != MicroOpKind::StdExtended) {
+            const uint8_t value = micro_op_.kind == MicroOpKind::StaExtended ? regs_.a : regs_.b;
+            set_flags_nz8(value);
+        } else if (completed_step == 4 && micro_op_.kind == MicroOpKind::StdExtended) {
+            set_flags_nz16(static_cast<uint16_t>((static_cast<uint16_t>(regs_.a) << 8) | regs_.b));
+        }
+        break;
+    case MicroOpKind::Bra:
+    case MicroOpKind::Bne:
+    case MicroOpKind::Beq:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 1) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+            if (micro_op_.branch_taken) {
+                regs_.pc = static_cast<uint16_t>(regs_.pc + static_cast<int8_t>(signals.data));
+            }
+        }
+        break;
+    case MicroOpKind::Bsr:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 1) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+            micro_op_.data = regs_.pc;
+            micro_op_.effective_address = static_cast<uint16_t>(regs_.pc + static_cast<int8_t>(signals.data));
+        } else if (completed_step == 2) {
+            regs_.s = static_cast<uint16_t>(regs_.s - 1);
+        } else if (completed_step == 3) {
+            regs_.s = static_cast<uint16_t>(regs_.s - 1);
+            regs_.pc = micro_op_.effective_address;
+        }
+        break;
+    case MicroOpKind::Lbsr:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 1) {
+            micro_op_.data = static_cast<uint16_t>(static_cast<uint16_t>(signals.data) << 8);
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 2) {
+            const uint16_t offset = static_cast<uint16_t>(micro_op_.data | signals.data);
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+            micro_op_.data = regs_.pc;
+            micro_op_.effective_address = static_cast<uint16_t>(regs_.pc + sign_extend16(offset));
+        } else if (completed_step == 3) {
+            regs_.s = static_cast<uint16_t>(regs_.s - 1);
+        } else if (completed_step == 4) {
+            regs_.s = static_cast<uint16_t>(regs_.s - 1);
+            regs_.pc = micro_op_.effective_address;
+        }
+        break;
+    case MicroOpKind::Rts:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 1) {
+            micro_op_.data = static_cast<uint16_t>(static_cast<uint16_t>(signals.data) << 8);
+            regs_.s = static_cast<uint16_t>(regs_.s + 1);
+        } else if (completed_step == 2) {
+            micro_op_.data = static_cast<uint16_t>(micro_op_.data | signals.data);
+            regs_.s = static_cast<uint16_t>(regs_.s + 1);
+            regs_.pc = micro_op_.data;
+        }
+        break;
+    case MicroOpKind::JsrDirect:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 1) {
+            micro_op_.direct_offset = signals.data;
+            micro_op_.effective_address = static_cast<uint16_t>((static_cast<uint16_t>(regs_.dp) << 8) | signals.data);
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+            micro_op_.data = regs_.pc;
+        } else if (completed_step == 2) {
+            regs_.s = static_cast<uint16_t>(regs_.s - 1);
+        } else if (completed_step == 3) {
+            regs_.s = static_cast<uint16_t>(regs_.s - 1);
+            regs_.pc = micro_op_.effective_address;
+        }
+        break;
+    case MicroOpKind::JsrExtended:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 1) {
+            micro_op_.effective_address = static_cast<uint16_t>(static_cast<uint16_t>(signals.data) << 8);
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 2) {
+            micro_op_.effective_address = static_cast<uint16_t>(micro_op_.effective_address | signals.data);
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+            micro_op_.data = regs_.pc;
+        } else if (completed_step == 3) {
+            regs_.s = static_cast<uint16_t>(regs_.s - 1);
+        } else if (completed_step == 4) {
+            regs_.s = static_cast<uint16_t>(regs_.s - 1);
+            regs_.pc = micro_op_.effective_address;
+        }
+        break;
+    case MicroOpKind::JmpDirect:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 1) {
+            micro_op_.effective_address = static_cast<uint16_t>((static_cast<uint16_t>(regs_.dp) << 8) | signals.data);
+            regs_.pc = micro_op_.effective_address;
+        }
+        break;
+    case MicroOpKind::JmpExtended:
+        if (completed_step == 0) {
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 1) {
+            micro_op_.effective_address = static_cast<uint16_t>(static_cast<uint16_t>(signals.data) << 8);
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        } else if (completed_step == 2) {
+            micro_op_.effective_address = static_cast<uint16_t>(micro_op_.effective_address | signals.data);
+            regs_.pc = micro_op_.effective_address;
+        }
+        break;
+    case MicroOpKind::Clra:
+    case MicroOpKind::Clrb:
+        if (completed_step == 0) {
+            if (micro_op_.kind == MicroOpKind::Clra) {
+                regs_.a = 0;
+            } else {
+                regs_.b = 0;
+            }
+            regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_V | CC_Z));
+            regs_.cc |= CC_Z;
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        }
+        break;
+    case MicroOpKind::Tsta:
+    case MicroOpKind::Tstb:
+        if (completed_step == 0) {
+            const uint8_t value = micro_op_.kind == MicroOpKind::Tsta ? regs_.a : regs_.b;
+            regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
+            if (value == 0) {
+                regs_.cc |= CC_Z;
+            }
+            if (value & 0x80) {
+                regs_.cc |= CC_N;
+            }
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        }
+        break;
+    case MicroOpKind::Deca:
+    case MicroOpKind::Decb:
+    case MicroOpKind::Inca:
+    case MicroOpKind::Incb:
+        if (completed_step == 0) {
+            uint8_t& target =
+                (micro_op_.kind == MicroOpKind::Deca || micro_op_.kind == MicroOpKind::Inca) ? regs_.a : regs_.b;
+            const bool increment = micro_op_.kind == MicroOpKind::Inca || micro_op_.kind == MicroOpKind::Incb;
+            const uint8_t result = static_cast<uint8_t>(target + (increment ? 1 : -1));
+            target = result;
+            regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V));
+            if (result == 0) {
+                regs_.cc |= CC_Z;
+            }
+            if (result & 0x80) {
+                regs_.cc |= CC_N;
+            }
+            if ((increment && result == 0x80) || (!increment && result == 0x7F)) {
+                regs_.cc |= CC_V;
+            }
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        }
+        break;
+    case MicroOpKind::Coma:
+    case MicroOpKind::Comb:
+        if (completed_step == 0) {
+            uint8_t& target = micro_op_.kind == MicroOpKind::Coma ? regs_.a : regs_.b;
+            target = static_cast<uint8_t>(~target);
+            regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V));
+            regs_.cc |= CC_C;
+            if (target == 0) {
+                regs_.cc |= CC_Z;
+            }
+            if (target & 0x80) {
+                regs_.cc |= CC_N;
+            }
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        }
+        break;
+    case MicroOpKind::Nega:
+    case MicroOpKind::Negb:
+        if (completed_step == 0) {
+            uint8_t& target = micro_op_.kind == MicroOpKind::Nega ? regs_.a : regs_.b;
+            const uint8_t operand = target;
+            target = static_cast<uint8_t>(0u - operand);
+            regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
+            if (target == 0) {
+                regs_.cc |= CC_Z;
+            }
+            if (target & 0x80) {
+                regs_.cc |= CC_N;
+            }
+            if (operand == 0x80) {
+                regs_.cc |= CC_V;
+            }
+            if (operand != 0) {
+                regs_.cc |= CC_C;
+            }
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        }
+        break;
+    case MicroOpKind::Lsra:
+    case MicroOpKind::Lsrb:
+        if (completed_step == 0) {
+            uint8_t& target = micro_op_.kind == MicroOpKind::Lsra ? regs_.a : regs_.b;
+            const uint8_t carry = static_cast<uint8_t>(target & 0x01);
+            target = static_cast<uint8_t>(target >> 1);
+            regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
+            if (carry != 0) {
+                regs_.cc |= CC_C;
+            }
+            if (target == 0) {
+                regs_.cc |= CC_Z;
+            }
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        }
+        break;
+    case MicroOpKind::Rora:
+    case MicroOpKind::Rorb:
+        if (completed_step == 0) {
+            uint8_t& target = micro_op_.kind == MicroOpKind::Rora ? regs_.a : regs_.b;
+            const uint8_t carry_in = (regs_.cc & CC_C) ? 0x80 : 0x00;
+            const uint8_t carry_out = static_cast<uint8_t>(target & 0x01);
+            target = static_cast<uint8_t>((target >> 1) | carry_in);
+            regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
+            if (target & 0x80) {
+                regs_.cc |= CC_N;
+            }
+            if (target == 0) {
+                regs_.cc |= CC_Z;
+            }
+            if (carry_out != 0) {
+                regs_.cc |= CC_C;
+            }
+            if (((target ^ (carry_out ? 0x80 : 0x00)) & 0x80) != 0) {
+                regs_.cc |= CC_V;
+            }
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        }
+        break;
+    case MicroOpKind::Asra:
+    case MicroOpKind::Asrb:
+        if (completed_step == 0) {
+            uint8_t& target = micro_op_.kind == MicroOpKind::Asra ? regs_.a : regs_.b;
+            const uint8_t carry_out = static_cast<uint8_t>(target & 0x01);
+            target = static_cast<uint8_t>((target >> 1) | (target & 0x80));
+            regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
+            if (target & 0x80) {
+                regs_.cc |= CC_N;
+            }
+            if (target == 0) {
+                regs_.cc |= CC_Z;
+            }
+            if (carry_out != 0) {
+                regs_.cc |= CC_C;
+            }
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        }
+        break;
+    case MicroOpKind::Asla:
+    case MicroOpKind::Aslb:
+        if (completed_step == 0) {
+            uint8_t& target = micro_op_.kind == MicroOpKind::Asla ? regs_.a : regs_.b;
+            const uint8_t carry_out = static_cast<uint8_t>((target >> 7) & 0x01);
+            target = static_cast<uint8_t>(target << 1);
+            regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
+            if (target & 0x80) {
+                regs_.cc |= CC_N;
+            }
+            if (target == 0) {
+                regs_.cc |= CC_Z;
+            }
+            if (carry_out != 0) {
+                regs_.cc |= CC_C;
+            }
+            if (((target ^ (carry_out ? 0x80 : 0x00)) & 0x80) != 0) {
+                regs_.cc |= CC_V;
+            }
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        }
+        break;
+    case MicroOpKind::Rola:
+    case MicroOpKind::Rolb:
+        if (completed_step == 0) {
+            uint8_t& target = micro_op_.kind == MicroOpKind::Rola ? regs_.a : regs_.b;
+            const uint8_t carry_in = (regs_.cc & CC_C) ? 1 : 0;
+            const uint8_t carry_out = static_cast<uint8_t>((target >> 7) & 0x01);
+            target = static_cast<uint8_t>((target << 1) | carry_in);
+            regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
+            if (target & 0x80) {
+                regs_.cc |= CC_N;
+            }
+            if (target == 0) {
+                regs_.cc |= CC_Z;
+            }
+            if (carry_out != 0) {
+                regs_.cc |= CC_C;
+            }
+            if (((target ^ (carry_out ? 0x80 : 0x00)) & 0x80) != 0) {
+                regs_.cc |= CC_V;
+            }
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
+        }
+        break;
+    case MicroOpKind::None:
+        break;
+    }
+
+    micro_op_.step = static_cast<uint8_t>(micro_op_.step + 1);
+    const bool complete = micro_op_.step >= micro_op_.total_cycles;
+    const CpuMicrocycleStatus status = micro_op_status(false, complete);
+    if (complete) {
+        cycles_executed_ += micro_op_.total_cycles;
+        micro_op_ = {};
+    }
+    return status;
+}
+
+uint8_t Cpu::fetch_opcode_byte(Bus& bus) {
+    return fetch_byte(bus, BusCycleKind::OpcodeFetch);
+}
+
 uint8_t Cpu::fetch_byte(Bus& bus) {
-    const uint8_t value = read_byte(bus, regs_.pc);
+    return fetch_byte(bus, BusCycleKind::OperandRead);
+}
+
+uint8_t Cpu::fetch_byte(Bus& bus, BusCycleKind cycle_kind) {
+    const uint8_t value = bus.read8(regs_.pc, cycle_kind);
     regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
     return value;
 }
 
 uint16_t Cpu::fetch_word(Bus& bus) {
-    const uint16_t high = fetch_byte(bus);
-    const uint16_t low = fetch_byte(bus);
+    return fetch_word(bus, BusCycleKind::OperandRead);
+}
+
+uint16_t Cpu::fetch_word(Bus& bus, BusCycleKind cycle_kind) {
+    const uint16_t high = fetch_byte(bus, cycle_kind);
+    const uint16_t low = fetch_byte(bus, cycle_kind);
     return static_cast<uint16_t>((high << 8) | low);
 }
 
-uint8_t Cpu::read_byte(Bus& bus, uint16_t address) { return bus.read8(address); }
+uint8_t Cpu::read_byte(Bus& bus, uint16_t address) { return bus.read8(address, BusCycleKind::OperandRead); }
 
-void Cpu::write_byte(Bus& bus, uint16_t address, uint8_t value) { bus.write8(address, value); }
-
-static inline uint16_t read_word(Bus& bus, uint16_t address) {
-    return static_cast<uint16_t>((bus.read8(address) << 8) | bus.read8(static_cast<uint16_t>(address + 1)));
+void Cpu::write_byte(Bus& bus, uint16_t address, uint8_t value) {
+    bus.write8(address, value, BusCycleKind::OperandWrite);
 }
 
-static inline void write_word(Bus& bus, uint16_t address, uint16_t value) {
-    bus.write8(address, static_cast<uint8_t>((value >> 8) & 0xFF));
-    bus.write8(static_cast<uint16_t>(address + 1), static_cast<uint8_t>(value & 0xFF));
+uint8_t Cpu::read_stack_byte(Bus& bus, uint16_t address) {
+    return bus.read8(address, BusCycleKind::StackRead);
+}
+
+void Cpu::write_stack_byte(Bus& bus, uint16_t address, uint8_t value) {
+    bus.write8(address, value, BusCycleKind::StackWrite);
+}
+
+static inline uint16_t read_word(
+    Bus& bus,
+    uint16_t address,
+    BusCycleKind cycle_kind = BusCycleKind::OperandRead) {
+    return static_cast<uint16_t>(
+        (bus.read8(address, cycle_kind) << 8) |
+        bus.read8(static_cast<uint16_t>(address + 1), cycle_kind));
+}
+
+static inline void write_word(
+    Bus& bus,
+    uint16_t address,
+    uint16_t value,
+    BusCycleKind cycle_kind = BusCycleKind::OperandWrite) {
+    bus.write8(address, static_cast<uint8_t>((value >> 8) & 0xFF), cycle_kind);
+    bus.write8(static_cast<uint16_t>(address + 1), static_cast<uint8_t>(value & 0xFF), cycle_kind);
 }
 
 static constexpr uint16_t VECTOR_SWI = 0xFFFA;
@@ -674,7 +1723,7 @@ uint16_t Cpu::extended_address(Bus& bus) { return fetch_word(bus); }
 Cpu::PostbyteResult Cpu::unsupported_indexed_address(Bus& bus) {
     if (mode_ == CpuMode::HD6309) {
         regs_.md |= 0x40;
-        regs_.pc = read_word(bus, 0xFFF0);
+        regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead);
     }
     return {0, 1, false};
 }
@@ -872,7 +1921,7 @@ Cpu::PostbyteResult Cpu::indexed_address(Bus& bus) {
 
 void Cpu::push_byte(Bus& bus, uint8_t value) {
     regs_.s = static_cast<uint16_t>(regs_.s - 1);
-    write_byte(bus, regs_.s, value);
+    write_stack_byte(bus, regs_.s, value);
 }
 
 void Cpu::push_word(Bus& bus, uint16_t value) {
@@ -881,7 +1930,7 @@ void Cpu::push_word(Bus& bus, uint16_t value) {
 }
 
 uint8_t Cpu::pull_byte(Bus& bus) {
-    const uint8_t value = read_byte(bus, regs_.s);
+    const uint8_t value = read_stack_byte(bus, regs_.s);
     regs_.s = static_cast<uint16_t>(regs_.s + 1);
     return value;
 }

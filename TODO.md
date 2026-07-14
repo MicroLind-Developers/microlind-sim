@@ -34,3 +34,8 @@
   - Return `6 + 3n` cycles.
   - Consider modeling interruptible transfer behavior.
   - Be careful with memory-mapped I/O reads that may be repeated after an interrupt.
+
+## Other TODOs
+
+- Add support for changing values in:
+  - Memory Mapper Registers, to be able to test RAM banking behaviour.

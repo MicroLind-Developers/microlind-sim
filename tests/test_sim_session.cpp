@@ -16,6 +16,7 @@
 namespace {
 
 using ::testing::SizeIs;
+using ::testing::Contains;
 using microlind::test::disassemble_bytes;
 using microlind::test::loaded_session;
 using microlind::test::test_output_path;
@@ -38,6 +39,7 @@ TEST(SimSessionTest, LoadsBiosResetsStepsAndRecordsTrace) {
 
 TEST(SimSessionTest, ReportsExplicitMapperWindowsAndCompactFlashSnapshot) {
     auto session = loaded_session();
+    EXPECT_THAT(session.log(), Contains("PLD validation OK."));
 
     const auto mapper = session.mapper_snapshot();
     ASSERT_TRUE(mapper.present);
@@ -55,6 +57,42 @@ TEST(SimSessionTest, ReportsExplicitMapperWindowsAndCompactFlashSnapshot) {
     EXPECT_FALSE(cf.read_only);
     EXPECT_EQ(cf.status, 0x50);
     EXPECT_EQ(cf.transfer_mode, microlind::app::CfTransferMode::None);
+}
+
+TEST(SimSessionTest, ReportsPldLogicDecodeSnapshotForGui) {
+    auto session = loaded_session();
+
+    const auto rom = session.logic_decode_snapshot(0xF000, true);
+    EXPECT_TRUE(rom.configured);
+    ASSERT_TRUE(rom.available);
+    ASSERT_TRUE(rom.decoded.ok());
+    EXPECT_TRUE(rom.decoded.rom_en);
+    EXPECT_FALSE(rom.decoded.io_en);
+
+    const auto cf_write = session.logic_decode_snapshot(0xF418, false);
+    EXPECT_TRUE(cf_write.configured);
+    ASSERT_TRUE(cf_write.available);
+    ASSERT_TRUE(cf_write.decoded.ok());
+    EXPECT_TRUE(cf_write.decoded.io_en);
+    EXPECT_TRUE(cf_write.decoded.cf_en);
+    EXPECT_TRUE(cf_write.decoded.wr);
+}
+
+TEST(SimSessionTest, StepsSingleMicrocycleForGui) {
+    auto session = loaded_session();
+    auto& sim = session.simulator();
+    sim.bus().clear_access_log();
+
+    const auto result = session.step_microcycle();
+
+    EXPECT_TRUE(result.emitted);
+    EXPECT_TRUE(result.instruction_started);
+    EXPECT_FALSE(result.instruction_complete);
+    EXPECT_TRUE(sim.has_pending_microcycles());
+    ASSERT_THAT(sim.bus().access_log(), SizeIs(1));
+    EXPECT_EQ(sim.bus().access_log().front().address, 0xFF00);
+    EXPECT_EQ(sim.bus().access_log().front().cycle_kind, microlind::BusCycleKind::OpcodeFetch);
+    EXPECT_EQ(result.signals.cycle_kind, microlind::BusCycleKind::OpcodeFetch);
 }
 
 TEST(SimSessionTest, MergesReadWriteWatchpointsAndStopsOnHit) {
@@ -81,10 +119,12 @@ TEST(SimSessionTest, PeekMemoryDoesNotConsumeSerialOrLogBusAccess) {
 
     auto& bus = session.simulator().bus();
     bus.clear_access_log();
+    bus.clear_phase_log();
 
     EXPECT_EQ(session.peek_memory(0xF433), 'A');
     EXPECT_EQ(session.peek_memory(0xF433), 'A');
     EXPECT_TRUE(bus.access_log().empty());
+    EXPECT_TRUE(bus.phase_log().empty());
 
     EXPECT_EQ(session.read_memory(0xF433), 'A');
     EXPECT_EQ(session.read_memory(0xF433), 0x00);
@@ -168,9 +208,11 @@ TEST(DisassemblerTest, DoesNotRecordBusAccessWhileFormatting) {
     auto& sim = session.simulator();
 
     sim.bus().clear_access_log();
+    sim.bus().clear_phase_log();
     const auto disasm = microlind::cli::disassemble(sim.bus(), sim.cpu(), 0xFF00);
     EXPECT_EQ(disasm.text, "jmp ext $ff03");
     EXPECT_TRUE(sim.bus().access_log().empty());
+    EXPECT_TRUE(sim.bus().phase_log().empty());
 }
 
 TEST(DisassemblerTest, FormatsAdditionalWIndexedModesAndStackMasks) {

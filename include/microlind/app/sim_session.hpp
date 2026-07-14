@@ -14,6 +14,7 @@
 
 #include "microlind/app/hardware_config.hpp"
 #include "microlind/app/image_loader.hpp"
+#include "microlind/logic.hpp"
 
 namespace microlind::devices {
 class CompactFlash;
@@ -107,6 +108,32 @@ struct CfSnapshot {
     std::size_t transfer_index{};
 };
 
+struct LogicDecodeSnapshot {
+    bool configured{};
+    bool available{};
+    BusPhase phase{BusPhase::QLowELow};
+    BusCycleKind cycle_kind{BusCycleKind::Idle};
+    uint16_t address{};
+    uint8_t data{0xFF};
+    uint8_t mapper_bits{};
+    bool rw{true};
+    bool e{};
+    bool q{};
+    bool ba{true};
+    bool bs{true};
+    bool breq{true};
+    bool memory_enable{true};
+    bool mapper_enable{true};
+    bool apply_read{};
+    bool apply_write{};
+    bool log_access{};
+    std::filesystem::path signal_logic_path;
+    std::filesystem::path memory_logic_path;
+    std::filesystem::path address_logic_path;
+    microlind::logic::BoardDecodeResult decoded;
+    std::string error;
+};
+
 class SimSession {
 public:
     explicit SimSession(CpuMode mode = CpuMode::HD6309);
@@ -120,6 +147,7 @@ public:
 
     void reset();
     CpuTickResult step_instruction();
+    SimulatorMicrocycleResult step_microcycle();
     RunResult run_instructions(uint32_t count);
     RunResult run_until_address(uint16_t address, uint32_t max_instructions);
     RunResult run_until_return(uint32_t max_instructions);
@@ -161,6 +189,8 @@ public:
     [[nodiscard]] std::vector<std::string> memory_map() const;
     [[nodiscard]] MapperSnapshot mapper_snapshot() const;
     [[nodiscard]] CfSnapshot cf_snapshot() const;
+    [[nodiscard]] LogicDecodeSnapshot logic_decode_snapshot(uint16_t address, bool rw) const;
+    [[nodiscard]] LogicDecodeSnapshot logic_decode_snapshot(const BusSignals& signals) const;
 
     [[nodiscard]] const std::vector<uint8_t>& serial_tx() const { return serial_tx_; }
     void clear_serial_tx() { serial_tx_.clear(); }
@@ -186,6 +216,8 @@ private:
     std::shared_ptr<devices::MapperState> mapper_state_;
     devices::XR88C92* serial_dev_{nullptr};
     devices::CompactFlash* cf_dev_{nullptr};
+    std::optional<microlind::logic::BoardLogicDevices> logic_devices_;
+    std::string logic_error_;
     Simulator sim_;
     std::vector<uint8_t> serial_tx_;
     std::vector<Breakpoint> breakpoints_;

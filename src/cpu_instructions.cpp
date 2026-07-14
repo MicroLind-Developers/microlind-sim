@@ -10,13 +10,27 @@ namespace {
 uint8_t hi(uint16_t value) { return static_cast<uint8_t>((value >> 8) & 0xFF); }
 uint8_t lo(uint16_t value) { return static_cast<uint8_t>(value & 0xFF); }
 
-uint16_t read_word(Bus& bus, uint16_t address) {
-    return static_cast<uint16_t>((bus.read8(address) << 8) | bus.read8(static_cast<uint16_t>(address + 1)));
+int32_t sign_extend16(uint16_t value) {
+    return (value & 0x8000) ? static_cast<int32_t>(value) - 0x10000 : static_cast<int32_t>(value);
 }
 
-void write_word(Bus& bus, uint16_t address, uint16_t value) {
-    bus.write8(address, static_cast<uint8_t>((value >> 8) & 0xFF));
-    bus.write8(static_cast<uint16_t>(address + 1), static_cast<uint8_t>(value & 0xFF));
+bool is_native_hd6309(const Registers& regs, CpuMode mode) {
+    return mode == CpuMode::HD6309 && (regs.md & 0x01) != 0;
+}
+
+uint16_t read_word(Bus& bus, uint16_t address, BusCycleKind cycle_kind = BusCycleKind::OperandRead) {
+    return static_cast<uint16_t>(
+        (bus.read8(address, cycle_kind) << 8) |
+        bus.read8(static_cast<uint16_t>(address + 1), cycle_kind));
+}
+
+void write_word(
+    Bus& bus,
+    uint16_t address,
+    uint16_t value,
+    BusCycleKind cycle_kind = BusCycleKind::OperandWrite) {
+    bus.write8(address, static_cast<uint8_t>((value >> 8) & 0xFF), cycle_kind);
+    bus.write8(static_cast<uint16_t>(address + 1), static_cast<uint8_t>(value & 0xFF), cycle_kind);
 }
 
 constexpr uint16_t VECTOR_SWI = 0xFFFA;
@@ -59,7 +73,7 @@ static inline uint8_t add8(Registers& r, uint8_t a, uint8_t b) {
     if (res == 0) r.cc |= CC_Z;
     if (((a ^ b ^ res) & 0x80) && !((a ^ b) & 0x80)) r.cc |= CC_V;
     if (sum & 0x100) r.cc |= CC_C;
-    if (((a & b) | (b & ~res) | (a & ~res)) & 0x10) r.cc |= CC_H;
+    if ((a ^ b ^ res) & 0x10) r.cc |= CC_H;
     return res;
 }
 
@@ -127,7 +141,7 @@ static inline uint8_t adc8(Registers& r, uint8_t a, uint8_t b) {
     if (res == 0) r.cc |= CC_Z;
     if (((a ^ b ^ res) & 0x80) && !((a ^ b) & 0x80)) r.cc |= CC_V;
     if (sum & 0x100) r.cc |= CC_C;
-    if (((a & b) | (b & ~res) | (a & ~res)) & 0x10) r.cc |= CC_H;
+    if ((a ^ b ^ res) & 0x10) r.cc |= CC_H;
     return res;
 }
 
@@ -314,7 +328,7 @@ bool reg_is_16bit(uint8_t code) {
 uint8_t Cpu::op_invalid(Bus& bus) {
     if (mode_ == CpuMode::HD6309) {
         regs_.md |= 0x40;
-        regs_.pc = read_word(bus, 0xFFF0);
+        regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead);
     }
     return 1;
 }
@@ -325,14 +339,14 @@ uint8_t Cpu::op_clra(Bus&) {
     regs_.a = 0;
     regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_V | CC_Z));
     regs_.cc |= CC_Z;
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 
 uint8_t Cpu::op_clrb(Bus&) {
     regs_.b = 0;
     regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_V | CC_Z));
     regs_.cc |= CC_Z;
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 
 uint8_t Cpu::op_lda_imm(Bus& bus) {
@@ -499,12 +513,12 @@ uint8_t Cpu::op_std_idx(Bus& bus) {
 
 uint8_t Cpu::op_jmp_dir(Bus& bus) {
     regs_.pc = direct_address(bus);
-    return 3;
+    return is_native_hd6309(regs_, mode_) ? 2 : 3;
 }
 
 uint8_t Cpu::op_jmp_ext(Bus& bus) {
     regs_.pc = extended_address(bus);
-    return 4;
+    return is_native_hd6309(regs_, mode_) ? 3 : 4;
 }
 
 uint8_t Cpu::op_jmp_idx(Bus& bus) {
@@ -568,7 +582,7 @@ uint8_t Cpu::op_swi(Bus& bus) {
     push_byte(bus, regs_.a);
     push_byte(bus, regs_.cc);
     regs_.cc |= static_cast<uint8_t>(CC_I | CC_F);
-    regs_.pc = read_word(bus, VECTOR_SWI);
+    regs_.pc = read_word(bus, VECTOR_SWI, BusCycleKind::VectorRead);
     return 19;
 }
 
@@ -583,7 +597,7 @@ uint8_t Cpu::op_swi2(Bus& bus) {
     push_byte(bus, regs_.a);
     push_byte(bus, regs_.cc);
     regs_.cc |= CC_I;
-    regs_.pc = read_word(bus, VECTOR_SWI2);
+    regs_.pc = read_word(bus, VECTOR_SWI2, BusCycleKind::VectorRead);
     return 20;
 }
 
@@ -598,7 +612,7 @@ uint8_t Cpu::op_swi3(Bus& bus) {
     push_byte(bus, regs_.a);
     push_byte(bus, regs_.cc);
     regs_.cc |= CC_I;
-    regs_.pc = read_word(bus, VECTOR_SWI3);
+    regs_.pc = read_word(bus, VECTOR_SWI3, BusCycleKind::VectorRead);
     return 20;
 }
 
@@ -645,7 +659,20 @@ uint8_t Cpu::op_bsr(Bus& bus) {
     const int8_t offset = static_cast<int8_t>(fetch_byte(bus));
     push_word(bus, regs_.pc);
     regs_.pc = static_cast<uint16_t>(regs_.pc + offset);
-    return 7;
+    return is_native_hd6309(regs_, mode_) ? 6 : 7;
+}
+
+uint8_t Cpu::op_lbra(Bus& bus) {
+    const int32_t offset = sign_extend16(fetch_word(bus));
+    regs_.pc = static_cast<uint16_t>(regs_.pc + offset);
+    return is_native_hd6309(regs_, mode_) ? 4 : 5;
+}
+
+uint8_t Cpu::op_lbsr(Bus& bus) {
+    const int32_t offset = sign_extend16(fetch_word(bus));
+    push_word(bus, regs_.pc);
+    regs_.pc = static_cast<uint16_t>(regs_.pc + offset);
+    return is_native_hd6309(regs_, mode_) ? 7 : 9;
 }
 
 uint8_t Cpu::op_bne(Bus& bus) {
@@ -1518,56 +1545,76 @@ uint8_t Cpu::op_leau(Bus& bus) {
 uint8_t Cpu::op_pshs(Bus& bus) {
     const uint8_t mask = fetch_byte(bus);
     uint8_t count = 0;
-    if (mask & 0x80) { push_byte(bus, regs_.cc); ++count; }
-    if (mask & 0x40) { push_byte(bus, regs_.a); ++count; }
-    if (mask & 0x20) { push_byte(bus, regs_.b); ++count; }
-    if (mask & 0x10) { push_byte(bus, regs_.dp); ++count; }
-    if (mask & 0x08) { push_word(bus, regs_.x); count += 2; }
-    if (mask & 0x04) { push_word(bus, regs_.y); count += 2; }
-    if (mask & 0x02) { push_word(bus, regs_.u); count += 2; }
-    if (mask & 0x01) { push_word(bus, regs_.pc); count += 2; }
+    if (mask & 0x80) { push_word(bus, regs_.pc); count += 2; }
+    if (mask & 0x40) { push_word(bus, regs_.u); count += 2; }
+    if (mask & 0x20) { push_word(bus, regs_.y); count += 2; }
+    if (mask & 0x10) { push_word(bus, regs_.x); count += 2; }
+    if (mask & 0x08) { push_byte(bus, regs_.dp); ++count; }
+    if (mask & 0x04) { push_byte(bus, regs_.b); ++count; }
+    if (mask & 0x02) { push_byte(bus, regs_.a); ++count; }
+    if (mask & 0x01) { push_byte(bus, regs_.cc); ++count; }
     return static_cast<uint8_t>(5 + count);
 }
 
 uint8_t Cpu::op_puls(Bus& bus) {
     const uint8_t mask = fetch_byte(bus);
     uint8_t count = 0;
-    if (mask & 0x01) { regs_.pc = pull_word(bus); count += 2; }
-    if (mask & 0x02) { regs_.u = pull_word(bus); count += 2; }
-    if (mask & 0x04) { regs_.y = pull_word(bus); count += 2; }
-    if (mask & 0x08) { regs_.x = pull_word(bus); count += 2; }
-    if (mask & 0x10) { regs_.dp = pull_byte(bus); ++count; }
-    if (mask & 0x20) { regs_.b = pull_byte(bus); ++count; }
-    if (mask & 0x40) { regs_.a = pull_byte(bus); ++count; }
-    if (mask & 0x80) { regs_.cc = pull_byte(bus); ++count; }
+    if (mask & 0x01) { regs_.cc = pull_byte(bus); ++count; }
+    if (mask & 0x02) { regs_.a = pull_byte(bus); ++count; }
+    if (mask & 0x04) { regs_.b = pull_byte(bus); ++count; }
+    if (mask & 0x08) { regs_.dp = pull_byte(bus); ++count; }
+    if (mask & 0x10) { regs_.x = pull_word(bus); count += 2; }
+    if (mask & 0x20) { regs_.y = pull_word(bus); count += 2; }
+    if (mask & 0x40) { regs_.u = pull_word(bus); count += 2; }
+    if (mask & 0x80) { regs_.pc = pull_word(bus); count += 2; }
     return static_cast<uint8_t>(5 + count);
 }
 
 uint8_t Cpu::op_pshu(Bus& bus) {
     const uint8_t mask = fetch_byte(bus);
     uint8_t count = 0;
-    if (mask & 0x80) { regs_.u = static_cast<uint16_t>(regs_.u - 1); write_byte(bus, regs_.u, regs_.cc); ++count; }
-    if (mask & 0x40) { regs_.u = static_cast<uint16_t>(regs_.u - 1); write_byte(bus, regs_.u, regs_.a); ++count; }
-    if (mask & 0x20) { regs_.u = static_cast<uint16_t>(regs_.u - 1); write_byte(bus, regs_.u, regs_.b); ++count; }
-    if (mask & 0x10) { regs_.u = static_cast<uint16_t>(regs_.u - 1); write_byte(bus, regs_.u, regs_.dp); ++count; }
-    if (mask & 0x08) { regs_.u = static_cast<uint16_t>(regs_.u - 2); write_byte(bus, static_cast<uint16_t>(regs_.u + 1), hi(regs_.x)); write_byte(bus, regs_.u, lo(regs_.x)); count += 2; }
-    if (mask & 0x04) { regs_.u = static_cast<uint16_t>(regs_.u - 2); write_byte(bus, static_cast<uint16_t>(regs_.u + 1), hi(regs_.y)); write_byte(bus, regs_.u, lo(regs_.y)); count += 2; }
-    if (mask & 0x02) { regs_.u = static_cast<uint16_t>(regs_.u - 2); write_byte(bus, static_cast<uint16_t>(regs_.u + 1), hi(regs_.s)); write_byte(bus, regs_.u, lo(regs_.s)); count += 2; }
-    if (mask & 0x01) { regs_.u = static_cast<uint16_t>(regs_.u - 2); write_byte(bus, static_cast<uint16_t>(regs_.u + 1), hi(regs_.pc)); write_byte(bus, regs_.u, lo(regs_.pc)); count += 2; }
+    auto push_u_byte = [&](uint8_t value) {
+        regs_.u = static_cast<uint16_t>(regs_.u - 1);
+        write_stack_byte(bus, regs_.u, value);
+        ++count;
+    };
+    auto push_u_word = [&](uint16_t value) {
+        push_u_byte(lo(value));
+        push_u_byte(hi(value));
+    };
+    if (mask & 0x80) { push_u_word(regs_.pc); }
+    if (mask & 0x40) { push_u_word(regs_.s); }
+    if (mask & 0x20) { push_u_word(regs_.y); }
+    if (mask & 0x10) { push_u_word(regs_.x); }
+    if (mask & 0x08) { push_u_byte(regs_.dp); }
+    if (mask & 0x04) { push_u_byte(regs_.b); }
+    if (mask & 0x02) { push_u_byte(regs_.a); }
+    if (mask & 0x01) { push_u_byte(regs_.cc); }
     return static_cast<uint8_t>(5 + count);
 }
 
 uint8_t Cpu::op_pulu(Bus& bus) {
     const uint8_t mask = fetch_byte(bus);
     uint8_t count = 0;
-    if (mask & 0x01) { regs_.pc = static_cast<uint16_t>((read_byte(bus, regs_.u + 1) << 8) | read_byte(bus, regs_.u)); regs_.u = static_cast<uint16_t>(regs_.u + 2); count += 2; }
-    if (mask & 0x02) { regs_.s = static_cast<uint16_t>((read_byte(bus, regs_.u + 1) << 8) | read_byte(bus, regs_.u)); regs_.u = static_cast<uint16_t>(regs_.u + 2); count += 2; }
-    if (mask & 0x04) { regs_.y = static_cast<uint16_t>((read_byte(bus, regs_.u + 1) << 8) | read_byte(bus, regs_.u)); regs_.u = static_cast<uint16_t>(regs_.u + 2); count += 2; }
-    if (mask & 0x08) { regs_.x = static_cast<uint16_t>((read_byte(bus, regs_.u + 1) << 8) | read_byte(bus, regs_.u)); regs_.u = static_cast<uint16_t>(regs_.u + 2); count += 2; }
-    if (mask & 0x10) { regs_.dp = read_byte(bus, regs_.u); regs_.u = static_cast<uint16_t>(regs_.u + 1); ++count; }
-    if (mask & 0x20) { regs_.b = read_byte(bus, regs_.u); regs_.u = static_cast<uint16_t>(regs_.u + 1); ++count; }
-    if (mask & 0x40) { regs_.a = read_byte(bus, regs_.u); regs_.u = static_cast<uint16_t>(regs_.u + 1); ++count; }
-    if (mask & 0x80) { regs_.cc = read_byte(bus, regs_.u); regs_.u = static_cast<uint16_t>(regs_.u + 1); ++count; }
+    auto pull_u_byte = [&]() {
+        const uint8_t value = read_stack_byte(bus, regs_.u);
+        regs_.u = static_cast<uint16_t>(regs_.u + 1);
+        ++count;
+        return value;
+    };
+    auto pull_u_word = [&]() {
+        const uint16_t high = pull_u_byte();
+        const uint16_t low = pull_u_byte();
+        return static_cast<uint16_t>((high << 8) | low);
+    };
+    if (mask & 0x01) { regs_.cc = pull_u_byte(); }
+    if (mask & 0x02) { regs_.a = pull_u_byte(); }
+    if (mask & 0x04) { regs_.b = pull_u_byte(); }
+    if (mask & 0x08) { regs_.dp = pull_u_byte(); }
+    if (mask & 0x10) { regs_.x = pull_u_word(); }
+    if (mask & 0x20) { regs_.y = pull_u_word(); }
+    if (mask & 0x40) { regs_.s = pull_u_word(); }
+    if (mask & 0x80) { regs_.pc = pull_u_word(); }
     return static_cast<uint8_t>(5 + count);
 }
 
@@ -1575,83 +1622,83 @@ uint8_t Cpu::op_pulu(Bus& bus) {
 
 uint8_t Cpu::op_nega(Bus&) {
     regs_.a = neg8_op(regs_, regs_.a);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_negb(Bus&) {
     regs_.b = neg8_op(regs_, regs_.b);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_coma(Bus&) {
     regs_.a = com8_op(regs_, regs_.a);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_comb(Bus&) {
     regs_.b = com8_op(regs_, regs_.b);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_lsra(Bus&) {
     regs_.a = lsr8_op(regs_, regs_.a);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_lsrb(Bus&) {
     regs_.b = lsr8_op(regs_, regs_.b);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_rora(Bus&) {
     regs_.a = ror8_op(regs_, regs_.a);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_rorb(Bus&) {
     regs_.b = ror8_op(regs_, regs_.b);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_asra(Bus&) {
     regs_.a = asr8_op(regs_, regs_.a);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_asrb(Bus&) {
     regs_.b = asr8_op(regs_, regs_.b);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_asla(Bus&) {
     regs_.a = asl8_op(regs_, regs_.a);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_aslb(Bus&) {
     regs_.b = asl8_op(regs_, regs_.b);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_rola(Bus&) {
     regs_.a = rol8_op(regs_, regs_.a);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_rolb(Bus&) {
     regs_.b = rol8_op(regs_, regs_.b);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_deca(Bus&) {
     regs_.a = dec8(regs_, regs_.a);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_decb(Bus&) {
     regs_.b = dec8(regs_, regs_.b);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_inca(Bus&) {
     regs_.a = inc8(regs_, regs_.a);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_incb(Bus&) {
     regs_.b = inc8(regs_, regs_.b);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_tsta(Bus&) {
     set_flags_tst(regs_, regs_.a);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 uint8_t Cpu::op_tstb(Bus&) {
     set_flags_tst(regs_, regs_.b);
-    return 2;
+    return is_native_hd6309(regs_, mode_) ? 1 : 2;
 }
 
 // ----- Memory unary/shift -----
@@ -2412,7 +2459,7 @@ uint8_t Cpu::op_eord_idx(Bus& bus) {
 static uint8_t finish_divd(Registers& regs, Bus& bus, uint8_t divisor, uint8_t cycles) {
     if (divisor == 0) {
         regs.md |= 0x80;
-        regs.pc = read_word(bus, 0xFFF0);
+        regs.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead);
         return cycles;
     }
 
@@ -2457,7 +2504,7 @@ uint8_t Cpu::op_divq_imm(Bus& bus) {
     const uint32_t dividend = reg_q();
     if (divisor == 0) {
         regs_.md |= 0x80;
-        regs_.pc = read_word(bus, 0xFFF0);
+        regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead);
         return 36;
     }
     const int32_t s_dividend = static_cast<int32_t>(dividend);
@@ -2484,7 +2531,7 @@ uint8_t Cpu::op_divq_dir(Bus& bus) {
     const uint32_t dividend = reg_q();
     if (val == 0) {
         regs_.md |= 0x80;
-        regs_.pc = read_word(bus, 0xFFF0);
+        regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead);
         return 36;
     }
     const int32_t s_dividend = static_cast<int32_t>(dividend);
@@ -2511,7 +2558,7 @@ uint8_t Cpu::op_divq_ext(Bus& bus) {
     const uint32_t dividend = reg_q();
     if (val == 0) {
         regs_.md |= 0x80;
-        regs_.pc = read_word(bus, 0xFFF0);
+        regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead);
         return 37;
     }
     const int32_t s_dividend = static_cast<int32_t>(dividend);
@@ -2540,7 +2587,7 @@ uint8_t Cpu::op_divq_idx(Bus& bus) {
     const uint32_t dividend = reg_q();
     if (val == 0) {
         regs_.md |= 0x80;
-        regs_.pc = read_word(bus, 0xFFF0);
+        regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead);
         return static_cast<uint8_t>(36 + pb.cycles);
     }
     const int32_t s_dividend = static_cast<int32_t>(dividend);
@@ -2862,12 +2909,14 @@ uint8_t Cpu::op_pulsw(Bus& bus) {
 }
 uint8_t Cpu::op_pshuw(Bus& bus) {
     regs_.u = static_cast<uint16_t>(regs_.u - 2);
-    write_byte(bus, static_cast<uint16_t>(regs_.u + 1), hi(reg_w()));
-    write_byte(bus, regs_.u, lo(reg_w()));
+    write_stack_byte(bus, regs_.u, hi(reg_w()));
+    write_stack_byte(bus, static_cast<uint16_t>(regs_.u + 1), lo(reg_w()));
     return 6;
 }
 uint8_t Cpu::op_puluw(Bus& bus) {
-    set_reg_w(static_cast<uint16_t>((read_byte(bus, static_cast<uint16_t>(regs_.u + 1)) << 8) | read_byte(bus, regs_.u)));
+    set_reg_w(static_cast<uint16_t>(
+        (read_stack_byte(bus, regs_.u) << 8) |
+        read_stack_byte(bus, static_cast<uint16_t>(regs_.u + 1))));
     regs_.u = static_cast<uint16_t>(regs_.u + 2);
     return 6;
 }
@@ -2890,7 +2939,7 @@ uint8_t Cpu::op_tfm_common(Bus& bus, bool inc_src, bool inc_dst) {
     uint16_t* src_ptr = reg_ptr(src_code);
     uint16_t* dst_ptr = reg_ptr(dst_code);
     if (!src_ptr || !dst_ptr) {
-        regs_.pc = read_word(bus, 0xFFF0);
+        regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead);
         return 6;
     }
     uint32_t count = reg_w();
@@ -3036,7 +3085,7 @@ uint8_t Cpu::op_band(Bus& bus) {
     const uint8_t post = fetch_byte(bus);
     const uint16_t addr = direct_address(bus);
     uint8_t* regp = bitop_reg_ptr(regs_, post);
-    if (!regp) { regs_.pc = read_word(bus, 0xFFF0); return 7; }
+    if (!regp) { regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead); return 7; }
     const uint8_t src_bit = (post >> 3) & 0x07;
     const uint8_t dst_bit = post & 0x07;
     uint8_t mem = read_byte(bus, addr);
@@ -3051,7 +3100,7 @@ uint8_t Cpu::op_biand(Bus& bus) {
     const uint8_t post = fetch_byte(bus);
     const uint16_t addr = direct_address(bus);
     uint8_t* regp = bitop_reg_ptr(regs_, post);
-    if (!regp) { regs_.pc = read_word(bus, 0xFFF0); return 7; }
+    if (!regp) { regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead); return 7; }
     const uint8_t src_bit = (post >> 3) & 0x07;
     const uint8_t dst_bit = post & 0x07;
     uint8_t mem = read_byte(bus, addr);
@@ -3066,7 +3115,7 @@ uint8_t Cpu::op_bor(Bus& bus) {
     const uint8_t post = fetch_byte(bus);
     const uint16_t addr = direct_address(bus);
     uint8_t* regp = bitop_reg_ptr(regs_, post);
-    if (!regp) { regs_.pc = read_word(bus, 0xFFF0); return 7; }
+    if (!regp) { regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead); return 7; }
     const uint8_t src_bit = (post >> 3) & 0x07;
     const uint8_t dst_bit = post & 0x07;
     uint8_t mem = read_byte(bus, addr);
@@ -3081,7 +3130,7 @@ uint8_t Cpu::op_bior(Bus& bus) {
     const uint8_t post = fetch_byte(bus);
     const uint16_t addr = direct_address(bus);
     uint8_t* regp = bitop_reg_ptr(regs_, post);
-    if (!regp) { regs_.pc = read_word(bus, 0xFFF0); return 7; }
+    if (!regp) { regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead); return 7; }
     const uint8_t src_bit = (post >> 3) & 0x07;
     const uint8_t dst_bit = post & 0x07;
     uint8_t mem = read_byte(bus, addr);
@@ -3096,7 +3145,7 @@ uint8_t Cpu::op_beor(Bus& bus) {
     const uint8_t post = fetch_byte(bus);
     const uint16_t addr = direct_address(bus);
     uint8_t* regp = bitop_reg_ptr(regs_, post);
-    if (!regp) { regs_.pc = read_word(bus, 0xFFF0); return 7; }
+    if (!regp) { regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead); return 7; }
     const uint8_t src_bit = (post >> 3) & 0x07;
     const uint8_t dst_bit = post & 0x07;
     uint8_t mem = read_byte(bus, addr);
@@ -3111,7 +3160,7 @@ uint8_t Cpu::op_bieor(Bus& bus) {
     const uint8_t post = fetch_byte(bus);
     const uint16_t addr = direct_address(bus);
     uint8_t* regp = bitop_reg_ptr(regs_, post);
-    if (!regp) { regs_.pc = read_word(bus, 0xFFF0); return 7; }
+    if (!regp) { regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead); return 7; }
     const uint8_t src_bit = (post >> 3) & 0x07;
     const uint8_t dst_bit = post & 0x07;
     uint8_t mem = read_byte(bus, addr);
@@ -3126,7 +3175,7 @@ uint8_t Cpu::op_ldbt(Bus& bus) {
     const uint8_t post = fetch_byte(bus);
     const uint16_t addr = direct_address(bus);
     uint8_t* regp = bitop_reg_ptr(regs_, post);
-    if (!regp) { regs_.pc = read_word(bus, 0xFFF0); return 7; }
+    if (!regp) { regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead); return 7; }
     const uint8_t src_bit = (post >> 3) & 0x07;
     const uint8_t dst_bit = post & 0x07;
     const uint8_t mem = read_byte(bus, addr);
@@ -3138,7 +3187,7 @@ uint8_t Cpu::op_stbt(Bus& bus) {
     const uint8_t post = fetch_byte(bus);
     const uint16_t addr = direct_address(bus);
     uint8_t* regp = bitop_reg_ptr(regs_, post);
-    if (!regp) { regs_.pc = read_word(bus, 0xFFF0); return 8; }
+    if (!regp) { regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead); return 8; }
     const uint8_t src_bit = (post >> 3) & 0x07;
     const uint8_t dst_bit = post & 0x07;
     const uint8_t reg_bit = (*regp >> src_bit) & 0x01;

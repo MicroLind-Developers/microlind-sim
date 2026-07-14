@@ -23,6 +23,7 @@ add_library(microlind-sim
 target_include_directories(microlind-sim PUBLIC include)
 
 add_library(microlind-sim-app
+    src/app/logic_validation.cpp
     src/app/session_file.cpp
     src/app/sim_session.cpp
     src/cli/disassembler.cpp
@@ -56,7 +57,9 @@ if(BUILD_TESTING)
     include(GoogleTest)
 
     add_executable(microlind-sim-tests
+        tests/test_bus.cpp
         tests/test_cpu.cpp
+        tests/test_logic.cpp
         tests/test_sim_session.cpp
     )
     target_link_libraries(microlind-sim-tests PRIVATE

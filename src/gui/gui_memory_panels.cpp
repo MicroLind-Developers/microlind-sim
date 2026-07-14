@@ -5,7 +5,9 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "imgui.h"
@@ -202,6 +204,176 @@ void draw_mapper(GuiState& state) {
             ImGui::Text("%05X", physical);
         }
         ImGui::EndTable();
+    }
+
+    ImGui::End();
+}
+
+namespace {
+
+const char* bus_phase_label(microlind::BusPhase phase) {
+    switch (phase) {
+    case microlind::BusPhase::QHighELow: return "Q high / E low";
+    case microlind::BusPhase::QHighEHigh: return "Q high / E high";
+    case microlind::BusPhase::QLowEHigh: return "Q low / E high";
+    case microlind::BusPhase::QLowELow: return "Q low / E low";
+    }
+    return "unknown";
+}
+
+const char* bus_cycle_kind_label(microlind::BusCycleKind kind) {
+    switch (kind) {
+    case microlind::BusCycleKind::Idle: return "Idle";
+    case microlind::BusCycleKind::OpcodeFetch: return "Opcode fetch";
+    case microlind::BusCycleKind::OperandRead: return "Operand read";
+    case microlind::BusCycleKind::OperandWrite: return "Operand write";
+    case microlind::BusCycleKind::StackRead: return "Stack read";
+    case microlind::BusCycleKind::StackWrite: return "Stack write";
+    case microlind::BusCycleKind::VectorRead: return "Vector read";
+    case microlind::BusCycleKind::Internal: return "Internal";
+    }
+    return "Unknown";
+}
+
+void draw_logic_signal_row(const char* name, bool asserted) {
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted(name);
+    ImGui::TableNextColumn();
+    if (asserted) {
+        ImGui::TextColored(ImVec4(0.34f, 0.86f, 0.48f, 1.0f), "1");
+    } else {
+        ImGui::TextDisabled("0");
+    }
+}
+
+void draw_logic_signal_table(const char* table_id, const std::initializer_list<std::pair<const char*, bool>>& rows) {
+    if (!ImGui::BeginTable(table_id, 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) return;
+    ImGui::TableSetupColumn("Signal");
+    ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 48.0f);
+    ImGui::TableHeadersRow();
+    for (const auto& [name, asserted] : rows) {
+        draw_logic_signal_row(name, asserted);
+    }
+    ImGui::EndTable();
+}
+
+} // namespace
+
+void draw_pld_logic(GuiState& state) {
+    set_next_window_defaults(1188.0f, 524.0f, 300.0f, 300.0f);
+    ImGui::Begin("PLD Logic");
+
+    const auto& regs = state.session.simulator().cpu().regs();
+    if (!state.pld_live_bus && state.pld_follow_pc) {
+        state.pld_address = regs.pc;
+    }
+
+    ImGui::Checkbox("Live bus", &state.pld_live_bus);
+    ImGui::BeginDisabled(state.pld_live_bus);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(96.0f);
+    ImGui::InputInt("Address", &state.pld_address, 16, 256, ImGuiInputTextFlags_CharsHexadecimal);
+    state.pld_address = std::clamp(state.pld_address, 0, 0xFFFF);
+
+    ImGui::SameLine();
+    ImGui::Checkbox("Follow PC", &state.pld_follow_pc);
+
+    if (ImGui::RadioButton("Read", state.pld_read)) {
+        state.pld_read = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Write", !state.pld_read)) {
+        state.pld_read = false;
+    }
+    ImGui::EndDisabled();
+
+    const auto snapshot = state.pld_live_bus
+        ? state.session.logic_decode_snapshot(state.session.simulator().bus().last_signals())
+        : state.session.logic_decode_snapshot(static_cast<uint16_t>(state.pld_address), state.pld_read);
+    if (!snapshot.configured) {
+        ImGui::TextDisabled("No [PLD_LOGIC] configured.");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Text("SIGNAL: %s", snapshot.signal_logic_path.filename().string().c_str());
+    ImGui::Text("MEMORY: %s", snapshot.memory_logic_path.filename().string().c_str());
+    ImGui::Text("ADDRESS: %s", snapshot.address_logic_path.filename().string().c_str());
+
+    if (!snapshot.available) {
+        ImGui::Separator();
+        ImGui::TextWrapped("%s", snapshot.error.c_str());
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Separator();
+    ImGui::Text("Input: %04X  %s  D=%02X  AM19..21=%u",
+                snapshot.address,
+                snapshot.rw ? "RD" : "WR",
+                snapshot.data,
+                snapshot.mapper_bits);
+    ImGui::Text("Cycle: %s", bus_cycle_kind_label(snapshot.cycle_kind));
+    ImGui::SameLine();
+    ImGui::Text("| Phase: %s", bus_phase_label(snapshot.phase));
+    ImGui::Text("Access: read=%u write=%u log=%u",
+                snapshot.apply_read ? 1 : 0,
+                snapshot.apply_write ? 1 : 0,
+                snapshot.log_access ? 1 : 0);
+    ImGui::Text("E:%u Q:%u BA:%u BS:%u BREQ:%u MEM_EN:%u MAP_EN:%u",
+                snapshot.e ? 1 : 0,
+                snapshot.q ? 1 : 0,
+                snapshot.ba ? 1 : 0,
+                snapshot.bs ? 1 : 0,
+                snapshot.breq ? 1 : 0,
+                snapshot.memory_enable ? 1 : 0,
+                snapshot.mapper_enable ? 1 : 0);
+
+    if (!snapshot.decoded.errors.empty()) {
+        ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.36f, 1.0f), "Decode errors");
+        for (const auto& error : snapshot.decoded.errors) {
+            ImGui::BulletText("%s", error.c_str());
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Control", ImGuiTreeNodeFlags_DefaultOpen)) {
+        draw_logic_signal_table("pld_control", {
+            {"RW1", snapshot.decoded.rw1},
+            {"MEM_RD", snapshot.decoded.mem_rd},
+            {"MEM_WR", snapshot.decoded.mem_wr},
+            {"RD", snapshot.decoded.rd},
+            {"WR", snapshot.decoded.wr},
+            {"BAVAIL", snapshot.decoded.bavail},
+        });
+    }
+
+    if (ImGui::CollapsingHeader("Memory", ImGuiTreeNodeFlags_DefaultOpen)) {
+        draw_logic_signal_table("pld_memory", {
+            {"ROM_EN", snapshot.decoded.rom_en},
+            {"RAML_EN", snapshot.decoded.raml_en},
+            {"RAMH_EN", snapshot.decoded.ramh_en},
+            {"RAMX_EN", snapshot.decoded.ramx_en},
+            {"IO_EN", snapshot.decoded.io_en},
+            {"MAP_RD", snapshot.decoded.map_rd},
+            {"BANK_SEL0", snapshot.decoded.bank_sel0},
+            {"BANK_SEL1", snapshot.decoded.bank_sel1},
+        });
+        ImGui::Text("Bank select: %u", snapshot.decoded.bank_select);
+    }
+
+    if (ImGui::CollapsingHeader("I/O", ImGuiTreeNodeFlags_DefaultOpen)) {
+        draw_logic_signal_table("pld_io", {
+            {"MEM_EN", snapshot.decoded.mapper_register_en},
+            {"IRQ_EN", snapshot.decoded.irq_en},
+            {"PS2_EN", snapshot.decoded.ps2_en},
+            {"CF_EN", snapshot.decoded.cf_en},
+            {"PAR_EN", snapshot.decoded.par_en},
+            {"SER_EN", snapshot.decoded.ser_en},
+            {"VDC_EN", snapshot.decoded.vdc_en},
+            {"SND_EN", snapshot.decoded.snd_en},
+            {"EXP_EN", snapshot.decoded.exp_en},
+        });
     }
 
     ImGui::End();

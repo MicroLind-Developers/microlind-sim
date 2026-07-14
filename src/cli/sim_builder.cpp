@@ -8,6 +8,8 @@
 #include <utility>
 #include <vector>
 
+#include "microlind/app/logic_validation.hpp"
+
 #include "microlind/devices/compact_flash.hpp"
 #include "microlind/devices/memory.hpp"
 #include "microlind/devices/memory_mapper.hpp"
@@ -65,6 +67,52 @@ bool image_byte_at(const LoadedImage* image, uint32_t address, uint8_t& out) {
     return true;
 }
 
+uint8_t mapper_bits_for_address(
+    const HardwareConfig& cfg,
+    const std::shared_ptr<microlind::devices::MapperState>& mapper_state,
+    uint16_t address) {
+    if (!cfg.mapper.present || !mapper_state) return 0;
+
+    for (std::size_t i = 0; i < cfg.mapper.windows.size(); ++i) {
+        const auto& window = cfg.mapper.windows[i];
+        if (window.present && window.start <= address && address <= window.end) {
+            return static_cast<uint8_t>(mapper_state->bank[i] & 0x07);
+        }
+    }
+
+    if (!cfg.ram.present || cfg.ram.bank_size == 0 || address < cfg.ram.start || address > cfg.ram.end) {
+        return 0;
+    }
+
+    const uint32_t offset = static_cast<uint32_t>(address - cfg.ram.start);
+    const std::size_t window = static_cast<std::size_t>(offset / cfg.ram.bank_size);
+    if (window >= 4) return 0;
+    return static_cast<uint8_t>(mapper_state->bank[window] & 0x07);
+}
+
+BusDeviceSelect select_from_decode(const microlind::logic::BoardDecodeResult& decoded) {
+    if (decoded.mapper_register_en) return BusDeviceSelect::MemoryMapper;
+    if (decoded.cf_en) return BusDeviceSelect::CompactFlash;
+    if (decoded.ser_en) return BusDeviceSelect::Serial;
+    if (decoded.ps2_en) return BusDeviceSelect::Ps2;
+    if (decoded.par_en) return BusDeviceSelect::Parallel;
+    if (decoded.vdc_en) return BusDeviceSelect::Video;
+    if (decoded.snd_en) return BusDeviceSelect::Sound;
+    if (decoded.exp_en) return BusDeviceSelect::Expansion;
+    if (decoded.rom_en) return BusDeviceSelect::Rom;
+    if (decoded.raml_en || decoded.ramh_en || decoded.ramx_en) return BusDeviceSelect::Ram;
+    return BusDeviceSelect::None;
+}
+
+std::string bus_decode_mode_name(BusDecodeMode mode) {
+    switch (mode) {
+    case BusDecodeMode::RangeMap: return "range";
+    case BusDecodeMode::Validate: return "validate";
+    case BusDecodeMode::Route: return "route";
+    }
+    return "unknown";
+}
+
 } // namespace
 
 Simulator build_sim(
@@ -74,7 +122,8 @@ Simulator build_sim(
     microlind::devices::XR88C92** serial_out,
     std::function<void(uint8_t)> serial_tx,
     std::shared_ptr<microlind::devices::MapperState>* mapper_state_out,
-    microlind::devices::CompactFlash** cf_out) {
+    microlind::devices::CompactFlash** cf_out,
+    std::vector<std::string>* diagnostics_out) {
     Simulator sim(mode, 1000000);
     using microlind::devices::BankedMemory;
     using microlind::devices::CompactFlash;
@@ -88,6 +137,29 @@ Simulator build_sim(
     std::vector<AddressRange> ram_overlays;
     XR88C92* serial_dev_raw = nullptr;
     CompactFlash* cf_dev_raw = nullptr;
+    std::shared_ptr<microlind::logic::BoardLogicDevices> logic_devices;
+
+    if (cfg && cfg->logic.present && diagnostics_out) {
+        std::string error;
+        if (const auto devices = load_board_logic_devices(cfg->logic, error)) {
+            logic_devices = std::make_shared<microlind::logic::BoardLogicDevices>(*devices);
+            const auto issues = validate_hardware_config_against_logic(*cfg, *logic_devices);
+            if (issues.empty()) {
+                diagnostics_out->push_back("PLD validation OK.");
+            } else {
+                for (const auto& issue : issues) {
+                    diagnostics_out->push_back("PLD validation " + format_logic_validation_issue(issue));
+                }
+            }
+        } else {
+            diagnostics_out->push_back("PLD validation unavailable: " + error);
+        }
+    } else if (cfg && cfg->logic.present) {
+        std::string error;
+        if (const auto devices = load_board_logic_devices(cfg->logic, error)) {
+            logic_devices = std::make_shared<microlind::logic::BoardLogicDevices>(*devices);
+        }
+    }
 
     if (cfg && cfg->ram.present) {
         const size_t ram_size = static_cast<size_t>(cfg->ram.end - cfg->ram.start + 1);
@@ -136,7 +208,7 @@ Simulator build_sim(
                     window_count,
                     0,
                     banked_ram_store);
-                sim.map_device(cfg->ram.start, cfg->ram.end, std::move(ram_dev));
+                sim.map_device(cfg->ram.start, cfg->ram.end, BusDeviceSelect::Ram, std::move(ram_dev));
             } else {
                 for (const auto& [window_index, range] : windows) {
                     auto window_ram = std::make_unique<BankedMemory>(
@@ -146,7 +218,7 @@ Simulator build_sim(
                         window_count,
                         window_index,
                         banked_ram_store);
-                    if (!sim.map_device(range.start, range.end, std::move(window_ram))) {
+                    if (!sim.map_device(range.start, range.end, BusDeviceSelect::Ram, std::move(window_ram))) {
                         ram_overlays.push_back(range);
                     }
                 }
@@ -162,7 +234,7 @@ Simulator build_sim(
                         window_count,
                         3,
                         banked_ram_store);
-                    if (!sim.map_device(stack_window.start, stack_window.end, std::move(stack_ram))) {
+                    if (!sim.map_device(stack_window.start, stack_window.end, BusDeviceSelect::Ram, std::move(stack_ram))) {
                         ram_overlays.push_back(stack_window);
                     }
                 }
@@ -180,7 +252,7 @@ Simulator build_sim(
                 }
                 ram_dev->load(0, slice);
             }
-            sim.map_device(cfg->ram.start, cfg->ram.end, std::move(ram_dev));
+            sim.map_device(cfg->ram.start, cfg->ram.end, BusDeviceSelect::Ram, std::move(ram_dev));
         }
     }
 
@@ -200,13 +272,17 @@ Simulator build_sim(
                     }
                 }
                 rom_dev->load(0, slice);
-                sim.map_device(segment.start, segment.end, std::move(rom_dev));
+                sim.map_device(segment.start, segment.end, BusDeviceSelect::Rom, std::move(rom_dev));
             }
         }
     } else if (image && !image->data.empty()) {
         auto rom_dev = std::make_unique<Memory>(image->data.size(), false);
         rom_dev->load(0, image->data);
-        sim.map_device(image->base, static_cast<uint16_t>(image->base + image->data.size() - 1), std::move(rom_dev));
+        sim.map_device(
+            image->base,
+            static_cast<uint16_t>(image->base + image->data.size() - 1),
+            BusDeviceSelect::Rom,
+            std::move(rom_dev));
     } else {
         default_memory_map(sim, 64 * 1024, 0x8000, nullptr);
     }
@@ -226,7 +302,7 @@ Simulator build_sim(
         }
         auto serial_up = std::make_unique<XR88C92>(on_tx);
         serial_dev_raw = serial_up.get();
-        sim.map_device(cfg->serial.start, cfg->serial.end, std::move(serial_up));
+        sim.map_device(cfg->serial.start, cfg->serial.end, BusDeviceSelect::Serial, std::move(serial_up));
     }
 
     if (cfg && cfg->cf.present) {
@@ -240,7 +316,7 @@ Simulator build_sim(
         options.read_only = cfg->cf.read_only;
         auto cf_up = std::make_unique<CompactFlash>(std::move(options));
         cf_dev_raw = cf_up.get();
-        sim.map_device(cfg->cf.start, cfg->cf.end, std::move(cf_up));
+        sim.map_device(cfg->cf.start, cfg->cf.end, BusDeviceSelect::CompactFlash, std::move(cf_up));
     }
 
     if (cfg && cfg->mapper.present && mapper_state) {
@@ -259,7 +335,42 @@ Simulator build_sim(
                     if (off < offset_map.size()) offset_map[off] = static_cast<int8_t>(i);
                 }
             }
-            sim.map_device(start, end, std::make_unique<MemoryMapper>(mapper_state, std::move(offset_map)));
+            sim.map_device(
+                start,
+                end,
+                BusDeviceSelect::MemoryMapper,
+                std::make_unique<MemoryMapper>(mapper_state, std::move(offset_map)));
+        }
+    }
+
+    if (cfg && cfg->logic.present && logic_devices && cfg->logic.bus_mode != BusDecodeMode::RangeMap) {
+        const HardwareConfig cfg_copy = *cfg;
+        sim.bus().set_decoder(cfg->logic.bus_mode, [logic_devices, mapper_state, cfg_copy](const BusSignals& signals) {
+            const uint8_t mapper_bits = mapper_bits_for_address(cfg_copy, mapper_state, signals.address);
+            auto decoded = microlind::logic::decode_board_logic(*logic_devices, microlind::logic::BoardSignals{
+                .address = signals.address,
+                .mapper_bits = mapper_bits,
+                .rw = signals.rw,
+                .e = signals.e,
+                .q = signals.q,
+                .ba = signals.ba,
+                .bs = signals.bs,
+                .breq = signals.breq,
+                .memory_enable = signals.memory_enable,
+                .mapper_enable = signals.mapper_enable,
+            });
+            if (!decoded.ok()) {
+                std::string diagnostic = "PLD decode failed";
+                for (const auto& error : decoded.errors) {
+                    diagnostic += ": " + error;
+                }
+                return BusDecodeResult{BusDeviceSelect::None, false, diagnostic};
+            }
+            const BusDeviceSelect select = select_from_decode(decoded);
+            return BusDecodeResult{select, select != BusDeviceSelect::None, {}};
+        });
+        if (diagnostics_out) {
+            diagnostics_out->push_back("PLD bus mode: " + bus_decode_mode_name(cfg->logic.bus_mode) + ".");
         }
     }
 

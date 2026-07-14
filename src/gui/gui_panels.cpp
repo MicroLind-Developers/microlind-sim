@@ -52,6 +52,9 @@ void draw_main_menu(GuiState& state) {
         if (ImGui::MenuItem("Step", "F10")) {
             state.step_once();
         }
+        if (ImGui::MenuItem("Micro Step", "F9")) {
+            state.step_microcycle();
+        }
         if (ImGui::MenuItem("Step Over", "F11")) {
             state.step_over();
         }
@@ -85,8 +88,10 @@ void draw_status_bar(GuiState& state) {
         ImGuiWindowFlags_NoBringToFrontOnFocus;
 
     if (ImGui::Begin("Status Bar", nullptr, flags)) {
-        const char* run_state = state.run_until_active ? "until" : (state.running ? "running" : "paused");
         const auto& sim = state.session.simulator();
+        const char* run_state = sim.has_pending_microcycles()
+            ? "micro"
+            : (state.run_until_active ? "until" : (state.running ? "running" : "paused"));
         ImGui::Text("State: %s", run_state);
         ImGui::SameLine();
         ImGui::TextUnformatted("|");
@@ -96,6 +101,16 @@ void draw_status_bar(GuiState& state) {
         ImGui::TextUnformatted("|");
         ImGui::SameLine();
         ImGui::Text("Cycles: %llu", static_cast<unsigned long long>(sim.clock().total_cycles()));
+        ImGui::SameLine();
+        ImGui::TextUnformatted("|");
+        ImGui::SameLine();
+        ImGui::Text("Bus: %llu", static_cast<unsigned long long>(sim.bus().bus_cycle_count()));
+        if (sim.has_pending_microcycles()) {
+            ImGui::SameLine();
+            ImGui::TextUnformatted("|");
+            ImGui::SameLine();
+            ImGui::TextUnformatted("Pending microcycles");
+        }
         ImGui::SameLine();
         ImGui::TextUnformatted("|");
         ImGui::SameLine();
@@ -187,6 +202,7 @@ void draw_workbench(GuiState& state) {
     draw_stack(state);
     draw_memory_map(state);
     draw_mapper(state);
+    draw_pld_logic(state);
     draw_compact_flash(state);
     draw_breakpoints(state);
     draw_watchpoints(state);
@@ -213,6 +229,8 @@ void handle_shortcut(GuiState& state, SDL_Keycode key, SDL_Keymod mods) {
         state.session.reset();
     } else if (key == SDLK_F5) {
         state.toggle_run();
+    } else if (key == SDLK_F9) {
+        state.step_microcycle();
     } else if (key == SDLK_F10) {
         state.step_once();
     } else if (shift && key == SDLK_F11) {

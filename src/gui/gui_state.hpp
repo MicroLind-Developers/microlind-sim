@@ -79,12 +79,16 @@ struct GuiState {
     int breakpoint_address{0x0000};
     int run_until_address{0x0000};
     int watchpoint_address{0x0000};
+    int pld_address{0x0000};
     int stack_register_index{0};
     int stack_start{0x0000};
     int stack_rows{32};
     bool stack_follow_pointer{true};
     bool serial_hex_view{false};
     bool serial_rx_hex{false};
+    bool pld_live_bus{false};
+    bool pld_follow_pc{true};
+    bool pld_read{true};
     bool running{false};
     bool run_until_active{false};
     bool quit_requested{false};
@@ -245,6 +249,17 @@ struct GuiState {
         const auto result = session.run_instructions(1);
         if (result.hit_breakpoint || result.hit_watchpoint) {
             stop_execution();
+        }
+    }
+
+    void step_microcycle() {
+        stop_execution();
+        const auto result = session.step_microcycle();
+        if (result.instruction_started) {
+            session.add_log("Started micro-step instruction.");
+        }
+        if (result.instruction_complete) {
+            session.add_log("Completed micro-step instruction.");
         }
     }
 

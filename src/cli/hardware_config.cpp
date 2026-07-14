@@ -39,6 +39,19 @@ bool parse_range(const std::string& value, uint16_t& start, uint16_t& end) {
     return true;
 }
 
+std::optional<BusDecodeMode> parse_bus_decode_mode(const std::string& value) {
+    if (iequals(value, "range") || iequals(value, "rangemap") || iequals(value, "off") || iequals(value, "disabled")) {
+        return BusDecodeMode::RangeMap;
+    }
+    if (iequals(value, "validate") || iequals(value, "validation") || iequals(value, "warn")) {
+        return BusDecodeMode::Validate;
+    }
+    if (iequals(value, "route") || iequals(value, "routing") || iequals(value, "pld")) {
+        return BusDecodeMode::Route;
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& path, std::string& error) {
@@ -49,7 +62,7 @@ std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& 
     }
 
     HardwareConfig cfg;
-    enum class Section { None, Rom, Ram, Serial, Cf, Mapper };
+    enum class Section { None, Rom, Ram, Serial, Cf, Mapper, Logic };
     Section section = Section::None;
 
     RomRegion pending_rom{};
@@ -78,6 +91,7 @@ std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& 
             else if (iequals(sect, "SERIAL")) section = Section::Serial;
             else if (iequals(sect, "CF") || iequals(sect, "COMPACT_FLASH")) section = Section::Cf;
             else if (iequals(sect, "MEMORY_MAPPER")) section = Section::Mapper;
+            else if (iequals(sect, "PLD_LOGIC") || iequals(sect, "LOGIC")) section = Section::Logic;
             else section = Section::None;
             continue;
         }
@@ -169,12 +183,39 @@ std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& 
                     }
                 }
             }
+        } else if (section == Section::Logic) {
+            cfg.logic.present = true;
+            if (iequals(key, "SIGNAL_LOGIC") || iequals(key, "SIGNAL_LOGIC_PATH")) {
+                cfg.logic.signal_logic_path = value;
+            } else if (iequals(key, "MEMORY_LOGIC") || iequals(key, "MEMORY_LOGIC_PATH")) {
+                cfg.logic.memory_logic_path = value;
+            } else if (iequals(key, "ADDRESS_LOGIC") || iequals(key, "ADDRESS_LOGIC_PATH")) {
+                cfg.logic.address_logic_path = value;
+            } else if (iequals(key, "BUS_MODE") || iequals(key, "ROUTING")) {
+                if (auto mode = parse_bus_decode_mode(value)) {
+                    cfg.logic.bus_mode = *mode;
+                } else {
+                    error = "Bad PLD BUS_MODE at line " + std::to_string(lineno);
+                    return std::nullopt;
+                }
+            }
         }
     }
 
     flush_rom();
     if (cfg.cf.present && !cfg.cf.image_path.empty() && cfg.cf.image_path.is_relative()) {
         cfg.cf.image_path = path.parent_path() / cfg.cf.image_path;
+    }
+    if (cfg.logic.present) {
+        if (!cfg.logic.signal_logic_path.empty() && cfg.logic.signal_logic_path.is_relative()) {
+            cfg.logic.signal_logic_path = path.parent_path() / cfg.logic.signal_logic_path;
+        }
+        if (!cfg.logic.memory_logic_path.empty() && cfg.logic.memory_logic_path.is_relative()) {
+            cfg.logic.memory_logic_path = path.parent_path() / cfg.logic.memory_logic_path;
+        }
+        if (!cfg.logic.address_logic_path.empty() && cfg.logic.address_logic_path.is_relative()) {
+            cfg.logic.address_logic_path = path.parent_path() / cfg.logic.address_logic_path;
+        }
     }
     return cfg;
 }

@@ -94,6 +94,10 @@ void draw_control_panel(GuiState& state) {
         state.step_once();
     }
     ImGui::SameLine();
+    if (ImGui::Button("Micro Step")) {
+        state.step_microcycle();
+    }
+    ImGui::SameLine();
     if (ImGui::Button("Step Over")) {
         state.step_over();
     }

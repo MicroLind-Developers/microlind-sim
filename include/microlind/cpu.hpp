@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -10,6 +11,8 @@ namespace microlind {
 
 class Bus;
 class Cpu;
+enum class BusCycleKind;
+struct BusSignals;
 struct Registers;
 uint16_t read_reg_for_dest(const Registers& regs, uint8_t src_code, bool dest_is_16);
 void write_reg_sized(Cpu& cpu, uint8_t dest_code, uint16_t value, bool dest_is_16);
@@ -33,6 +36,13 @@ enum class CpuMode {
 
 struct CpuTickResult {
     uint32_t cycles{};
+};
+
+struct CpuMicrocycleStatus {
+    bool instruction_started{};
+    bool instruction_complete{};
+    CpuTickResult instruction_result{};
+    std::size_t pending_bus_cycles{};
 };
 
 struct Registers {
@@ -67,6 +77,10 @@ public:
     [[nodiscard]] uint8_t last_prefix() const { return last_prefix_; }
     const std::string& opcode_name(uint8_t prefix, uint8_t opcode) const;
     uint8_t opcode_length(Bus& bus, uint16_t pc) const;
+    [[nodiscard]] bool has_pending_micro_ops() const;
+    bool prepare_microcycle(Bus& bus, BusSignals& signals, CpuMicrocycleStatus& status);
+    CpuMicrocycleStatus complete_microcycle(const BusSignals& signals);
+    void discard_micro_ops();
 
 private:
     friend uint16_t read_reg_for_dest(const Registers& regs, uint8_t src_code, bool dest_is_16);
@@ -93,10 +107,80 @@ private:
         bool valid{true};
     };
 
+    enum class MicroOpKind : uint8_t {
+        None,
+        Nop,
+        LdaImmediate,
+        LdaDirect,
+        StaDirect,
+        LdaExtended,
+        StaExtended,
+        LdbImmediate,
+        LdbDirect,
+        StbDirect,
+        LdbExtended,
+        StbExtended,
+        LddImmediate,
+        LddDirect,
+        LddExtended,
+        StdDirect,
+        StdExtended,
+        Bra,
+        Bne,
+        Beq,
+        Bsr,
+        Lbsr,
+        Rts,
+        JsrDirect,
+        JsrExtended,
+        JmpDirect,
+        JmpExtended,
+        Clra,
+        Clrb,
+        Tsta,
+        Tstb,
+        Deca,
+        Decb,
+        Inca,
+        Incb,
+        Coma,
+        Comb,
+        Nega,
+        Negb,
+        Lsra,
+        Lsrb,
+        Rora,
+        Rorb,
+        Asra,
+        Asrb,
+        Asla,
+        Aslb,
+        Rola,
+        Rolb,
+        Alu8Immediate,
+    };
+
+    struct MicroOpState {
+        MicroOpKind kind{MicroOpKind::None};
+        uint16_t start_pc{};
+        uint8_t opcode{};
+        uint8_t step{};
+        uint8_t total_cycles{};
+        uint8_t direct_offset{};
+        uint16_t effective_address{};
+        uint16_t data{};
+        bool branch_taken{};
+    };
+
+    uint8_t fetch_opcode_byte(Bus& bus);
     uint8_t fetch_byte(Bus& bus);
+    uint8_t fetch_byte(Bus& bus, BusCycleKind cycle_kind);
     uint16_t fetch_word(Bus& bus);
+    uint16_t fetch_word(Bus& bus, BusCycleKind cycle_kind);
     uint8_t read_byte(Bus& bus, uint16_t address);
     void write_byte(Bus& bus, uint16_t address, uint8_t value);
+    uint8_t read_stack_byte(Bus& bus, uint16_t address);
+    void write_stack_byte(Bus& bus, uint16_t address, uint8_t value);
 
     uint16_t direct_address(Bus& bus);
     uint16_t extended_address(Bus& bus);
@@ -123,6 +207,9 @@ private:
     uint32_t reg_q() const;
     void set_reg_q(uint32_t value);
     uint8_t op_tfm_common(Bus& bus, bool inc_src, bool inc_dst);
+    bool start_micro_op(uint8_t opcode);
+    BusSignals micro_op_signals() const;
+    CpuMicrocycleStatus micro_op_status(bool instruction_started, bool instruction_complete) const;
 
     // Instruction handlers (return cycles consumed).
     uint8_t op_nop(Bus&);
@@ -171,6 +258,8 @@ private:
 
     uint8_t op_bra(Bus&);
     uint8_t op_bsr(Bus&);
+    uint8_t op_lbra(Bus&);
+    uint8_t op_lbsr(Bus&);
     uint8_t op_beq(Bus&);
     uint8_t op_bne(Bus&);
 
@@ -590,6 +679,7 @@ private:
     uint16_t last_pc_{};
     uint8_t last_opcode_{};
     uint8_t last_prefix_{};
+    MicroOpState micro_op_{};
 
     Instruction instructions0_[256]{};
     Instruction instructions10_[256]{};

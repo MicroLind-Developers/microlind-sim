@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "microlind/bus.hpp"
+
 namespace microlind::cli {
 
 struct RomRegion {
@@ -49,12 +51,21 @@ struct MapperConfig {
     bool present{false};
 };
 
+struct LogicConfig {
+    std::filesystem::path signal_logic_path;
+    std::filesystem::path memory_logic_path;
+    std::filesystem::path address_logic_path;
+    BusDecodeMode bus_mode{BusDecodeMode::Validate};
+    bool present{false};
+};
+
 struct HardwareConfig {
     std::vector<RomRegion> roms;
     RamConfig ram;
     SerialConfig serial;
     CfConfig cf;
     MapperConfig mapper;
+    LogicConfig logic;
 };
 
 std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& path, std::string& error);

@@ -48,7 +48,11 @@ watchpoints, memory mapper display, instruction trace, mapped-device display,
 and an event log.
 
 ## Hardware config
-`examples/hw.cfg` maps the current microLind I/O layout. CompactFlash is configured with:
+`examples/hw.cfg` maps the current microLind memory and I/O layout: ROM, RAM,
+serial, CompactFlash, memory mapper windows, and optional PLD logic routing.
+See [docs/hardware-config.md](docs/hardware-config.md) for the full syntax.
+
+A minimal CompactFlash section looks like:
 
 ```
 [CF]
@@ -59,7 +63,12 @@ IMAGE=cf.img
 READ_ONLY=false
 ```
 
-`IMAGE`, `SECTORS`, and `READ_ONLY` are optional. Without an image path, the CF device uses volatile zero-filled storage. With `IMAGE`, the image size becomes the disk size unless `SECTORS` is set as a larger minimum. The current model implements the 8-byte ATA/CF register window, `IDENTIFY DEVICE`, PIO read/write sector commands, read/write multiple, erase sectors, read verify, set features, set multiple mode, diagnostics, and common idle/standby/check-power commands.
+`IMAGE`, `SECTORS`, and `READ_ONLY` are optional. Without an image path, the CF
+device uses volatile zero-filled storage. With `IMAGE`, the image size becomes
+the disk size unless `SECTORS` is set as a larger minimum. The current model
+implements the 8-byte ATA/CF register window, `IDENTIFY DEVICE`, PIO read/write
+sector commands, read/write multiple, erase sectors, read verify, set features,
+set multiple mode, diagnostics, and common idle/standby/check-power commands.
 
 Raw disk images, such as files created with `dd`, can also be loaded at runtime:
 
@@ -69,6 +78,42 @@ loadcf path/to/cf.img 4096
 ```
 
 The optional sector count is a minimum size. Images that are not an exact multiple of 512 bytes are padded to the next sector.
+
+### PLD logic
+`hw.cfg` may optionally reference the board PLD source files. Relative paths are
+resolved from the config file location:
+
+```
+[PLD_LOGIC]
+SIGNAL_LOGIC=signal-logic.pld
+MEMORY_LOGIC=mem-logic.pld
+ADDRESS_LOGIC=address-logic.pld
+BUS_MODE=route
+```
+
+When this section is present, simulator rebuilds validate configured ROM, RAM,
+memory mapper, CompactFlash, and serial ranges against the decoded PLD logic.
+The CLI prints validation diagnostics; GUI/session rebuilds add them to the
+event log.
+
+`BUS_MODE` controls how decoded PLD selects interact with the simulator bus:
+`validate` keeps the normal range map and logs mismatches, `route` uses the PLD
+selected device role for bus accesses, and `range` disables live PLD bus decode.
+The example config uses `route`.
+
+Two CLI commands are available for visual validation:
+
+```
+pldcfg examples/signal-logic.pld examples/mem-logic.pld examples/address-logic.pld
+pldcheck examples/hw.cfg examples/signal-logic.pld examples/mem-logic.pld examples/address-logic.pld
+```
+
+`pldcfg` prints a partial `hw.cfg` generated from decoded PLD address ranges.
+`pldcheck` validates an existing hardware config against the PLD decode. The
+current parser supports the WinCUPL subset used by the project PLDs, including
+`PIN` declarations, active-low `!` names, simple sum-of-products equations, and
+binary/hex constants. Parsed active-low outputs are exposed as asserted logical
+signals. See `docs/logic-plan.md` for details and parser limits.
 
 ## Current CPU coverage
 - Core registers (plus 6309 E/F and MD), direct/extended/indexed addressing (common postbyte forms), DP register, CC flag updates for NZ and arithmetic flags on ALU ops.

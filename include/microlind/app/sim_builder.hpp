@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "microlind/app/hardware_config.hpp"
 #include "microlind/app/image_loader.hpp"
@@ -25,6 +27,7 @@ Simulator build_sim(
     microlind::devices::XR88C92** serial_out = nullptr,
     std::function<void(uint8_t)> serial_tx = nullptr,
     std::shared_ptr<microlind::devices::MapperState>* mapper_state_out = nullptr,
-    microlind::devices::CompactFlash** cf_out = nullptr);
+    microlind::devices::CompactFlash** cf_out = nullptr,
+    std::vector<std::string>* diagnostics_out = nullptr);
 
 } // namespace microlind::cli

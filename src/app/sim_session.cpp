@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "microlind/app/disassembler.hpp"
+#include "microlind/app/logic_validation.hpp"
 #include "microlind/app/sim_builder.hpp"
 
 #include "microlind/devices/compact_flash.hpp"
@@ -35,6 +36,29 @@ bool watchpoint_matches(WatchpointType configured, WatchpointType requested) {
 
 WatchpointType merge_watchpoint_types(WatchpointType a, WatchpointType b) {
     return a == b ? a : WatchpointType::ReadWrite;
+}
+
+uint8_t mapper_bits_for_address(
+    const cli::HardwareConfig& cfg,
+    const devices::MapperState* mapper_state,
+    uint16_t address) {
+    if (!cfg.mapper.present || mapper_state == nullptr) return 0;
+
+    for (std::size_t i = 0; i < cfg.mapper.windows.size(); ++i) {
+        const auto& window = cfg.mapper.windows[i];
+        if (window.present && window.start <= address && address <= window.end) {
+            return static_cast<uint8_t>(mapper_state->bank[i] & 0x07);
+        }
+    }
+
+    if (!cfg.ram.present || cfg.ram.bank_size == 0 || address < cfg.ram.start || address > cfg.ram.end) {
+        return 0;
+    }
+
+    const uint32_t offset = static_cast<uint32_t>(address - cfg.ram.start);
+    const std::size_t window = static_cast<std::size_t>(offset / cfg.ram.bank_size);
+    if (window >= 4) return 0;
+    return static_cast<uint8_t>(mapper_state->bank[window] & 0x07);
 }
 
 } // namespace
@@ -126,8 +150,22 @@ CpuTickResult SimSession::step_instruction() {
     const uint16_t pc = sim_.cpu().regs().pc;
     const auto disasm = cli::disassemble(sim_.bus(), sim_.cpu(), pc);
     sim_.bus().clear_access_log();
+    sim_.bus().clear_decode_log();
     CpuTickResult result = sim_.tick();
     record_trace(pc, disasm.text, result);
+    for (const auto& diagnostic : sim_.bus().decode_log()) {
+        add_log(diagnostic);
+    }
+    return result;
+}
+
+SimulatorMicrocycleResult SimSession::step_microcycle() {
+    sim_.bus().clear_access_log();
+    sim_.bus().clear_decode_log();
+    SimulatorMicrocycleResult result = sim_.tick_microcycle();
+    for (const auto& diagnostic : sim_.bus().decode_log()) {
+        add_log(diagnostic);
+    }
     return result;
 }
 
@@ -188,7 +226,7 @@ void SimSession::tick_cycles(uint64_t cycles) {
 
 std::optional<uint16_t> SimSession::step_over_target() {
     const uint16_t pc = sim_.cpu().regs().pc;
-    const uint8_t op0 = sim_.bus().read8(pc);
+    const uint8_t op0 = sim_.bus().peek8(pc);
     switch (op0) {
     case 0x8D: // BSR
     case 0x9D: // JSR direct
@@ -205,8 +243,8 @@ std::optional<uint16_t> SimSession::step_over_target() {
 
 std::optional<uint16_t> SimSession::return_address_from_stack() {
     const uint16_t s = sim_.cpu().regs().s;
-    const uint16_t high = sim_.bus().read8(s);
-    const uint16_t low = sim_.bus().read8(static_cast<uint16_t>(s + 1));
+    const uint16_t high = sim_.bus().peek8(s);
+    const uint16_t low = sim_.bus().peek8(static_cast<uint16_t>(s + 1));
     return static_cast<uint16_t>((high << 8) | low);
 }
 
@@ -493,6 +531,68 @@ CfSnapshot SimSession::cf_snapshot() const {
     return snapshot;
 }
 
+LogicDecodeSnapshot SimSession::logic_decode_snapshot(uint16_t address, bool rw) const {
+    BusSignals signals;
+    signals.address = address;
+    signals.rw = rw;
+    signals.e = true;
+    signals.q = false;
+    signals.memory_enable = true;
+    signals.mapper_enable = true;
+    signals.data = 0xFF;
+    return logic_decode_snapshot(signals);
+}
+
+LogicDecodeSnapshot SimSession::logic_decode_snapshot(const BusSignals& signals) const {
+    LogicDecodeSnapshot snapshot;
+    snapshot.phase = signals.phase;
+    snapshot.cycle_kind = signals.cycle_kind;
+    snapshot.address = signals.address;
+    snapshot.data = signals.data;
+    snapshot.rw = signals.rw;
+    snapshot.e = signals.e;
+    snapshot.q = signals.q;
+    snapshot.ba = signals.ba;
+    snapshot.bs = signals.bs;
+    snapshot.breq = signals.breq;
+    snapshot.memory_enable = signals.memory_enable;
+    snapshot.mapper_enable = signals.mapper_enable;
+    snapshot.apply_read = signals.apply_read;
+    snapshot.apply_write = signals.apply_write;
+    snapshot.log_access = signals.log_access;
+
+    if (!hw_cfg_ || !hw_cfg_->logic.present) {
+        snapshot.error = "No [PLD_LOGIC] section is configured.";
+        return snapshot;
+    }
+
+    snapshot.configured = true;
+    snapshot.signal_logic_path = hw_cfg_->logic.signal_logic_path;
+    snapshot.memory_logic_path = hw_cfg_->logic.memory_logic_path;
+    snapshot.address_logic_path = hw_cfg_->logic.address_logic_path;
+
+    if (!logic_devices_) {
+        snapshot.error = logic_error_.empty() ? "PLD logic is not loaded." : logic_error_;
+        return snapshot;
+    }
+
+    snapshot.available = true;
+    snapshot.mapper_bits = mapper_bits_for_address(*hw_cfg_, mapper_state_.get(), signals.address);
+    snapshot.decoded = microlind::logic::decode_board_logic(*logic_devices_, microlind::logic::BoardSignals{
+        .address = signals.address,
+        .mapper_bits = snapshot.mapper_bits,
+        .rw = signals.rw,
+        .e = signals.e,
+        .q = signals.q,
+        .ba = signals.ba,
+        .bs = signals.bs,
+        .breq = signals.breq,
+        .memory_enable = signals.memory_enable,
+        .mapper_enable = signals.mapper_enable,
+    });
+    return snapshot;
+}
+
 void SimSession::add_log(std::string message) {
     log_.push_back(std::move(message));
     if (log_.size() > 256) {
@@ -504,6 +604,14 @@ void SimSession::rebuild(std::string reason) {
     serial_dev_ = nullptr;
     cf_dev_ = nullptr;
     mapper_state_.reset();
+    logic_devices_.reset();
+    logic_error_.clear();
+    if (hw_cfg_ && hw_cfg_->logic.present) {
+        if (auto devices = cli::load_board_logic_devices(hw_cfg_->logic, logic_error_)) {
+            logic_devices_ = std::move(devices);
+        }
+    }
+    std::vector<std::string> diagnostics;
     sim_ = cli::build_sim(
         mode_,
         image_ ? &*image_ : nullptr,
@@ -511,7 +619,11 @@ void SimSession::rebuild(std::string reason) {
         &serial_dev_,
         [this](uint8_t value) { on_serial_tx(value); },
         &mapper_state_,
-        &cf_dev_);
+        &cf_dev_,
+        &diagnostics);
+    for (const auto& diagnostic : diagnostics) {
+        add_log(diagnostic);
+    }
     add_log(std::move(reason));
 }
 
