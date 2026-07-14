@@ -55,6 +55,7 @@ if(BUILD_TESTING)
     include(GoogleTest)
 
     add_executable(microlind-sim-tests
+        tests/test_cpu.cpp
         tests/test_sim_session.cpp
     )
     target_link_libraries(microlind-sim-tests PRIVATE

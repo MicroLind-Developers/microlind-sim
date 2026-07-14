@@ -80,6 +80,7 @@ private:
         std::string name;
         uint8_t bytes{};
         uint8_t cycles{};
+        bool hd6309_only{};
         AddressMode address_mode{AddressMode::NONE};
         Handler handler{nullptr};
     };
@@ -468,6 +469,18 @@ private:
     uint8_t op_cmpf_ext(Bus&);
     uint8_t op_cmpf_idx(Bus&);
 
+    uint8_t op_andd_dir(Bus&);
+    uint8_t op_andd_ext(Bus&);
+    uint8_t op_andd_idx(Bus&);
+    uint8_t op_andd_imm(Bus&);
+    uint8_t op_bitd_dir(Bus&);
+    uint8_t op_bitd_ext(Bus&);
+    uint8_t op_bitd_idx(Bus&);
+    uint8_t op_bitd_imm(Bus&);
+    uint8_t op_eord_dir(Bus&);
+    uint8_t op_eord_ext(Bus&);
+    uint8_t op_eord_idx(Bus&);
+    uint8_t op_eord_imm(Bus&);
     uint8_t op_adcd_dir(Bus&);
     uint8_t op_adcd_ext(Bus&);
     uint8_t op_adcd_idx(Bus&);
@@ -485,6 +498,10 @@ private:
     uint8_t op_divq_dir(Bus&);
     uint8_t op_divq_ext(Bus&);
     uint8_t op_divq_idx(Bus&);
+    uint8_t op_divd_imm(Bus&);
+    uint8_t op_divd_dir(Bus&);
+    uint8_t op_divd_ext(Bus&);
+    uint8_t op_divd_idx(Bus&);
     uint8_t op_muld_imm(Bus&);
     uint8_t op_muld_dir(Bus&);
     uint8_t op_muld_ext(Bus&);
@@ -495,17 +512,45 @@ private:
     uint8_t op_cmpr(Bus&);
     uint8_t op_sbcr(Bus&);
     uint8_t op_adcr(Bus&);
+    uint8_t op_andr(Bus&);
     uint8_t op_orr(Bus&);
     uint8_t op_eorr(Bus&);
 
+    uint8_t op_negd(Bus&);
+    uint8_t op_comd(Bus&);
+    uint8_t op_lsrd(Bus&);
+    uint8_t op_asrd(Bus&);
+    uint8_t op_decd(Bus&);
+    uint8_t op_incd(Bus&);
+    uint8_t op_tstd(Bus&);
+    uint8_t op_clrd(Bus&);
     uint8_t op_lsl_d(Bus&);
     uint8_t op_rold(Bus&);
     uint8_t op_rord(Bus&);
+    uint8_t op_comw_inh(Bus&);
+    uint8_t op_lsrw_inh(Bus&);
     uint8_t op_lslw_inh(Bus&);
     uint8_t op_rolw(Bus&);
     uint8_t op_rorw(Bus&);
     uint8_t op_ldmd(Bus&);
+    uint8_t op_bitmd(Bus&);
     uint8_t op_sexw(Bus&);
+
+    uint8_t op_pshsw(Bus&);
+    uint8_t op_pulsw(Bus&);
+    uint8_t op_pshuw(Bus&);
+    uint8_t op_puluw(Bus&);
+
+    uint8_t op_come(Bus&);
+    uint8_t op_comf(Bus&);
+    uint8_t op_dece(Bus&);
+    uint8_t op_decf(Bus&);
+    uint8_t op_ince(Bus&);
+    uint8_t op_incf(Bus&);
+    uint8_t op_tste(Bus&);
+    uint8_t op_tstf(Bus&);
+    uint8_t op_clre(Bus&);
+    uint8_t op_clrf(Bus&);
 
     uint8_t op_tfm_pp(Bus&);
     uint8_t op_tfm_mm(Bus&);

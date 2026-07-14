@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <utility>
@@ -56,6 +57,11 @@ Cpu::Cpu(CpuMode mode) : mode_(mode) {
                      uint8_t bytes = 0, uint8_t cycles = 0) { instructions10_[op] = make_instruction(op, h, std::move(nm), mode, bytes, cycles); };
     auto set11 = [&](uint8_t op, Handler h, std::string nm, std::optional<AddressMode> mode = std::nullopt,
                      uint8_t bytes = 0, uint8_t cycles = 0) { instructions11_[op] = make_instruction(op, h, std::move(nm), mode, bytes, cycles); };
+    auto mark_hd6309_only = [](Instruction (&table)[256], std::initializer_list<uint8_t> opcodes) {
+        for (uint8_t op : opcodes) {
+            table[op].hd6309_only = true;
+        }
+    };
 #define SET0(op, fn, ...) set0(op, &Cpu::fn, make_name(#fn), ##__VA_ARGS__)
 #define SET10(op, fn, ...) set10(op, &Cpu::fn, make_name(#fn), ##__VA_ARGS__)
 #define SET11(op, fn, ...) set11(op, &Cpu::fn, make_name(#fn), ##__VA_ARGS__)
@@ -260,11 +266,27 @@ Cpu::Cpu(CpuMode mode) : mode_(mode) {
     SET10(0x92, op_sbcd_dir);
     SET10(0xA2, op_sbcd_idx);
     SET10(0xB2, op_sbcd_ext);
+    SET10(0x84, op_andd_imm);
+    SET10(0x94, op_andd_dir);
+    SET10(0xA4, op_andd_idx);
+    SET10(0xB4, op_andd_ext);
+    SET10(0x85, op_bitd_imm);
+    SET10(0x95, op_bitd_dir);
+    SET10(0xA5, op_bitd_idx);
+    SET10(0xB5, op_bitd_ext);
+    SET10(0x88, op_eord_imm);
+    SET10(0x98, op_eord_dir);
+    SET10(0xA8, op_eord_idx);
+    SET10(0xB8, op_eord_ext);
     SET10(0x8A, op_ord_imm);
     SET10(0x9A, op_ord_dir);
     SET10(0xAA, op_ord_idx);
     SET10(0xBA, op_ord_ext);
 
+    SET11(0x8D, op_divd_imm);
+    SET11(0x9D, op_divd_dir);
+    SET11(0xAD, op_divd_idx);
+    SET11(0xBD, op_divd_ext);
     SET11(0x8E, op_divq_imm);
     SET11(0x9E, op_divq_dir);
     SET11(0xAE, op_divq_idx);
@@ -280,23 +302,54 @@ Cpu::Cpu(CpuMode mode) : mode_(mode) {
     SET10(0x37, op_cmpr);
     SET10(0x33, op_sbcr);
     SET10(0x31, op_adcr);
+    SET10(0x34, op_andr);
     SET10(0x35, op_orr);
     SET10(0x36, op_eorr);
 
     // Shift/rotate 6309
+    SET10(0x40, op_negd);
+    SET10(0x43, op_comd);
+    SET10(0x44, op_lsrd);
+    SET10(0x47, op_asrd);
     SET10(0x48, op_lsl_d);
     SET10(0x49, op_rold);
+    SET10(0x4A, op_decd);
+    SET10(0x4C, op_incd);
+    SET10(0x4D, op_tstd);
+    SET10(0x4F, op_clrd);
+    SET10(0x53, op_comw_inh);
+    SET10(0x54, op_lsrw_inh);
     SET10(0x46, op_rord);
     SET10(0x58, op_lslw_inh);
     SET10(0x59, op_rolw);
+    SET10(0x5A, op_decw_inh);
     SET10(0x56, op_rorw);
     SET10(0x5C, op_incw_inh);
     SET10(0x5D, op_tstw_inh);
     SET10(0x5F, op_clrw_inh);
 
     // LDMD / SEXW
+    SET11(0x3C, op_bitmd);
     SET11(0x3D, op_ldmd);
     SET0(0x14, op_sexw);
+
+    // W stack
+    SET10(0x38, op_pshsw);
+    SET10(0x39, op_pulsw);
+    SET10(0x3A, op_pshuw);
+    SET10(0x3B, op_puluw);
+
+    // E/F inherent unary
+    SET11(0x43, op_come);
+    SET11(0x4A, op_dece);
+    SET11(0x4C, op_ince);
+    SET11(0x4D, op_tste);
+    SET11(0x4F, op_clre);
+    SET11(0x53, op_comf);
+    SET11(0x5A, op_decf);
+    SET11(0x5C, op_incf);
+    SET11(0x5D, op_tstf);
+    SET11(0x5F, op_clrf);
 
     // TFM
     SET11(0x38, op_tfm_pp);
@@ -479,6 +532,34 @@ Cpu::Cpu(CpuMode mode) : mode_(mode) {
     SET0(0x0F, op_clr_dir);
     SET0(0x6F, op_clr_idx);
     SET0(0x7F, op_clr_ext);
+
+    mark_hd6309_only(instructions0_, {
+        0x01, 0x02, 0x05, 0x0B, 0x14, 0x61, 0x62, 0x65, 0x6B,
+        0x71, 0x72, 0x75, 0x7B, 0xCD,
+    });
+    mark_hd6309_only(instructions10_, {
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+        0x38, 0x39, 0x3A, 0x3B,
+        0x40, 0x43, 0x44, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4C,
+        0x4D, 0x4F, 0x53, 0x54, 0x56, 0x58, 0x59, 0x5A, 0x5C,
+        0x5D, 0x5F,
+        0x80, 0x81, 0x82, 0x84, 0x85, 0x86, 0x88, 0x89, 0x8A, 0x8B,
+        0x90, 0x91, 0x92, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9A, 0x9B,
+        0xA0, 0xA1, 0xA2, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB,
+        0xB0, 0xB1, 0xB2, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB,
+        0xDC, 0xDD, 0xEC, 0xED, 0xFC, 0xFD,
+    });
+    mark_hd6309_only(instructions11_, {
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+        0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D,
+        0x43, 0x4A, 0x4C, 0x4D, 0x4F, 0x53, 0x5A, 0x5C, 0x5D, 0x5F,
+        0x80, 0x81, 0x86, 0x8B, 0x8D, 0x8E, 0x8F,
+        0x90, 0x91, 0x96, 0x97, 0x9B, 0x9D, 0x9E, 0x9F,
+        0xA0, 0xA1, 0xA6, 0xA7, 0xAB, 0xAD, 0xAE, 0xAF,
+        0xB0, 0xB1, 0xB6, 0xB7, 0xBB, 0xBD, 0xBE, 0xBF,
+        0xC0, 0xC1, 0xCB, 0xD0, 0xD1, 0xDB, 0xE0, 0xE1, 0xEB,
+        0xF0, 0xF1, 0xFB,
+    });
 #undef SET0
 #undef SET10
 #undef SET11
@@ -516,7 +597,9 @@ CpuTickResult Cpu::tick(Bus& bus) {
         last_opcode_ = next;
     }
 
-    const Handler handler = inst && inst->handler ? inst->handler : &Cpu::op_invalid;
+    const Handler handler = (inst && inst->handler && !(mode_ == CpuMode::MC6809 && inst->hd6309_only))
+        ? inst->handler
+        : &Cpu::op_invalid;
     const uint8_t cycles = (this->*handler)(bus);
     cycles_executed_ += cycles;
     return CpuTickResult{cycles};
@@ -744,6 +827,27 @@ static inline void flags_logic8(Registers& r, uint8_t value) {
     if (value & 0x80) r.cc |= CC_N;
 }
 
+static inline uint16_t reg_d(const Registers& r) {
+    return static_cast<uint16_t>((static_cast<uint16_t>(r.a) << 8) | r.b);
+}
+
+static inline void set_reg_d(Registers& r, uint16_t value) {
+    r.a = hi(value);
+    r.b = lo(value);
+}
+
+static inline void flags_logic16(Registers& r, uint16_t value) {
+    r.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
+    if (value == 0) r.cc |= CC_Z;
+    if (value & 0x8000) r.cc |= CC_N;
+}
+
+static inline void flags_bit16(Registers& r, uint16_t value) {
+    r.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V));
+    if (value == 0) r.cc |= CC_Z;
+    if (value & 0x8000) r.cc |= CC_N;
+}
+
 static inline uint8_t add8(Registers& r, uint8_t a, uint8_t b) {
     const uint16_t sum = static_cast<uint16_t>(a) + static_cast<uint16_t>(b);
     const uint8_t res = static_cast<uint8_t>(sum & 0xFF);
@@ -854,10 +958,34 @@ static inline uint8_t inc8(Registers& r, uint8_t v) {
     return res;
 }
 
+static inline uint16_t dec16(Registers& r, uint16_t v) {
+    const uint16_t res = static_cast<uint16_t>(v - 1);
+    r.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V));
+    if (res == 0) r.cc |= CC_Z;
+    if (res & 0x8000) r.cc |= CC_N;
+    if (res == 0x7FFF) r.cc |= CC_V;
+    return res;
+}
+
+static inline uint16_t inc16(Registers& r, uint16_t v) {
+    const uint16_t res = static_cast<uint16_t>(v + 1);
+    r.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V));
+    if (res == 0) r.cc |= CC_Z;
+    if (res & 0x8000) r.cc |= CC_N;
+    if (res == 0x8000) r.cc |= CC_V;
+    return res;
+}
+
 static inline void set_flags_tst(Registers& r, uint8_t v) {
     r.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
     if (v == 0) r.cc |= CC_Z;
     if (v & 0x80) r.cc |= CC_N;
+}
+
+static inline void set_flags_tst16(Registers& r, uint16_t v) {
+    r.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
+    if (v == 0) r.cc |= CC_Z;
+    if (v & 0x8000) r.cc |= CC_N;
 }
 
 static inline uint8_t neg8_op(Registers& r, uint8_t v) {
@@ -866,6 +994,16 @@ static inline uint8_t neg8_op(Registers& r, uint8_t v) {
     if (res & 0x80) r.cc |= CC_N;
     if (res == 0) r.cc |= CC_Z;
     if (v == 0x80) r.cc |= CC_V;
+    if (v != 0) r.cc |= CC_C;
+    return res;
+}
+
+static inline uint16_t neg16_op(Registers& r, uint16_t v) {
+    const uint16_t res = static_cast<uint16_t>(0u - v);
+    r.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
+    if (res & 0x8000) r.cc |= CC_N;
+    if (res == 0) r.cc |= CC_Z;
+    if (v == 0x8000) r.cc |= CC_V;
     if (v != 0) r.cc |= CC_C;
     return res;
 }
@@ -879,11 +1017,29 @@ static inline uint8_t com8_op(Registers& r, uint8_t v) {
     return res;
 }
 
+static inline uint16_t com16_op(Registers& r, uint16_t v) {
+    const uint16_t res = static_cast<uint16_t>(~v);
+    r.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V));
+    r.cc |= CC_C;
+    if (res & 0x8000) r.cc |= CC_N;
+    if (res == 0) r.cc |= CC_Z;
+    return res;
+}
+
 static inline uint8_t lsr8_op(Registers& r, uint8_t v) {
     const uint8_t c = v & 0x01;
     const uint8_t res = static_cast<uint8_t>(v >> 1);
     r.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
     r.cc |= c;
+    if (res == 0) r.cc |= CC_Z;
+    return res;
+}
+
+static inline uint16_t lsr16_op(Registers& r, uint16_t v) {
+    const uint16_t c = v & 0x01;
+    const uint16_t res = static_cast<uint16_t>(v >> 1);
+    r.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
+    if (c != 0) r.cc |= CC_C;
     if (res == 0) r.cc |= CC_Z;
     return res;
 }
@@ -907,6 +1063,16 @@ static inline uint8_t asr8_op(Registers& r, uint8_t v) {
     if (res & 0x80) r.cc |= CC_N;
     if (res == 0) r.cc |= CC_Z;
     if (c_out) r.cc |= CC_C;
+    return res;
+}
+
+static inline uint16_t asr16_op(Registers& r, uint16_t v) {
+    const uint16_t c_out = v & 0x01;
+    const uint16_t res = static_cast<uint16_t>((v >> 1) | (v & 0x8000));
+    r.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
+    if (res & 0x8000) r.cc |= CC_N;
+    if (res == 0) r.cc |= CC_Z;
+    if (c_out != 0) r.cc |= CC_C;
     return res;
 }
 
@@ -1093,7 +1259,13 @@ void write_reg_sized(Cpu& cpu, uint8_t dest_code, uint16_t value, bool dest_is_1
 
 // ---------- Instruction implementations ----------
 
-uint8_t Cpu::op_invalid(Bus&) { return 1; }
+uint8_t Cpu::op_invalid(Bus& bus) {
+    if (mode_ == CpuMode::HD6309) {
+        regs_.md |= 0x40;
+        regs_.pc = read_word(bus, 0xFFF0);
+    }
+    return 1;
+}
 
 uint8_t Cpu::op_nop(Bus&) { return 2; }
 
@@ -2827,23 +2999,64 @@ uint8_t Cpu::op_cmpw_idx(Bus& bus) {
 }
 
 uint8_t Cpu::op_incw_inh(Bus&) {
-    const uint16_t v = static_cast<uint16_t>(reg_w() + 1);
-    set_reg_w(v);
-    set_flags_nz16(v);
+    set_reg_w(inc16(regs_, reg_w()));
     return 3;
 }
 uint8_t Cpu::op_decw_inh(Bus&) {
-    const uint16_t v = reg_w() - 1;
-    set_reg_w(v);
-    set_flags_nz16(v);
+    set_reg_w(dec16(regs_, reg_w()));
     return 3;
 }
 uint8_t Cpu::op_tstw_inh(Bus&) {
-    set_flags_nz16(reg_w());
+    set_flags_tst16(regs_, reg_w());
     return 3;
 }
 uint8_t Cpu::op_clrw_inh(Bus&) {
     set_reg_w(0);
+    regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_V | CC_C));
+    regs_.cc |= CC_Z;
+    return 3;
+}
+
+uint8_t Cpu::op_come(Bus&) {
+    regs_.e = com8_op(regs_, regs_.e);
+    return 3;
+}
+uint8_t Cpu::op_comf(Bus&) {
+    regs_.f = com8_op(regs_, regs_.f);
+    return 3;
+}
+uint8_t Cpu::op_dece(Bus&) {
+    regs_.e = dec8(regs_, regs_.e);
+    return 3;
+}
+uint8_t Cpu::op_decf(Bus&) {
+    regs_.f = dec8(regs_, regs_.f);
+    return 3;
+}
+uint8_t Cpu::op_ince(Bus&) {
+    regs_.e = inc8(regs_, regs_.e);
+    return 3;
+}
+uint8_t Cpu::op_incf(Bus&) {
+    regs_.f = inc8(regs_, regs_.f);
+    return 3;
+}
+uint8_t Cpu::op_tste(Bus&) {
+    set_flags_tst(regs_, regs_.e);
+    return 3;
+}
+uint8_t Cpu::op_tstf(Bus&) {
+    set_flags_tst(regs_, regs_.f);
+    return 3;
+}
+uint8_t Cpu::op_clre(Bus&) {
+    regs_.e = 0;
+    regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_V | CC_C));
+    regs_.cc |= CC_Z;
+    return 3;
+}
+uint8_t Cpu::op_clrf(Bus&) {
+    regs_.f = 0;
     regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_V | CC_C));
     regs_.cc |= CC_Z;
     return 3;
@@ -2973,6 +3186,118 @@ uint8_t Cpu::op_ord_idx(Bus& bus) {
     if (res == 0) regs_.cc |= CC_Z;
     if (res & 0x8000) regs_.cc |= CC_N;
     return static_cast<uint8_t>(7 + pb.cycles);
+}
+
+uint8_t Cpu::op_andd_imm(Bus& bus) {
+    const uint16_t res = static_cast<uint16_t>(reg_d(regs_) & fetch_word(bus));
+    set_reg_d(regs_, res);
+    flags_logic16(regs_, res);
+    return 5;
+}
+uint8_t Cpu::op_andd_dir(Bus& bus) {
+    const uint16_t res = static_cast<uint16_t>(reg_d(regs_) & read_word(bus, direct_address(bus)));
+    set_reg_d(regs_, res);
+    flags_logic16(regs_, res);
+    return 7;
+}
+uint8_t Cpu::op_andd_ext(Bus& bus) {
+    const uint16_t res = static_cast<uint16_t>(reg_d(regs_) & read_word(bus, extended_address(bus)));
+    set_reg_d(regs_, res);
+    flags_logic16(regs_, res);
+    return 8;
+}
+uint8_t Cpu::op_andd_idx(Bus& bus) {
+    const auto pb = indexed_address(bus);
+    const uint16_t res = static_cast<uint16_t>(reg_d(regs_) & read_word(bus, pb.address));
+    set_reg_d(regs_, res);
+    flags_logic16(regs_, res);
+    return static_cast<uint8_t>(7 + pb.cycles);
+}
+
+uint8_t Cpu::op_bitd_imm(Bus& bus) {
+    flags_bit16(regs_, static_cast<uint16_t>(reg_d(regs_) & fetch_word(bus)));
+    return 5;
+}
+uint8_t Cpu::op_bitd_dir(Bus& bus) {
+    flags_bit16(regs_, static_cast<uint16_t>(reg_d(regs_) & read_word(bus, direct_address(bus))));
+    return 7;
+}
+uint8_t Cpu::op_bitd_ext(Bus& bus) {
+    flags_bit16(regs_, static_cast<uint16_t>(reg_d(regs_) & read_word(bus, extended_address(bus))));
+    return 8;
+}
+uint8_t Cpu::op_bitd_idx(Bus& bus) {
+    const auto pb = indexed_address(bus);
+    flags_bit16(regs_, static_cast<uint16_t>(reg_d(regs_) & read_word(bus, pb.address)));
+    return static_cast<uint8_t>(7 + pb.cycles);
+}
+
+uint8_t Cpu::op_eord_imm(Bus& bus) {
+    const uint16_t res = static_cast<uint16_t>(reg_d(regs_) ^ fetch_word(bus));
+    set_reg_d(regs_, res);
+    flags_logic16(regs_, res);
+    return 5;
+}
+uint8_t Cpu::op_eord_dir(Bus& bus) {
+    const uint16_t res = static_cast<uint16_t>(reg_d(regs_) ^ read_word(bus, direct_address(bus)));
+    set_reg_d(regs_, res);
+    flags_logic16(regs_, res);
+    return 7;
+}
+uint8_t Cpu::op_eord_ext(Bus& bus) {
+    const uint16_t res = static_cast<uint16_t>(reg_d(regs_) ^ read_word(bus, extended_address(bus)));
+    set_reg_d(regs_, res);
+    flags_logic16(regs_, res);
+    return 8;
+}
+uint8_t Cpu::op_eord_idx(Bus& bus) {
+    const auto pb = indexed_address(bus);
+    const uint16_t res = static_cast<uint16_t>(reg_d(regs_) ^ read_word(bus, pb.address));
+    set_reg_d(regs_, res);
+    flags_logic16(regs_, res);
+    return static_cast<uint8_t>(7 + pb.cycles);
+}
+
+static uint8_t finish_divd(Registers& regs, Bus& bus, uint8_t divisor, uint8_t cycles) {
+    if (divisor == 0) {
+        regs.md |= 0x80;
+        regs.pc = read_word(bus, 0xFFF0);
+        return cycles;
+    }
+
+    const int16_t dividend = static_cast<int16_t>(reg_d(regs));
+    const int8_t s_divisor = static_cast<int8_t>(divisor);
+    const int quotient_wide = dividend / s_divisor;
+    const int remainder_wide = dividend % s_divisor;
+    if (quotient_wide < -32768 || quotient_wide > 32767) {
+        regs.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_C));
+        regs.cc |= CC_V;
+        return cycles;
+    }
+    const int16_t quotient = static_cast<int16_t>(quotient_wide);
+    const int16_t remainder = static_cast<int16_t>(remainder_wide);
+    regs.e = hi(static_cast<uint16_t>(quotient));
+    regs.f = lo(static_cast<uint16_t>(quotient));
+    set_reg_d(regs, static_cast<uint16_t>(remainder));
+    regs.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V | CC_C));
+    if (quotient == 0) regs.cc |= CC_Z;
+    if (quotient < 0) regs.cc |= CC_N;
+    if ((quotient & 0x01) != 0) regs.cc |= CC_C;
+    return cycles;
+}
+
+uint8_t Cpu::op_divd_imm(Bus& bus) {
+    return finish_divd(regs_, bus, fetch_byte(bus), 25);
+}
+uint8_t Cpu::op_divd_dir(Bus& bus) {
+    return finish_divd(regs_, bus, read_byte(bus, direct_address(bus)), 27);
+}
+uint8_t Cpu::op_divd_ext(Bus& bus) {
+    return finish_divd(regs_, bus, read_byte(bus, extended_address(bus)), 28);
+}
+uint8_t Cpu::op_divd_idx(Bus& bus) {
+    const auto pb = indexed_address(bus);
+    return finish_divd(regs_, bus, read_byte(bus, pb.address), static_cast<uint8_t>(27 + pb.cycles));
 }
 
 uint8_t Cpu::op_divq_imm(Bus& bus) {
@@ -3179,6 +3504,25 @@ uint8_t Cpu::op_adcr(Bus& bus) {
     write_reg_sized(*this, dst, res, dest16);
     return 4;
 }
+uint8_t Cpu::op_andr(Bus& bus) {
+    const uint8_t post = fetch_byte(bus);
+    const uint8_t dst = post & 0x0F;
+    const uint8_t src = post >> 4;
+    const bool dest16 = reg_is_16bit(dst);
+    const uint16_t s = read_reg_for_dest(regs_, src, dest16);
+    const uint16_t d = read_reg_for_dest(regs_, dst, dest16);
+    const uint16_t res = static_cast<uint16_t>(d & s);
+    regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V));
+    if (dest16) {
+        if (res & 0x8000) regs_.cc |= CC_N;
+        if (res == 0) regs_.cc |= CC_Z;
+    } else {
+        if (res & 0x80) regs_.cc |= CC_N;
+        if ((res & 0xFF) == 0) regs_.cc |= CC_Z;
+    }
+    write_reg_sized(*this, dst, res, dest16);
+    return 4;
+}
 uint8_t Cpu::op_orr(Bus& bus) {
     const uint8_t post = fetch_byte(bus);
     const uint8_t dst = post & 0x0F;
@@ -3218,6 +3562,41 @@ uint8_t Cpu::op_eorr(Bus& bus) {
     return 4;
 }
 
+uint8_t Cpu::op_negd(Bus&) {
+    set_reg_d(regs_, neg16_op(regs_, reg_d(regs_)));
+    return 3;
+}
+uint8_t Cpu::op_comd(Bus&) {
+    set_reg_d(regs_, com16_op(regs_, reg_d(regs_)));
+    return 3;
+}
+uint8_t Cpu::op_lsrd(Bus&) {
+    set_reg_d(regs_, lsr16_op(regs_, reg_d(regs_)));
+    return 3;
+}
+uint8_t Cpu::op_asrd(Bus&) {
+    set_reg_d(regs_, asr16_op(regs_, reg_d(regs_)));
+    return 3;
+}
+uint8_t Cpu::op_decd(Bus&) {
+    set_reg_d(regs_, dec16(regs_, reg_d(regs_)));
+    return 3;
+}
+uint8_t Cpu::op_incd(Bus&) {
+    set_reg_d(regs_, inc16(regs_, reg_d(regs_)));
+    return 3;
+}
+uint8_t Cpu::op_tstd(Bus&) {
+    set_flags_tst16(regs_, reg_d(regs_));
+    return 3;
+}
+uint8_t Cpu::op_clrd(Bus&) {
+    set_reg_d(regs_, 0);
+    regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_V | CC_C));
+    regs_.cc |= CC_Z;
+    return 3;
+}
+
 uint8_t Cpu::op_lsl_d(Bus&) {
     const uint16_t val = static_cast<uint16_t>((regs_.a << 8) | regs_.b);
     const uint16_t res = static_cast<uint16_t>(val << 1);
@@ -3252,6 +3631,14 @@ uint8_t Cpu::op_rord(Bus&) {
     if (res == 0) regs_.cc |= CC_Z;
     if (val & 0x1) regs_.cc |= CC_C;
     if (((res ^ (regs_.cc & CC_C ? 0x8000 : 0)) & 0x8000) != 0) regs_.cc |= CC_V;
+    return 3;
+}
+uint8_t Cpu::op_comw_inh(Bus&) {
+    set_reg_w(com16_op(regs_, reg_w()));
+    return 3;
+}
+uint8_t Cpu::op_lsrw_inh(Bus&) {
+    set_reg_w(lsr16_op(regs_, reg_w()));
     return 3;
 }
 uint8_t Cpu::op_lslw_inh(Bus&) {
@@ -3293,6 +3680,14 @@ uint8_t Cpu::op_ldmd(Bus& bus) {
     return 5;
 }
 
+uint8_t Cpu::op_bitmd(Bus& bus) {
+    const uint8_t res = static_cast<uint8_t>(regs_.md & fetch_byte(bus));
+    regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V));
+    if (res == 0) regs_.cc |= CC_Z;
+    if (res & 0x80) regs_.cc |= CC_N;
+    return 4;
+}
+
 uint8_t Cpu::op_sexw(Bus&) {
     const uint16_t w = reg_w();
     const uint32_t q = (static_cast<int32_t>(static_cast<int16_t>(w)) << 16) | static_cast<uint16_t>(w);
@@ -3301,6 +3696,26 @@ uint8_t Cpu::op_sexw(Bus&) {
     if (q == 0) regs_.cc |= CC_Z;
     if (q & 0x80000000u) regs_.cc |= CC_N;
     return 4;
+}
+
+uint8_t Cpu::op_pshsw(Bus& bus) {
+    push_word(bus, reg_w());
+    return 6;
+}
+uint8_t Cpu::op_pulsw(Bus& bus) {
+    set_reg_w(pull_word(bus));
+    return 6;
+}
+uint8_t Cpu::op_pshuw(Bus& bus) {
+    regs_.u = static_cast<uint16_t>(regs_.u - 2);
+    write_byte(bus, static_cast<uint16_t>(regs_.u + 1), hi(reg_w()));
+    write_byte(bus, regs_.u, lo(reg_w()));
+    return 6;
+}
+uint8_t Cpu::op_puluw(Bus& bus) {
+    set_reg_w(static_cast<uint16_t>((read_byte(bus, static_cast<uint16_t>(regs_.u + 1)) << 8) | read_byte(bus, regs_.u)));
+    regs_.u = static_cast<uint16_t>(regs_.u + 2);
+    return 6;
 }
 
 uint8_t Cpu::op_tfm_common(Bus& bus, bool inc_src, bool inc_dst) {

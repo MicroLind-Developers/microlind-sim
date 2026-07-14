@@ -1,8 +1,5 @@
-#include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <initializer_list>
-#include <stdexcept>
 #include <string>
 
 #include <gmock/gmock.h>
@@ -11,41 +8,17 @@
 #include "microlind/app/disassembler.hpp"
 #include "microlind/app/session_file.hpp"
 #include "microlind/app/sim_session.hpp"
+#include "microlind/bus.hpp"
+#include "microlind/cpu.hpp"
+
+#include "test_harness.hpp"
 
 namespace {
 
 using ::testing::SizeIs;
-
-microlind::app::SimSession loaded_session() {
-    microlind::app::SimSession session;
-    if (!session.load_hardware_config("tests/data/hw_test.cfg")) {
-        throw std::runtime_error("failed to load tests/data/hw_test.cfg");
-    }
-    if (!session.load_rom("examples/bios.ihex", microlind::cli::RomFormat::Ihex, 0x8000)) {
-        throw std::runtime_error("failed to load examples/bios.ihex");
-    }
-    session.reset();
-    return session;
-}
-
-microlind::cli::Disasm disassemble_bytes(microlind::app::SimSession& session,
-                                          uint16_t address,
-                                          std::initializer_list<uint8_t> bytes) {
-    uint16_t offset = 0;
-    for (uint8_t byte : bytes) {
-        session.write_memory(static_cast<uint16_t>(address + offset), byte);
-        ++offset;
-    }
-
-    auto& sim = session.simulator();
-    return microlind::cli::disassemble(sim.bus(), sim.cpu(), address);
-}
-
-std::filesystem::path test_output_path(const std::string& name) {
-    const auto dir = std::filesystem::temp_directory_path() / "microlind-sim-tests";
-    std::filesystem::create_directories(dir);
-    return dir / name;
-}
+using microlind::test::disassemble_bytes;
+using microlind::test::loaded_session;
+using microlind::test::test_output_path;
 
 TEST(SimSessionTest, LoadsBiosResetsStepsAndRecordsTrace) {
     auto session = loaded_session();
