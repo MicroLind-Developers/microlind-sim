@@ -183,6 +183,24 @@ uint8_t CompactFlash::read8(uint16_t offset) {
     }
 }
 
+uint8_t CompactFlash::peek8(uint16_t offset) {
+    switch (offset & 0x07) {
+    case 0x00:
+        if (transfer_mode_ == TransferMode::Read && transfer_index_ < transfer_buffer_.size()) {
+            return transfer_buffer_[transfer_index_];
+        }
+        return 0x00;
+    case 0x01: return error_;
+    case 0x02: return sector_count_reg_;
+    case 0x03: return sector_number_;
+    case 0x04: return cylinder_low_;
+    case 0x05: return cylinder_high_;
+    case 0x06: return drive_head_;
+    case 0x07: return status_;
+    default: return 0xFF;
+    }
+}
+
 void CompactFlash::write8(uint16_t offset, uint8_t value) {
     switch (offset & 0x07) {
     case 0x00:

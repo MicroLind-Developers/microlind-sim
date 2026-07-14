@@ -7,6 +7,10 @@ namespace microlind::devices {
 Memory::Memory(std::size_t size, bool writable) : data_(size, 0x00), writable_(writable) {}
 
 uint8_t Memory::read8(uint16_t offset) {
+    return peek8(offset);
+}
+
+uint8_t Memory::peek8(uint16_t offset) {
     if (offset < data_.size()) {
         return data_[offset];
     }

@@ -12,6 +12,7 @@ class BusDevice {
 public:
     virtual ~BusDevice() = default;
     virtual uint8_t read8(uint16_t offset) = 0;
+    virtual uint8_t peek8(uint16_t offset) { return read8(offset); }
     virtual void write8(uint16_t offset, uint8_t value) = 0;
     virtual void tick(uint32_t /*cycles*/) {}
 };
@@ -45,6 +46,7 @@ public:
     std::optional<BusError> map_device(uint16_t start, uint16_t end, std::unique_ptr<BusDevice> device);
 
     uint8_t read8(uint16_t address);
+    uint8_t peek8(uint16_t address);
     void write8(uint16_t address, uint8_t value);
     void tick_devices(uint32_t cycles);
 

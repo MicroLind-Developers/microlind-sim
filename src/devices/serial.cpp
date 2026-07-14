@@ -67,6 +67,31 @@ uint8_t XR88C92::read8(uint16_t offset) {
     }
 }
 
+uint8_t XR88C92::peek8(uint16_t offset) {
+    switch (offset) {
+    case MRA: return mode_a_;
+    case SRA: return status_a();
+    case CRA: return cmd_a_;
+    case RXA_TXA:
+        if (rx_fifo_a_.empty()) return 0x00;
+        return rx_fifo_a_.front();
+    case ACR: return acr_;
+    case IMR: return imr_;
+    case CUR:
+    case CLR:
+    case MRB: return mode_b_;
+    case SRB: return 0x04;
+    case CRB: return cmd_b_;
+    case RXB_TXB: return 0x00;
+    case GPR: return gpr_;
+    case IPR_OPCR: return opcr_;
+    case STCR_SOPR:
+    case SPCR_ROPR:
+    default:
+        return 0x00;
+    }
+}
+
 void XR88C92::write8(uint16_t offset, uint8_t value) {
     switch (offset) {
     case MRA: mode_a_ = value; break;

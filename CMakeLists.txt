@@ -22,6 +22,7 @@ add_library(microlind-sim
 target_include_directories(microlind-sim PUBLIC include)
 
 add_library(microlind-sim-app
+    src/app/session_file.cpp
     src/app/sim_session.cpp
     src/cli/disassembler.cpp
     src/cli/hardware_config.cpp
@@ -73,6 +74,7 @@ set(MICROLIND_PFD_GIT_TAG "main" CACHE STRING "Portable File Dialogs git tag or 
 
 if(MICROLIND_BUILD_GUI)
     find_package(SDL2 REQUIRED)
+    find_package(PNG REQUIRED)
 
     if(NOT TARGET SDL2::SDL2)
         add_library(SDL2::SDL2 INTERFACE IMPORTED)
@@ -129,11 +131,16 @@ if(MICROLIND_BUILD_GUI)
     endif()
 
     add_executable(microlind-sim-gui
+        src/gui/gui_debugger_panels.cpp
+        src/gui/gui_file_panels.cpp
+        src/gui/gui_memory_panels.cpp
+        src/gui/gui_panels.cpp
+        src/gui/gui_state.cpp
         src/gui/main.cpp
     )
     target_include_directories(microlind-sim-gui PRIVATE ${portable_file_dialogs_SOURCE_DIR})
     target_compile_definitions(microlind-sim-gui PRIVATE MICROLIND_HAS_PORTABLE_FILE_DIALOGS=1)
-    target_link_libraries(microlind-sim-gui PRIVATE microlind-sim-app microlind-imgui)
+    target_link_libraries(microlind-sim-gui PRIVATE microlind-sim-app microlind-imgui PNG::PNG)
 endif()
 
 option(MICROLIND_WARNINGS "Enable extra warnings" ON)

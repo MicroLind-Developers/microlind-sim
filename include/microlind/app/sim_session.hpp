@@ -35,6 +35,7 @@ struct RunResult {
     bool hit_breakpoint{};
     bool hit_target{};
     bool hit_watchpoint{};
+    uint16_t breakpoint_address{};
     uint16_t watchpoint_address{};
     BusAccessType watchpoint_type{BusAccessType::Read};
     uint8_t watchpoint_value{};
@@ -49,6 +50,16 @@ enum class WatchpointType {
 struct Watchpoint {
     uint16_t address{};
     WatchpointType type{WatchpointType::Read};
+    bool enabled{true};
+    std::string label;
+    uint64_t hits{};
+};
+
+struct Breakpoint {
+    uint16_t address{};
+    bool enabled{true};
+    std::string label;
+    uint64_t hits{};
 };
 
 struct MapperWindowSnapshot {
@@ -118,22 +129,29 @@ public:
     [[nodiscard]] std::optional<uint16_t> return_address_from_stack();
 
     [[nodiscard]] uint8_t read_memory(uint16_t address);
+    [[nodiscard]] uint8_t peek_memory(uint16_t address);
     void write_memory(uint16_t address, uint8_t value);
 
     bool inject_serial_text(std::string_view text);
     bool inject_serial_bytes(const std::vector<uint8_t>& bytes);
 
-    bool add_breakpoint(uint16_t address);
+    bool add_breakpoint(uint16_t address, std::string label = {});
     bool remove_breakpoint(uint16_t address);
     void clear_breakpoints() { breakpoints_.clear(); }
     [[nodiscard]] bool is_breakpoint(uint16_t address) const;
-    [[nodiscard]] const std::vector<uint16_t>& breakpoints() const { return breakpoints_; }
+    bool set_breakpoint_enabled(uint16_t address, bool enabled);
+    bool set_breakpoint_label(uint16_t address, std::string label);
+    void set_breakpoints(std::vector<Breakpoint> breakpoints);
+    [[nodiscard]] const std::vector<Breakpoint>& breakpoints() const { return breakpoints_; }
 
-    bool add_watchpoint(uint16_t address, WatchpointType type);
+    bool add_watchpoint(uint16_t address, WatchpointType type, std::string label = {});
     bool remove_watchpoint(uint16_t address);
     bool remove_watchpoint(uint16_t address, WatchpointType type);
     void clear_watchpoints() { watchpoints_.clear(); }
     [[nodiscard]] bool is_watchpoint(uint16_t address, WatchpointType type) const;
+    bool set_watchpoint_enabled(uint16_t address, bool enabled);
+    bool set_watchpoint_label(uint16_t address, std::string label);
+    void set_watchpoints(std::vector<Watchpoint> watchpoints);
     [[nodiscard]] const std::vector<Watchpoint>& watchpoints() const { return watchpoints_; }
 
     [[nodiscard]] const std::vector<InstructionTraceEntry>& trace() const { return trace_; }
@@ -170,7 +188,7 @@ private:
     devices::CompactFlash* cf_dev_{nullptr};
     Simulator sim_;
     std::vector<uint8_t> serial_tx_;
-    std::vector<uint16_t> breakpoints_;
+    std::vector<Breakpoint> breakpoints_;
     std::vector<Watchpoint> watchpoints_;
     std::vector<InstructionTraceEntry> trace_;
     uint64_t trace_cycle_base_{};

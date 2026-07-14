@@ -76,13 +76,13 @@ std::string signed_hex8(int8_t value) {
 }
 
 IndexedOperand format_indexed_operand(Bus& bus, uint16_t operand_pc) {
-    const uint8_t post = bus.read8(operand_pc);
+    const uint8_t post = bus.peek8(operand_pc);
     switch (post) {
     case 0x8F:
         return {",w", 1};
     case 0xAF: {
-        const uint16_t offset = static_cast<uint16_t>((bus.read8(static_cast<uint16_t>(operand_pc + 1)) << 8) |
-                                                      bus.read8(static_cast<uint16_t>(operand_pc + 2)));
+        const uint16_t offset = static_cast<uint16_t>((bus.peek8(static_cast<uint16_t>(operand_pc + 1)) << 8) |
+                                                      bus.peek8(static_cast<uint16_t>(operand_pc + 2)));
         return {"$" + hex4(offset) + ",w", 3};
     }
     case 0xCF:
@@ -90,8 +90,8 @@ IndexedOperand format_indexed_operand(Bus& bus, uint16_t operand_pc) {
     case 0x90:
         return {"[,w]", 1};
     case 0xB0: {
-        const uint16_t offset = static_cast<uint16_t>((bus.read8(static_cast<uint16_t>(operand_pc + 1)) << 8) |
-                                                      bus.read8(static_cast<uint16_t>(operand_pc + 2)));
+        const uint16_t offset = static_cast<uint16_t>((bus.peek8(static_cast<uint16_t>(operand_pc + 1)) << 8) |
+                                                      bus.peek8(static_cast<uint16_t>(operand_pc + 2)));
         return {"[$" + hex4(offset) + ",w]", 3};
     }
     case 0xD0:
@@ -128,35 +128,35 @@ IndexedOperand format_indexed_operand(Bus& bus, uint16_t operand_pc) {
     case 0x05: text = std::string("b,") + base; break;
     case 0x06: text = std::string("a,") + base; break;
     case 0x08: {
-        const int8_t offset = static_cast<int8_t>(bus.read8(static_cast<uint16_t>(operand_pc + 1)));
+        const int8_t offset = static_cast<int8_t>(bus.peek8(static_cast<uint16_t>(operand_pc + 1)));
         text = signed_hex8(offset) + "," + base;
         size = 2;
         break;
     }
     case 0x09: {
-        const uint16_t offset = static_cast<uint16_t>((bus.read8(static_cast<uint16_t>(operand_pc + 1)) << 8) |
-                                                      bus.read8(static_cast<uint16_t>(operand_pc + 2)));
+        const uint16_t offset = static_cast<uint16_t>((bus.peek8(static_cast<uint16_t>(operand_pc + 1)) << 8) |
+                                                      bus.peek8(static_cast<uint16_t>(operand_pc + 2)));
         text = "$" + hex4(offset) + "," + base;
         size = 3;
         break;
     }
     case 0x0B: text = std::string("d,") + base; break;
     case 0x0C: {
-        const int8_t offset = static_cast<int8_t>(bus.read8(static_cast<uint16_t>(operand_pc + 1)));
+        const int8_t offset = static_cast<int8_t>(bus.peek8(static_cast<uint16_t>(operand_pc + 1)));
         text = signed_hex8(offset) + ",pc";
         size = 2;
         break;
     }
     case 0x0D: {
-        const uint16_t offset = static_cast<uint16_t>((bus.read8(static_cast<uint16_t>(operand_pc + 1)) << 8) |
-                                                      bus.read8(static_cast<uint16_t>(operand_pc + 2)));
+        const uint16_t offset = static_cast<uint16_t>((bus.peek8(static_cast<uint16_t>(operand_pc + 1)) << 8) |
+                                                      bus.peek8(static_cast<uint16_t>(operand_pc + 2)));
         text = "$" + hex4(offset) + ",pc";
         size = 3;
         break;
     }
     case 0x0F: {
-        const uint16_t address = static_cast<uint16_t>((bus.read8(static_cast<uint16_t>(operand_pc + 1)) << 8) |
-                                                       bus.read8(static_cast<uint16_t>(operand_pc + 2)));
+        const uint16_t address = static_cast<uint16_t>((bus.peek8(static_cast<uint16_t>(operand_pc + 1)) << 8) |
+                                                       bus.peek8(static_cast<uint16_t>(operand_pc + 2)));
         text = "$" + hex4(address);
         size = 3;
         break;
@@ -359,32 +359,32 @@ uint8_t operand_size_from_mnemonic(const std::string& name) {
 } // namespace
 
 Disasm disassemble(Bus& bus, Cpu& cpu, uint16_t pc) {
-    const uint8_t op0 = bus.read8(pc);
+    const uint8_t op0 = bus.peek8(pc);
     auto fallback = [&](uint8_t prefix, uint8_t opcode, uint16_t operand_pc, const std::string& name, uint8_t len) {
         std::ostringstream oss;
         const uint16_t key = static_cast<uint16_t>((prefix << 8) | opcode);
         if (key == 0x0034 || key == 0x0035 || key == 0x0036 || key == 0x0037) {
-            const uint8_t mask = bus.read8(operand_pc);
+            const uint8_t mask = bus.peek8(operand_pc);
             return Disasm{name + " " + stack_mask_registers(opcode, mask), len};
         }
         if (is_register_pair_instruction(key)) {
-            return Disasm{format_register_pair(name, bus.read8(operand_pc)), len};
+            return Disasm{format_register_pair(name, bus.peek8(operand_pc)), len};
         }
         if (is_tfm_instruction(key)) {
-            return Disasm{format_tfm(name, opcode, bus.read8(operand_pc)), len};
+            return Disasm{format_tfm(name, opcode, bus.peek8(operand_pc)), len};
         }
         if (is_bit_immediate_direct(prefix, opcode)) {
-            const uint8_t imm = bus.read8(operand_pc);
-            const uint8_t address = bus.read8(static_cast<uint16_t>(operand_pc + 1));
+            const uint8_t imm = bus.peek8(operand_pc);
+            const uint8_t address = bus.peek8(static_cast<uint16_t>(operand_pc + 1));
             std::ostringstream bit;
             bit << mnemonic_root(name) << " #$" << std::hex << std::setw(2) << std::setfill('0')
                 << static_cast<int>(imm) << ",<$" << std::setw(2) << static_cast<int>(address);
             return Disasm{bit.str(), len};
         }
         if (is_bit_immediate_extended(prefix, opcode)) {
-            const uint8_t imm = bus.read8(operand_pc);
-            const uint16_t address = static_cast<uint16_t>((bus.read8(static_cast<uint16_t>(operand_pc + 1)) << 8) |
-                                                           bus.read8(static_cast<uint16_t>(operand_pc + 2)));
+            const uint8_t imm = bus.peek8(operand_pc);
+            const uint16_t address = static_cast<uint16_t>((bus.peek8(static_cast<uint16_t>(operand_pc + 1)) << 8) |
+                                                           bus.peek8(static_cast<uint16_t>(operand_pc + 2)));
             std::ostringstream bit;
             bit << mnemonic_root(name) << " #$" << std::hex << std::setw(2) << std::setfill('0')
                 << static_cast<int>(imm) << ",$" << hex4(address);
@@ -398,36 +398,36 @@ Disasm disassemble(Bus& bus, Cpu& cpu, uint16_t pc) {
         switch (kind) {
         case OperandKind::Immediate:
             if (op_size == 1) {
-                uint8_t imm = bus.read8(operand_pc);
+                uint8_t imm = bus.peek8(operand_pc);
                 oss << " #$" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(imm);
             } else if (op_size == 2) {
-                uint16_t imm = static_cast<uint16_t>((bus.read8(operand_pc) << 8) |
-                                                     bus.read8(static_cast<uint16_t>(operand_pc + 1)));
+                uint16_t imm = static_cast<uint16_t>((bus.peek8(operand_pc) << 8) |
+                                                     bus.peek8(static_cast<uint16_t>(operand_pc + 1)));
                 oss << " #$" << hex4(imm);
             } else if (op_size == 4) {
-                uint32_t imm = (static_cast<uint32_t>(bus.read8(operand_pc)) << 24) |
-                               (static_cast<uint32_t>(bus.read8(static_cast<uint16_t>(operand_pc + 1))) << 16) |
-                               (static_cast<uint32_t>(bus.read8(static_cast<uint16_t>(operand_pc + 2))) << 8) |
-                               static_cast<uint32_t>(bus.read8(static_cast<uint16_t>(operand_pc + 3)));
+                uint32_t imm = (static_cast<uint32_t>(bus.peek8(operand_pc)) << 24) |
+                               (static_cast<uint32_t>(bus.peek8(static_cast<uint16_t>(operand_pc + 1))) << 16) |
+                               (static_cast<uint32_t>(bus.peek8(static_cast<uint16_t>(operand_pc + 2))) << 8) |
+                               static_cast<uint32_t>(bus.peek8(static_cast<uint16_t>(operand_pc + 3)));
                 std::ostringstream tmp;
                 tmp << std::hex << std::setw(8) << std::setfill('0') << imm;
                 oss << " #$" << tmp.str();
             }
             break;
         case OperandKind::Direct: {
-            uint8_t addr = bus.read8(operand_pc);
+            uint8_t addr = bus.peek8(operand_pc);
             oss << " <$" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(addr);
             break;
         }
         case OperandKind::Extended: {
-            uint16_t addr = static_cast<uint16_t>((bus.read8(operand_pc) << 8) |
-                                                  bus.read8(static_cast<uint16_t>(operand_pc + 1)));
+            uint16_t addr = static_cast<uint16_t>((bus.peek8(operand_pc) << 8) |
+                                                  bus.peek8(static_cast<uint16_t>(operand_pc + 1)));
             oss << " $" << hex4(addr);
             break;
         }
         case OperandKind::Indexed: {
             if (indexed_has_immediate(prefix, opcode)) {
-                const uint8_t imm = bus.read8(operand_pc);
+                const uint8_t imm = bus.peek8(operand_pc);
                 const auto indexed = format_indexed_operand(bus, static_cast<uint16_t>(operand_pc + 1));
                 oss << " " << join_immediate_indexed(imm, indexed);
             } else {
@@ -442,7 +442,7 @@ Disasm disassemble(Bus& bus, Cpu& cpu, uint16_t pc) {
         return Disasm{oss.str(), len};
     };
     if (op0 == 0x10) {
-        const uint8_t op1 = bus.read8(static_cast<uint16_t>(pc + 1));
+        const uint8_t op1 = bus.peek8(static_cast<uint16_t>(pc + 1));
         const std::string name = cpu.opcode_name(0x10, op1);
         // Long conditional branches 0x21-0x2F with 16-bit offset.
         if (op1 >= 0x21 && op1 <= 0x2F) {
@@ -451,7 +451,7 @@ Disasm disassemble(Bus& bus, Cpu& cpu, uint16_t pc) {
                 "lbvs","lbpl","lbmi","lbge","lblt","lbgt","lble"
             };
             const size_t idx = op1 - 0x21;
-            const uint16_t off = static_cast<uint16_t>((bus.read8(pc + 2) << 8) | bus.read8(pc + 3));
+            const uint16_t off = static_cast<uint16_t>((bus.peek8(pc + 2) << 8) | bus.peek8(pc + 3));
             const int16_t soff = static_cast<int16_t>(off);
             const uint16_t target = static_cast<uint16_t>(pc + 4 + soff);
             return {std::string(names[idx]) + " $" + hex4(target), 4};
@@ -470,7 +470,7 @@ Disasm disassemble(Bus& bus, Cpu& cpu, uint16_t pc) {
     }
 
     if (op0 == 0x11) {
-        const uint8_t op1 = bus.read8(static_cast<uint16_t>(pc + 1));
+        const uint8_t op1 = bus.peek8(static_cast<uint16_t>(pc + 1));
         const std::string name = cpu.opcode_name(0x11, op1);
         uint8_t size_override = 0;
         const OperandKind kind = operand_kind(0x11, op1, name, size_override);
@@ -485,7 +485,7 @@ Disasm disassemble(Bus& bus, Cpu& cpu, uint16_t pc) {
 
     // LBRA / LBSR (16-bit relative)
     if (op0 == 0x16 || op0 == 0x17) {
-        const uint16_t off = static_cast<uint16_t>((bus.read8(pc + 1) << 8) | bus.read8(pc + 2));
+        const uint16_t off = static_cast<uint16_t>((bus.peek8(pc + 1) << 8) | bus.peek8(pc + 2));
         const int16_t soff = static_cast<int16_t>(off);
         const uint16_t target = static_cast<uint16_t>(pc + 3 + soff);
         const char* name = (op0 == 0x16) ? "lbra" : "lbsr";
@@ -494,7 +494,7 @@ Disasm disassemble(Bus& bus, Cpu& cpu, uint16_t pc) {
 
     // BSR (8-bit), short branches 0x20-0x2F.
     if (op0 == 0x8D) {
-        const int8_t off = static_cast<int8_t>(bus.read8(static_cast<uint16_t>(pc + 1)));
+        const int8_t off = static_cast<int8_t>(bus.peek8(static_cast<uint16_t>(pc + 1)));
         const uint16_t target = static_cast<uint16_t>(pc + 2 + off);
         return {"bsr $" + hex4(target), 2};
     }
@@ -505,7 +505,7 @@ Disasm disassemble(Bus& bus, Cpu& cpu, uint16_t pc) {
             "bvc","bvs","bpl","bmi","bge","blt","bgt","ble"
         };
         const size_t idx = op0 - 0x20;
-        const int8_t off = static_cast<int8_t>(bus.read8(static_cast<uint16_t>(pc + 1)));
+        const int8_t off = static_cast<int8_t>(bus.peek8(static_cast<uint16_t>(pc + 1)));
         const uint16_t target = static_cast<uint16_t>(pc + 2 + off);
         return {std::string(names[idx]) + " $" + hex4(target), 2};
     }

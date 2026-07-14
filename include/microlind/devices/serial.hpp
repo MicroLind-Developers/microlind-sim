@@ -19,6 +19,7 @@ public:
     explicit XR88C92(TxCallback cb = nullptr);
 
     uint8_t read8(uint16_t offset) override;
+    uint8_t peek8(uint16_t offset) override;
     void write8(uint16_t offset, uint8_t value) override;
 
     // Push a byte into the RXA FIFO.

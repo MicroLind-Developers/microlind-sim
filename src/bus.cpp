@@ -47,6 +47,15 @@ uint8_t Bus::read8(uint16_t address) {
     return 0xFF;
 }
 
+uint8_t Bus::peek8(uint16_t address) {
+    for (auto& m : devices_) {
+        if (m.contains(address)) {
+            return m.device->peek8(m.offset(address));
+        }
+    }
+    return 0xFF;
+}
+
 void Bus::write8(uint16_t address, uint8_t value) {
     access_log_.push_back(BusAccess{BusAccessType::Write, address, value});
     for (auto& m : devices_) {

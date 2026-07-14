@@ -1,6 +1,8 @@
 # microlind-sim
 
-Early C++ skeleton for a modular, cycle-ticked HD6309/MC6809 simulator with a pluggable bus and placeholder PAL/GAL logic support.
+Early C++ skeleton for a modular, cycle-ticked HD6309/MC6809 simulator with a pluggable bus.
+
+![Microlind Simulator GUI](resources/screen.png)
 
 ## Structure
 - `include/microlind/` public headers for bus, CPU, clock, simulator, logic helper.

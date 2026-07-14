@@ -214,6 +214,10 @@ uint8_t SimSession::read_memory(uint16_t address) {
     return sim_.bus().read8(address);
 }
 
+uint8_t SimSession::peek_memory(uint16_t address) {
+    return sim_.bus().peek8(address);
+}
+
 void SimSession::write_memory(uint16_t address, uint8_t value) {
     sim_.bus().write8(address, value);
 }
@@ -235,10 +239,16 @@ bool SimSession::inject_serial_bytes(const std::vector<uint8_t>& bytes) {
     return true;
 }
 
-bool SimSession::add_breakpoint(uint16_t address) {
-    if (is_breakpoint(address)) return false;
-    breakpoints_.push_back(address);
-    std::sort(breakpoints_.begin(), breakpoints_.end());
+bool SimSession::add_breakpoint(uint16_t address, std::string label) {
+    const auto it = std::find_if(breakpoints_.begin(), breakpoints_.end(), [&](const Breakpoint& breakpoint) {
+        return breakpoint.address == address;
+    });
+    if (it != breakpoints_.end()) return false;
+
+    breakpoints_.push_back(Breakpoint{address, true, std::move(label), 0});
+    std::sort(breakpoints_.begin(), breakpoints_.end(), [](const Breakpoint& a, const Breakpoint& b) {
+        return a.address < b.address;
+    });
 
     std::ostringstream out;
     out << "Added breakpoint at 0x" << std::uppercase << std::hex << std::setw(4) << std::setfill('0') << address << ".";
@@ -247,7 +257,9 @@ bool SimSession::add_breakpoint(uint16_t address) {
 }
 
 bool SimSession::remove_breakpoint(uint16_t address) {
-    const auto it = std::find(breakpoints_.begin(), breakpoints_.end(), address);
+    const auto it = std::find_if(breakpoints_.begin(), breakpoints_.end(), [&](const Breakpoint& breakpoint) {
+        return breakpoint.address == address;
+    });
     if (it == breakpoints_.end()) return false;
     breakpoints_.erase(it);
 
@@ -258,25 +270,60 @@ bool SimSession::remove_breakpoint(uint16_t address) {
 }
 
 bool SimSession::is_breakpoint(uint16_t address) const {
-    return std::find(breakpoints_.begin(), breakpoints_.end(), address) != breakpoints_.end();
+    return std::any_of(breakpoints_.begin(), breakpoints_.end(), [&](const Breakpoint& breakpoint) {
+        return breakpoint.address == address && breakpoint.enabled;
+    });
 }
 
-bool SimSession::add_watchpoint(uint16_t address, WatchpointType type) {
+bool SimSession::set_breakpoint_enabled(uint16_t address, bool enabled) {
+    const auto it = std::find_if(breakpoints_.begin(), breakpoints_.end(), [&](const Breakpoint& breakpoint) {
+        return breakpoint.address == address;
+    });
+    if (it == breakpoints_.end()) return false;
+    it->enabled = enabled;
+    return true;
+}
+
+bool SimSession::set_breakpoint_label(uint16_t address, std::string label) {
+    const auto it = std::find_if(breakpoints_.begin(), breakpoints_.end(), [&](const Breakpoint& breakpoint) {
+        return breakpoint.address == address;
+    });
+    if (it == breakpoints_.end()) return false;
+    it->label = std::move(label);
+    return true;
+}
+
+void SimSession::set_breakpoints(std::vector<Breakpoint> breakpoints) {
+    breakpoints_ = std::move(breakpoints);
+    std::sort(breakpoints_.begin(), breakpoints_.end(), [](const Breakpoint& a, const Breakpoint& b) {
+        return a.address < b.address;
+    });
+}
+
+bool SimSession::add_watchpoint(uint16_t address, WatchpointType type, std::string label) {
     auto it = std::find_if(watchpoints_.begin(), watchpoints_.end(), [&](const Watchpoint& watchpoint) {
         return watchpoint.address == address;
     });
 
     std::ostringstream out;
     if (it != watchpoints_.end()) {
-        if (watchpoint_matches(it->type, type)) return false;
-        it->type = merge_watchpoint_types(it->type, type);
+        bool changed = false;
+        if (!label.empty() && it->label != label) {
+            it->label = std::move(label);
+            changed = true;
+        }
+        if (!watchpoint_matches(it->type, type)) {
+            it->type = merge_watchpoint_types(it->type, type);
+            changed = true;
+        }
+        if (!changed) return false;
         out << "Updated watchpoint at 0x" << std::uppercase << std::hex << std::setw(4) << std::setfill('0') << address
             << " to " << watchpoint_log_label(it->type) << ".";
         add_log(out.str());
         return true;
     }
 
-    watchpoints_.push_back(Watchpoint{address, type});
+    watchpoints_.push_back(Watchpoint{address, type, true, std::move(label), 0});
     std::sort(watchpoints_.begin(), watchpoints_.end(), [](const Watchpoint& a, const Watchpoint& b) {
         return a.address < b.address;
     });
@@ -324,7 +371,32 @@ bool SimSession::remove_watchpoint(uint16_t address, WatchpointType type) {
 
 bool SimSession::is_watchpoint(uint16_t address, WatchpointType type) const {
     return std::any_of(watchpoints_.begin(), watchpoints_.end(), [&](const Watchpoint& watchpoint) {
-        return watchpoint.address == address && watchpoint_matches(watchpoint.type, type);
+        return watchpoint.address == address && watchpoint.enabled && watchpoint_matches(watchpoint.type, type);
+    });
+}
+
+bool SimSession::set_watchpoint_enabled(uint16_t address, bool enabled) {
+    const auto it = std::find_if(watchpoints_.begin(), watchpoints_.end(), [&](const Watchpoint& watchpoint) {
+        return watchpoint.address == address;
+    });
+    if (it == watchpoints_.end()) return false;
+    it->enabled = enabled;
+    return true;
+}
+
+bool SimSession::set_watchpoint_label(uint16_t address, std::string label) {
+    const auto it = std::find_if(watchpoints_.begin(), watchpoints_.end(), [&](const Watchpoint& watchpoint) {
+        return watchpoint.address == address;
+    });
+    if (it == watchpoints_.end()) return false;
+    it->label = std::move(label);
+    return true;
+}
+
+void SimSession::set_watchpoints(std::vector<Watchpoint> watchpoints) {
+    watchpoints_ = std::move(watchpoints);
+    std::sort(watchpoints_.begin(), watchpoints_.end(), [](const Watchpoint& a, const Watchpoint& b) {
+        return a.address < b.address;
     });
 }
 
@@ -466,10 +538,15 @@ void SimSession::record_trace(uint16_t pc, std::string instruction, CpuTickResul
 
 bool SimSession::check_breakpoint(uint32_t executed, RunResult& result) {
     const uint16_t pc = sim_.cpu().regs().pc;
-    if (!is_breakpoint(pc)) return false;
+    const auto it = std::find_if(breakpoints_.begin(), breakpoints_.end(), [&](const Breakpoint& breakpoint) {
+        return breakpoint.address == pc && breakpoint.enabled;
+    });
+    if (it == breakpoints_.end()) return false;
 
+    ++it->hits;
     result.executed = executed;
     result.hit_breakpoint = true;
+    result.breakpoint_address = pc;
 
     std::ostringstream out;
     out << "Hit breakpoint at 0x" << std::uppercase << std::hex << std::setw(4) << std::setfill('0') << pc << ".";
@@ -495,8 +572,12 @@ bool SimSession::check_watchpoints(RunResult& result) {
 
     for (const auto& access : sim_.bus().access_log()) {
         const WatchpointType type = access.type == BusAccessType::Read ? WatchpointType::Read : WatchpointType::Write;
-        if (!is_watchpoint(access.address, type)) continue;
+        const auto it = std::find_if(watchpoints_.begin(), watchpoints_.end(), [&](const Watchpoint& watchpoint) {
+            return watchpoint.address == access.address && watchpoint.enabled && watchpoint_matches(watchpoint.type, type);
+        });
+        if (it == watchpoints_.end()) continue;
 
+        ++it->hits;
         result.hit_watchpoint = true;
         result.watchpoint_address = access.address;
         result.watchpoint_type = access.type;

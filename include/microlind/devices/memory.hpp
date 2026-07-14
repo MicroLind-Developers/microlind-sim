@@ -12,6 +12,7 @@ public:
     Memory(std::size_t size, bool writable);
 
     uint8_t read8(uint16_t offset) override;
+    uint8_t peek8(uint16_t offset) override;
     void write8(uint16_t offset, uint8_t value) override;
 
     void load(std::size_t offset, const std::vector<uint8_t>& data);

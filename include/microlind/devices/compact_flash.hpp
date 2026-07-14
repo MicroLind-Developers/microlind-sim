@@ -48,6 +48,7 @@ public:
     explicit CompactFlash(Options options);
 
     uint8_t read8(uint16_t offset) override;
+    uint8_t peek8(uint16_t offset) override;
     void write8(uint16_t offset, uint8_t value) override;
 
     bool load_disk_image(const std::filesystem::path& path, std::string* error = nullptr);
