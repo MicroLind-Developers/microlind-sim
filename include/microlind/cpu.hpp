@@ -127,21 +127,11 @@ private:
     enum class MicroOpKind : uint8_t {
         None,
         Nop,
-        LdaImmediate,
-        LdaDirect,
-        StaDirect,
-        LdaExtended,
-        StaExtended,
-        LdbImmediate,
-        LdbDirect,
-        StbDirect,
-        LdbExtended,
-        StbExtended,
-        LddImmediate,
-        LddDirect,
-        LddExtended,
-        StdDirect,
-        StdExtended,
+        LoadImmediate,
+        LoadDirect,
+        StoreDirect,
+        LoadExtended,
+        StoreExtended,
         Branch,
         Lbra,
         LongBranch,
@@ -160,28 +150,7 @@ private:
         JmpDirect,
         JmpExtended,
         JmpIndexed,
-        Clra,
-        Clrb,
-        Tsta,
-        Tstb,
-        Deca,
-        Decb,
-        Inca,
-        Incb,
-        Coma,
-        Comb,
-        Nega,
-        Negb,
-        Lsra,
-        Lsrb,
-        Rora,
-        Rorb,
-        Asra,
-        Asrb,
-        Asla,
-        Aslb,
-        Rola,
-        Rolb,
+        RegisterUnary,
         Alu8Immediate,
         Alu8Direct,
         Alu8Extended,
@@ -251,7 +220,6 @@ private:
         WCmpImmediate,
         WCmpDirect,
         WCmpExtended,
-        QLoadImmediate,
         QLoadDirect,
         QLoadExtended,
         QStoreDirect,
@@ -268,6 +236,21 @@ private:
         IndexedQStore,
     };
 
+    enum class MicroOpTarget : uint8_t {
+        None,
+        A,
+        B,
+        D,
+        Q,
+    };
+
+    enum class MicroOpWidth : uint8_t {
+        None,
+        Byte = 1,
+        Word = 2,
+        Long = 4,
+    };
+
     struct MicroOpState {
         MicroOpKind kind{MicroOpKind::None};
         uint16_t start_pc{};
@@ -281,6 +264,8 @@ private:
         uint32_t data32{};
         bool branch_taken{};
         bool indexed_indirect{};
+        MicroOpTarget target{MicroOpTarget::None};
+        MicroOpWidth width{MicroOpWidth::None};
     };
 
     uint8_t fetch_opcode_byte(Bus& bus);

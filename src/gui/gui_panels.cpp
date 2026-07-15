@@ -1,12 +1,122 @@
 #include "gui_panels.hpp"
 
+#include <algorithm>
+#include <cstdio>
 #include <string>
+#include <string_view>
 
 #include "gui_panel_decls.hpp"
+#include "help_document.hpp"
 
 #include "imgui.h"
 
+#ifndef MICROLIND_REPOSITORY_URL
+#define MICROLIND_REPOSITORY_URL "https://github.com/MicroLind-Developers/microlind-sim"
+#endif
+
 namespace microlind::gui {
+namespace {
+
+float status_bar_height() {
+    return ImGui::GetFrameHeight() + ImGui::GetStyle().WindowPadding.y * 2.0f;
+}
+
+#ifdef IMGUI_HAS_DOCK
+void draw_dockspace(float bottom_reserved_height) {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2 size(
+        viewport->WorkSize.x,
+        std::max(0.0f, viewport->WorkSize.y - bottom_reserved_height));
+
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowSize(size);
+    ImGui::SetNextWindowViewport(viewport->ID);
+
+    ImGuiWindowFlags host_window_flags =
+        ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoNavFocus;
+
+    char label[32]{};
+    std::snprintf(label, sizeof(label), "WindowOverViewport_%08X", static_cast<unsigned>(viewport->ID));
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::Begin(label, nullptr, host_window_flags);
+    ImGui::PopStyleVar(3);
+
+    ImGui::DockSpace(ImGui::GetID("DockSpace"));
+    ImGui::End();
+}
+#endif
+
+std::string trim_markdown_line(std::string_view line) {
+    const auto begin = line.find_first_not_of(" \t");
+    if (begin == std::string_view::npos) return {};
+    const auto end = line.find_last_not_of(" \t");
+    return std::string(line.substr(begin, end - begin + 1));
+}
+
+bool starts_with(std::string_view value, std::string_view prefix) {
+    return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
+}
+
+void draw_markdown_line(std::string_view line) {
+    if (line.empty()) {
+        ImGui::Spacing();
+        return;
+    }
+
+    if (starts_with(line, "# ")) {
+        ImGui::TextUnformatted(trim_markdown_line(line.substr(2)).c_str());
+        ImGui::Separator();
+        return;
+    }
+
+    if (starts_with(line, "## ")) {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.34f, 0.68f, 0.95f, 1.0f), "%s", trim_markdown_line(line.substr(3)).c_str());
+        ImGui::Separator();
+        return;
+    }
+
+    if (starts_with(line, "- ")) {
+        ImGui::BulletText("%s", trim_markdown_line(line.substr(2)).c_str());
+        return;
+    }
+
+    if (starts_with(line, "  ")) {
+        ImGui::Indent();
+        ImGui::TextWrapped("%s", trim_markdown_line(line).c_str());
+        ImGui::Unindent();
+        return;
+    }
+
+    ImGui::TextWrapped("%s", trim_markdown_line(line).c_str());
+}
+
+void draw_markdown_document(std::string_view text) {
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t end = text.find('\n', start);
+        std::string_view line = end == std::string_view::npos
+                                    ? text.substr(start)
+                                    : text.substr(start, end - start);
+        if (!line.empty() && line.back() == '\r') {
+            line.remove_suffix(1);
+        }
+        draw_markdown_line(line);
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+}
+
+} // namespace
 
 void draw_main_menu(GuiState& state) {
     if (!ImGui::BeginMainMenuBar()) return;
@@ -64,7 +174,50 @@ void draw_main_menu(GuiState& state) {
         ImGui::EndMenu();
     }
 
+    if (ImGui::BeginMenu("View")) {
+        if (ImGui::BeginMenu("Theme")) {
+            bool dark = state.theme == microlind::app::GuiTheme::Dark;
+            if (ImGui::MenuItem("Dark", nullptr, dark)) {
+                state.theme = microlind::app::GuiTheme::Dark;
+            }
+            bool light = state.theme == microlind::app::GuiTheme::Light;
+            if (ImGui::MenuItem("Light", nullptr, light)) {
+                state.theme = microlind::app::GuiTheme::Light;
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Show All")) {
+            state.set_all_panels_visible(true);
+        }
+        if (ImGui::MenuItem("Hide All")) {
+            state.set_all_panels_visible(false);
+        }
+        ImGui::Separator();
+        ImGui::MenuItem("Files", nullptr, &state.show_file_panel);
+        ImGui::MenuItem("Control", nullptr, &state.show_control_panel);
+        ImGui::MenuItem("Registers", nullptr, &state.show_registers);
+        ImGui::MenuItem("Disassembly", nullptr, &state.show_disassembly);
+        ImGui::MenuItem("Memory", nullptr, &state.show_memory_viewer);
+        ImGui::MenuItem("Stack", nullptr, &state.show_stack);
+        ImGui::MenuItem("Trace", nullptr, &state.show_trace);
+        ImGui::Separator();
+        ImGui::MenuItem("Memory Map", nullptr, &state.show_memory_map);
+        ImGui::MenuItem("Memory Mapper", nullptr, &state.show_mapper);
+        ImGui::MenuItem("PLD Logic", nullptr, &state.show_pld_logic);
+        ImGui::MenuItem("CompactFlash", nullptr, &state.show_compact_flash);
+        ImGui::MenuItem("Serial", nullptr, &state.show_serial);
+        ImGui::Separator();
+        ImGui::MenuItem("Breakpoints", nullptr, &state.show_breakpoints);
+        ImGui::MenuItem("Watchpoints", nullptr, &state.show_watchpoints);
+        ImGui::MenuItem("Log", nullptr, &state.show_log);
+        ImGui::EndMenu();
+    }
+
     if (ImGui::BeginMenu("Help")) {
+        if (ImGui::MenuItem("Help")) {
+            state.help_open = true;
+        }
         if (ImGui::MenuItem("About")) {
             state.about_open = true;
         }
@@ -76,16 +229,19 @@ void draw_main_menu(GuiState& state) {
 
 void draw_status_bar(GuiState& state) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float height = ImGui::GetFrameHeight() + ImGui::GetStyle().WindowPadding.y * 2.0f;
+    const float height = status_bar_height();
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, viewport->WorkPos.y + viewport->WorkSize.y - height));
     ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, height));
 
-    constexpr ImGuiWindowFlags flags =
+    ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoDecoration |
         ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoNav |
         ImGuiWindowFlags_NoBringToFrontOnFocus;
+#ifdef IMGUI_HAS_DOCK
+    flags |= ImGuiWindowFlags_NoDocking;
+#endif
 
     if (ImGui::Begin("Status Bar", nullptr, flags)) {
         const auto& sim = state.session.simulator();
@@ -119,6 +275,29 @@ void draw_status_bar(GuiState& state) {
     ImGui::End();
 }
 
+void draw_help_modal(GuiState& state) {
+    if (state.help_open) {
+        ImGui::OpenPopup("Help");
+        state.help_open = false;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(760.0f, 640.0f), ImGuiCond_Appearing);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoSavedSettings;
+    if (!ImGui::BeginPopupModal("Help", nullptr, flags)) return;
+
+    const float footer_height = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+    ImGui::BeginChild("help_document", ImVec2(0.0f, -footer_height), true);
+    draw_markdown_document(help_document_text());
+    ImGui::EndChild();
+
+    ImGui::SetItemDefaultFocus();
+    if (ImGui::Button("Close", ImVec2(96.0f, 0.0f))) {
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
 void draw_about_modal(GuiState& state) {
     if (state.about_open) {
         ImGui::OpenPopup("About Microlind Simulator");
@@ -147,11 +326,9 @@ void draw_about_modal(GuiState& state) {
     ImGui::EndGroup();
 
     ImGui::Separator();
-    ImGui::TextUnformatted("Included GUI features");
-    ImGui::BulletText("Session loading and saving with persisted layout/debugger state");
-    ImGui::BulletText("Run, pause, reset, step, step-over, and run-until-return controls");
-    ImGui::BulletText("Registers, disassembly, editable memory, stack, trace, serial, mapper, and CompactFlash panels");
-    ImGui::BulletText("Breakpoints and watchpoints with labels, enabled state, and hit counts");
+    ImGui::TextUnformatted("Copyright and license");
+    ImGui::TextUnformatted("Copyright (c) 2026 Eric Lind");
+    ImGui::TextUnformatted("Microlind Simulator is released under the MIT license.");
 
     ImGui::Separator();
     ImGui::TextUnformatted("Libraries and tools used");
@@ -163,18 +340,16 @@ void draw_about_modal(GuiState& state) {
     ImGui::BulletText("CMake - build configuration and dependency wiring");
 
     ImGui::Separator();
-    ImGui::TextDisabled("Logo: resources/mlsim_small.png");
 
-    if (ImGui::Button("Open GitHub", ImVec2(120.0f, 0.0f))) {
-        constexpr const char* kRepositoryUrl = "https://github.com/MicroLind-Developers/microlind-sim";
-        if (SDL_OpenURL(kRepositoryUrl) != 0) {
-            state.session.add_log(std::string("Could not open GitHub URL: ") + SDL_GetError());
-        }
-    }
-    ImGui::SameLine();
     ImGui::SetItemDefaultFocus();
     if (ImGui::Button("Close", ImVec2(96.0f, 0.0f))) {
         ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Open GitHub", ImVec2(120.0f, 0.0f))) {
+        if (SDL_OpenURL(MICROLIND_REPOSITORY_URL) != 0) {
+            state.session.add_log(std::string("Could not open GitHub URL: ") + SDL_GetError());
+        }
     }
 
     ImGui::EndPopup();
@@ -187,28 +362,28 @@ void draw_workbench(GuiState& state) {
         state.session.add_log("Restored session window layout.");
     }
 
-#ifdef IMGUI_HAS_DOCK
-    ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
-#endif
-
     draw_main_menu(state);
+#ifdef IMGUI_HAS_DOCK
+    draw_dockspace(status_bar_height());
+#endif
+    draw_help_modal(state);
     draw_about_modal(state);
 
-    draw_file_panel(state);
-    draw_control_panel(state);
-    draw_registers(state);
-    draw_disassembly(state);
-    draw_memory_viewer(state);
-    draw_stack(state);
-    draw_memory_map(state);
-    draw_mapper(state);
-    draw_pld_logic(state);
-    draw_compact_flash(state);
-    draw_breakpoints(state);
-    draw_watchpoints(state);
-    draw_trace(state);
-    draw_serial(state);
-    draw_log(state);
+    if (state.show_file_panel) draw_file_panel(state);
+    if (state.show_control_panel) draw_control_panel(state);
+    if (state.show_registers) draw_registers(state);
+    if (state.show_disassembly) draw_disassembly(state);
+    if (state.show_memory_viewer) draw_memory_viewer(state);
+    if (state.show_stack) draw_stack(state);
+    if (state.show_memory_map) draw_memory_map(state);
+    if (state.show_mapper) draw_mapper(state);
+    if (state.show_pld_logic) draw_pld_logic(state);
+    if (state.show_compact_flash) draw_compact_flash(state);
+    if (state.show_breakpoints) draw_breakpoints(state);
+    if (state.show_watchpoints) draw_watchpoints(state);
+    if (state.show_trace) draw_trace(state);
+    if (state.show_serial) draw_serial(state);
+    if (state.show_log) draw_log(state);
     draw_status_bar(state);
 }
 

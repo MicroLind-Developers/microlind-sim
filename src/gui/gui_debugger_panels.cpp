@@ -41,12 +41,12 @@ void draw_register_row(const char* name, uint32_t value, int width) {
 
 } // namespace
 
-void draw_registers(const GuiState& state) {
+void draw_registers(GuiState& state) {
     const auto& sim = state.session.simulator();
     const auto& regs = sim.cpu().regs();
 
     set_next_window_defaults(8.0f, 376.0f, 240.0f, 360.0f);
-    ImGui::Begin("Registers");
+    ImGui::Begin("Registers", &state.show_registers);
     if (ImGui::BeginTable("registers", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
         draw_register_row("PC", regs.pc, 4);
         draw_register_row("A", regs.a, 2);
@@ -85,7 +85,7 @@ void draw_registers(const GuiState& state) {
 
 void draw_disassembly(GuiState& state) {
     set_next_window_defaults(376.0f, 186.0f, 560.0f, 340.0f);
-    ImGui::Begin("Disassembly");
+    ImGui::Begin("Disassembly", &state.show_disassembly);
     auto& sim = state.session.simulator();
     uint16_t pc = sim.cpu().regs().pc;
     const uint16_t current_pc = pc;
@@ -137,7 +137,7 @@ void draw_stack(GuiState& state) {
     const uint16_t stack_pointer = state.stack_register_index == 0 ? regs.s : regs.u;
 
     set_next_window_defaults(1188.0f, 28.0f, 236.0f, 490.0f);
-    ImGui::Begin("Stack");
+    ImGui::Begin("Stack", &state.show_stack);
 
     const char* stack_names[] = {"S", "U"};
     ImGui::Combo("Register", &state.stack_register_index, stack_names, static_cast<int>(std::size(stack_names)));
@@ -204,7 +204,7 @@ void draw_stack(GuiState& state) {
 
 void draw_breakpoints(GuiState& state) {
     set_next_window_defaults(252.0f, 376.0f, 360.0f, 220.0f);
-    ImGui::Begin("Breakpoints");
+    ImGui::Begin("Breakpoints", &state.show_breakpoints);
     ImGui::InputInt("Address", &state.breakpoint_address, 1, 256, ImGuiInputTextFlags_CharsHexadecimal);
     state.breakpoint_address = std::clamp(state.breakpoint_address, 0, 0xFFFF);
     ImGui::InputText("Label", state.breakpoint_label.data(), state.breakpoint_label.size());
@@ -272,7 +272,7 @@ void draw_breakpoints(GuiState& state) {
 
 void draw_watchpoints(GuiState& state) {
     set_next_window_defaults(252.0f, 582.0f, 400.0f, 240.0f);
-    ImGui::Begin("Watchpoints");
+    ImGui::Begin("Watchpoints", &state.show_watchpoints);
     ImGui::InputInt("Address", &state.watchpoint_address, 1, 256, ImGuiInputTextFlags_CharsHexadecimal);
     state.watchpoint_address = std::clamp(state.watchpoint_address, 0, 0xFFFF);
     ImGui::InputText("Label", state.watchpoint_label.data(), state.watchpoint_label.size());
@@ -352,7 +352,7 @@ void draw_watchpoints(GuiState& state) {
 
 void draw_trace(GuiState& state) {
     set_next_window_defaults(480.0f, 706.0f, 456.0f, 160.0f);
-    ImGui::Begin("Trace");
+    ImGui::Begin("Trace", &state.show_trace);
     const auto& trace = state.session.trace();
     if (ImGui::Button("Clear")) {
         state.session.clear_trace();

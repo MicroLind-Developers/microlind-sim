@@ -12,6 +12,7 @@ add_library(microlind-sim
     src/clock.cpp
     src/cpu.cpp
     src/cpu_instructions.cpp
+    src/cpu_micro_ops.cpp
     src/devices/compact_flash.cpp
     src/devices/interrupt_controller.cpp
     src/simulator.cpp
@@ -79,6 +80,7 @@ option(MICROLIND_BUILD_GUI "Build the Dear ImGui desktop GUI" OFF)
 set(MICROLIND_IMGUI_DIR "" CACHE PATH "Path to a Dear ImGui source checkout")
 set(MICROLIND_IMGUI_GIT_TAG "docking" CACHE STRING "Dear ImGui git tag or branch to fetch when MICROLIND_IMGUI_DIR is empty")
 set(MICROLIND_PFD_GIT_TAG "main" CACHE STRING "Portable File Dialogs git tag or branch to fetch")
+set(MICROLIND_REPOSITORY_URL "https://github.com/MicroLind-Developers/microlind-sim" CACHE STRING "Project repository URL shown in the GUI About dialog")
 
 if(MICROLIND_BUILD_GUI)
     find_package(SDL2 REQUIRED)
@@ -138,7 +140,21 @@ if(MICROLIND_BUILD_GUI)
         FetchContent_Populate(portable_file_dialogs)
     endif()
 
+    set(MICROLIND_GUI_HELP_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/gui_help_document.cpp")
+    add_custom_command(
+        OUTPUT "${MICROLIND_GUI_HELP_SOURCE}"
+        COMMAND "${CMAKE_COMMAND}"
+            "-DINPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/FEATURE.md"
+            "-DOUTPUT_FILE=${MICROLIND_GUI_HELP_SOURCE}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_text_file.cmake"
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/FEATURE.md"
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_text_file.cmake"
+        VERBATIM
+    )
+
     add_executable(microlind-sim-gui
+        "${MICROLIND_GUI_HELP_SOURCE}"
         src/gui/gui_debugger_panels.cpp
         src/gui/gui_file_panels.cpp
         src/gui/gui_memory_panels.cpp
@@ -146,8 +162,14 @@ if(MICROLIND_BUILD_GUI)
         src/gui/gui_state.cpp
         src/gui/main.cpp
     )
-    target_include_directories(microlind-sim-gui PRIVATE ${portable_file_dialogs_SOURCE_DIR})
-    target_compile_definitions(microlind-sim-gui PRIVATE MICROLIND_HAS_PORTABLE_FILE_DIALOGS=1)
+    target_include_directories(microlind-sim-gui PRIVATE
+        ${portable_file_dialogs_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui
+    )
+    target_compile_definitions(microlind-sim-gui PRIVATE
+        MICROLIND_HAS_PORTABLE_FILE_DIALOGS=1
+        MICROLIND_REPOSITORY_URL="${MICROLIND_REPOSITORY_URL}"
+    )
     target_link_libraries(microlind-sim-gui PRIVATE microlind-sim-app microlind-imgui PNG::PNG)
 endif()
 

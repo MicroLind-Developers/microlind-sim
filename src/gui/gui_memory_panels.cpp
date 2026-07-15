@@ -14,9 +14,9 @@
 
 namespace microlind::gui {
 
-void draw_memory_map(const GuiState& state) {
+void draw_memory_map(GuiState& state) {
     set_next_window_defaults(944.0f, 28.0f, 240.0f, 190.0f);
-    ImGui::Begin("Memory Map");
+    ImGui::Begin("Memory Map", &state.show_memory_map);
     const std::vector<std::string> summary = state.session.memory_map();
     if (summary.empty()) {
         ImGui::TextDisabled("No mapped devices.");
@@ -30,7 +30,7 @@ void draw_memory_map(const GuiState& state) {
 
 void draw_memory_viewer(GuiState& state) {
     set_next_window_defaults(944.0f, 528.0f, 560.0f, 260.0f);
-    ImGui::Begin("Memory");
+    ImGui::Begin("Memory", &state.show_memory_viewer);
 
     auto& sim = state.session.simulator();
     const auto& regs = sim.cpu().regs();
@@ -152,7 +152,7 @@ void draw_memory_viewer(GuiState& state) {
 
 void draw_mapper(GuiState& state) {
     set_next_window_defaults(944.0f, 224.0f, 240.0f, 294.0f);
-    ImGui::Begin("Memory Mapper");
+    ImGui::Begin("Memory Mapper", &state.show_mapper);
     const auto mapper = state.session.mapper_snapshot();
     if (!mapper.present) {
         ImGui::TextDisabled("No memory mapper configured.");
@@ -283,7 +283,7 @@ void draw_logic_signal_table(const char* table_id, const std::initializer_list<s
 
 void draw_pld_logic(GuiState& state) {
     set_next_window_defaults(1188.0f, 524.0f, 300.0f, 300.0f);
-    ImGui::Begin("PLD Logic");
+    ImGui::Begin("PLD Logic", &state.show_pld_logic);
 
     const auto& regs = state.session.simulator().cpu().regs();
     if (!state.pld_live_bus && state.pld_follow_pc) {
@@ -402,7 +402,7 @@ void draw_pld_logic(GuiState& state) {
 
 void draw_compact_flash(GuiState& state) {
     set_next_window_defaults(480.0f, 520.0f, 456.0f, 180.0f);
-    ImGui::Begin("CompactFlash");
+    ImGui::Begin("CompactFlash", &state.show_compact_flash);
     const auto cf = state.session.cf_snapshot();
     if (!cf.present) {
         ImGui::TextDisabled("No CompactFlash device configured.");

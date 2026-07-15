@@ -132,6 +132,7 @@ struct MicroSubroutineJumpCase {
     uint8_t dp{};
     uint16_t target{};
     uint16_t return_pc{};
+    uint8_t md{};
     uint8_t expected_cycles{};
 };
 
@@ -835,6 +836,7 @@ void run_subroutine_jump_microcycle_case(const MicroSubroutineJumpCase& test) {
     sim.cpu().set_pc(0x0100);
     sim.cpu().regs().s = 0x9000;
     sim.cpu().regs().dp = test.dp;
+    sim.cpu().regs().md = test.md;
 
     const auto opcode_fetch = sim.tick_microcycle();
     EXPECT_TRUE(opcode_fetch.emitted);
@@ -1159,8 +1161,10 @@ TEST(BusPhaseTest, ResumableMicrocycleRtsPullsReturnAddress) {
 
 TEST(BusPhaseTest, ResumableMicrocycleJsrPushesReturnAddressAndJumps) {
     const MicroSubroutineJumpCase cases[] = {
-        {"JSR direct", 0x9D, MicroAddressMode::Direct, 0x12, 0x1234, 0x0102, 5},
-        {"JSR extended", 0xBD, MicroAddressMode::Extended, 0x00, 0x2040, 0x0103, 7},
+        {"JSR direct emulation", 0x9D, MicroAddressMode::Direct, 0x12, 0x1234, 0x0102, 0x00, 7},
+        {"JSR direct native", 0x9D, MicroAddressMode::Direct, 0x12, 0x1234, 0x0102, 0x01, 6},
+        {"JSR extended emulation", 0xBD, MicroAddressMode::Extended, 0x00, 0x2040, 0x0103, 0x00, 8},
+        {"JSR extended native", 0xBD, MicroAddressMode::Extended, 0x00, 0x2040, 0x0103, 0x01, 7},
     };
 
     for (const auto& test : cases) {
@@ -1198,6 +1202,7 @@ TEST(BusPhaseTest, ResumableMicrocycleIndexedJmpAndJsrResolveAddressThenJump) {
         uint16_t y{};
         uint16_t u{};
         uint16_t s{};
+        uint8_t md{};
         std::vector<std::pair<uint16_t, uint8_t>> memory;
         uint8_t expected_cycles{};
         uint16_t expected_pc{};
@@ -1216,6 +1221,7 @@ TEST(BusPhaseTest, ResumableMicrocycleIndexedJmpAndJsrResolveAddressThenJump) {
             0x2100,
             0x4000,
             0x9000,
+            0x00,
             {},
             3,
             0x2000,
@@ -1235,6 +1241,7 @@ TEST(BusPhaseTest, ResumableMicrocycleIndexedJmpAndJsrResolveAddressThenJump) {
             0x2100,
             0x4000,
             0x9000,
+            0x00,
             {{0x2102, 0x30}, {0x2103, 0x00}},
             7,
             0x3000,
@@ -1257,8 +1264,31 @@ TEST(BusPhaseTest, ResumableMicrocycleIndexedJmpAndJsrResolveAddressThenJump) {
             0x2100,
             0x4000,
             0x9000,
+            0x00,
             {},
             7,
+            0x2000,
+            0x2000,
+            0x2100,
+            0x4000,
+            0x8FFE,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xAD, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x8FFF, 0x02, microlind::BusCycleKind::StackWrite},
+                {microlind::BusAccessType::Write, 0x8FFE, 0x01, microlind::BusCycleKind::StackWrite},
+            },
+        },
+        {
+            "JSR ,X native",
+            {0xAD, 0x84},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x9000,
+            0x01,
+            {},
+            6,
             0x2000,
             0x2000,
             0x2100,
@@ -1278,6 +1308,7 @@ TEST(BusPhaseTest, ResumableMicrocycleIndexedJmpAndJsrResolveAddressThenJump) {
             0x2100,
             0x4000,
             0x9000,
+            0x00,
             {{0x4010, 0x30}, {0x4011, 0x00}},
             14,
             0x3000,
@@ -1316,6 +1347,7 @@ TEST(BusPhaseTest, ResumableMicrocycleIndexedJmpAndJsrResolveAddressThenJump) {
         sim.cpu().regs().y = test.y;
         sim.cpu().regs().u = test.u;
         sim.cpu().regs().s = test.s;
+        sim.cpu().regs().md = test.md;
 
         for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
             const auto result = sim.tick_microcycle();

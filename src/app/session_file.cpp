@@ -66,6 +66,21 @@ std::optional<WatchpointType> parse_watchpoint_type(std::string value) {
     return std::nullopt;
 }
 
+std::optional<GuiTheme> parse_gui_theme(std::string value) {
+    value = cli::trim(value);
+    if (cli::iequals(value, "dark")) return GuiTheme::Dark;
+    if (cli::iequals(value, "light")) return GuiTheme::Light;
+    return std::nullopt;
+}
+
+const char* gui_theme_name(GuiTheme theme) {
+    switch (theme) {
+    case GuiTheme::Dark: return "dark";
+    case GuiTheme::Light: return "light";
+    }
+    return "dark";
+}
+
 const char* watchpoint_type_name(WatchpointType type) {
     switch (type) {
     case WatchpointType::Read: return "R";
@@ -204,6 +219,25 @@ bool write_path(std::ostream& out, const char* key, const std::filesystem::path&
     if (path.empty()) return true;
     out << key << "=" << path.generic_string() << '\n';
     return static_cast<bool>(out);
+}
+
+bool parse_named_bool(
+    const std::string& key,
+    const std::string& value,
+    bool& out,
+    std::string& error,
+    std::size_t lineno) {
+    const auto parsed = parse_bool(value);
+    if (!parsed) {
+        error = "Bad " + key + " at line " + std::to_string(lineno);
+        return false;
+    }
+    out = *parsed;
+    return true;
+}
+
+void write_bool(std::ostream& out, const char* key, bool value) {
+    out << key << "=" << (value ? "true" : "false") << '\n';
 }
 
 } // namespace
@@ -423,6 +457,43 @@ std::optional<SessionDefinition> load_session_definition(const std::filesystem::
                 return std::nullopt;
             }
             session.gui.run_micro_steps = *parsed;
+        } else if (cli::iequals(key, "GUI_THEME") || cli::iequals(key, "THEME")) {
+            const auto parsed = parse_gui_theme(value);
+            if (!parsed) {
+                error = "Bad " + key + " at line " + std::to_string(lineno);
+                return std::nullopt;
+            }
+            session.gui.theme = *parsed;
+        } else if (cli::iequals(key, "SHOW_FILES")) {
+            if (!parse_named_bool(key, value, session.gui.show_file_panel, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_CONTROL")) {
+            if (!parse_named_bool(key, value, session.gui.show_control_panel, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_REGISTERS")) {
+            if (!parse_named_bool(key, value, session.gui.show_registers, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_DISASSEMBLY")) {
+            if (!parse_named_bool(key, value, session.gui.show_disassembly, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_MEMORY")) {
+            if (!parse_named_bool(key, value, session.gui.show_memory_viewer, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_STACK")) {
+            if (!parse_named_bool(key, value, session.gui.show_stack, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_MEMORY_MAP")) {
+            if (!parse_named_bool(key, value, session.gui.show_memory_map, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_MEMORY_MAPPER")) {
+            if (!parse_named_bool(key, value, session.gui.show_mapper, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_PLD_LOGIC")) {
+            if (!parse_named_bool(key, value, session.gui.show_pld_logic, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_COMPACT_FLASH")) {
+            if (!parse_named_bool(key, value, session.gui.show_compact_flash, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_BREAKPOINTS")) {
+            if (!parse_named_bool(key, value, session.gui.show_breakpoints, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_WATCHPOINTS")) {
+            if (!parse_named_bool(key, value, session.gui.show_watchpoints, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_TRACE")) {
+            if (!parse_named_bool(key, value, session.gui.show_trace, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_SERIAL")) {
+            if (!parse_named_bool(key, value, session.gui.show_serial, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_LOG")) {
+            if (!parse_named_bool(key, value, session.gui.show_log, error, lineno)) return std::nullopt;
         } else if (cli::iequals(key, "BREAKPOINT")) {
             auto breakpoint = parse_breakpoint(value, error, lineno);
             if (!breakpoint) return std::nullopt;
@@ -483,6 +554,22 @@ bool save_session_definition(const std::filesystem::path& path, const SessionDef
     file << "SERIAL_RX_HEX=" << (session.gui.serial_rx_hex ? "true" : "false") << '\n';
     file << "OPERATIONS_PER_MINUTE=" << session.gui.operations_per_minute << '\n';
     file << "RUN_MICRO_STEPS=" << (session.gui.run_micro_steps ? "true" : "false") << '\n';
+    file << "GUI_THEME=" << gui_theme_name(session.gui.theme) << '\n';
+    write_bool(file, "SHOW_FILES", session.gui.show_file_panel);
+    write_bool(file, "SHOW_CONTROL", session.gui.show_control_panel);
+    write_bool(file, "SHOW_REGISTERS", session.gui.show_registers);
+    write_bool(file, "SHOW_DISASSEMBLY", session.gui.show_disassembly);
+    write_bool(file, "SHOW_MEMORY", session.gui.show_memory_viewer);
+    write_bool(file, "SHOW_STACK", session.gui.show_stack);
+    write_bool(file, "SHOW_MEMORY_MAP", session.gui.show_memory_map);
+    write_bool(file, "SHOW_MEMORY_MAPPER", session.gui.show_mapper);
+    write_bool(file, "SHOW_PLD_LOGIC", session.gui.show_pld_logic);
+    write_bool(file, "SHOW_COMPACT_FLASH", session.gui.show_compact_flash);
+    write_bool(file, "SHOW_BREAKPOINTS", session.gui.show_breakpoints);
+    write_bool(file, "SHOW_WATCHPOINTS", session.gui.show_watchpoints);
+    write_bool(file, "SHOW_TRACE", session.gui.show_trace);
+    write_bool(file, "SHOW_SERIAL", session.gui.show_serial);
+    write_bool(file, "SHOW_LOG", session.gui.show_log);
 
     for (const auto& breakpoint : session.breakpoints) {
         file << "BREAKPOINT=0x" << cli::hex4(breakpoint.address)

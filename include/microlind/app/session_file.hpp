@@ -14,6 +14,11 @@
 
 namespace microlind::app {
 
+enum class GuiTheme {
+    Dark,
+    Light,
+};
+
 struct GuiSessionState {
     uint16_t memory_start{};
     int memory_rows{16};
@@ -26,6 +31,22 @@ struct GuiSessionState {
     bool serial_rx_hex{};
     int operations_per_minute{600};
     bool run_micro_steps{};
+    GuiTheme theme{GuiTheme::Dark};
+    bool show_file_panel{true};
+    bool show_control_panel{true};
+    bool show_registers{true};
+    bool show_disassembly{true};
+    bool show_memory_viewer{true};
+    bool show_stack{true};
+    bool show_memory_map{true};
+    bool show_mapper{true};
+    bool show_pld_logic{true};
+    bool show_compact_flash{true};
+    bool show_breakpoints{true};
+    bool show_watchpoints{true};
+    bool show_trace{true};
+    bool show_serial{true};
+    bool show_log{true};
 };
 
 struct SessionDefinition {

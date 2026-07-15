@@ -608,14 +608,14 @@ uint8_t Cpu::op_jsr_dir(Bus& bus) {
     const uint16_t target = direct_address(bus);
     push_word(bus, regs_.pc);
     regs_.pc = target;
-    return 5;
+    return is_native_hd6309(regs_, mode_) ? 6 : 7;
 }
 
 uint8_t Cpu::op_jsr_ext(Bus& bus) {
     const uint16_t target = extended_address(bus);
     push_word(bus, regs_.pc);
     regs_.pc = target;
-    return 7;
+    return is_native_hd6309(regs_, mode_) ? 7 : 8;
 }
 
 uint8_t Cpu::op_jsr_idx(Bus& bus) {
@@ -623,7 +623,7 @@ uint8_t Cpu::op_jsr_idx(Bus& bus) {
     if (!pb.valid) return pb.cycles;
     push_word(bus, regs_.pc);
     regs_.pc = pb.address;
-    return static_cast<uint8_t>(7 + pb.cycles);
+    return static_cast<uint8_t>((is_native_hd6309(regs_, mode_) ? 6 : 7) + pb.cycles);
 }
 
 uint8_t Cpu::op_rts(Bus& bus) {

@@ -93,7 +93,24 @@ struct GuiState {
     bool run_micro_steps{false};
     bool run_until_active{false};
     bool quit_requested{false};
+    bool help_open{false};
     bool about_open{false};
+    microlind::app::GuiTheme theme{microlind::app::GuiTheme::Dark};
+    bool show_file_panel{true};
+    bool show_control_panel{true};
+    bool show_registers{true};
+    bool show_disassembly{true};
+    bool show_memory_viewer{true};
+    bool show_stack{true};
+    bool show_memory_map{true};
+    bool show_mapper{true};
+    bool show_pld_logic{true};
+    bool show_compact_flash{true};
+    bool show_breakpoints{true};
+    bool show_watchpoints{true};
+    bool show_trace{true};
+    bool show_serial{true};
+    bool show_log{true};
     TextureResource about_logo{};
 
     GuiState() {
@@ -154,6 +171,22 @@ struct GuiState {
         serial_hex_view = loaded->gui.serial_hex_view;
         serial_rx_hex = loaded->gui.serial_rx_hex;
         run_micro_steps = loaded->gui.run_micro_steps;
+        theme = loaded->gui.theme;
+        show_file_panel = loaded->gui.show_file_panel;
+        show_control_panel = loaded->gui.show_control_panel;
+        show_registers = loaded->gui.show_registers;
+        show_disassembly = loaded->gui.show_disassembly;
+        show_memory_viewer = loaded->gui.show_memory_viewer;
+        show_stack = loaded->gui.show_stack;
+        show_memory_map = loaded->gui.show_memory_map;
+        show_mapper = loaded->gui.show_mapper;
+        show_pld_logic = loaded->gui.show_pld_logic;
+        show_compact_flash = loaded->gui.show_compact_flash;
+        show_breakpoints = loaded->gui.show_breakpoints;
+        show_watchpoints = loaded->gui.show_watchpoints;
+        show_trace = loaded->gui.show_trace;
+        show_serial = loaded->gui.show_serial;
+        show_log = loaded->gui.show_log;
 
         const bool config_ok = session.load_hardware_config(loaded->config_path);
         const bool rom_ok = config_ok && session.load_rom(loaded->rom_path, loaded->rom_format, loaded->raw_base);
@@ -199,6 +232,22 @@ struct GuiState {
         definition.gui.stack_follow_pointer = stack_follow_pointer;
         definition.gui.serial_hex_view = serial_hex_view;
         definition.gui.serial_rx_hex = serial_rx_hex;
+        definition.gui.theme = theme;
+        definition.gui.show_file_panel = show_file_panel;
+        definition.gui.show_control_panel = show_control_panel;
+        definition.gui.show_registers = show_registers;
+        definition.gui.show_disassembly = show_disassembly;
+        definition.gui.show_memory_viewer = show_memory_viewer;
+        definition.gui.show_stack = show_stack;
+        definition.gui.show_memory_map = show_memory_map;
+        definition.gui.show_mapper = show_mapper;
+        definition.gui.show_pld_logic = show_pld_logic;
+        definition.gui.show_compact_flash = show_compact_flash;
+        definition.gui.show_breakpoints = show_breakpoints;
+        definition.gui.show_watchpoints = show_watchpoints;
+        definition.gui.show_trace = show_trace;
+        definition.gui.show_serial = show_serial;
+        definition.gui.show_log = show_log;
 
         std::size_t layout_size = 0;
         const char* layout = ImGui::SaveIniSettingsToMemory(&layout_size);
@@ -271,6 +320,24 @@ struct GuiState {
         if (running) {
             run_until_active = false;
         }
+    }
+
+    void set_all_panels_visible(bool visible) {
+        show_file_panel = visible;
+        show_control_panel = visible;
+        show_registers = visible;
+        show_disassembly = visible;
+        show_memory_viewer = visible;
+        show_stack = visible;
+        show_memory_map = visible;
+        show_mapper = visible;
+        show_pld_logic = visible;
+        show_compact_flash = visible;
+        show_breakpoints = visible;
+        show_watchpoints = visible;
+        show_trace = visible;
+        show_serial = visible;
+        show_log = visible;
     }
 
     double operations_per_second() const {

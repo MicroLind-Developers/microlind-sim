@@ -18,6 +18,25 @@ using microlind::gui::handle_shortcut;
 using microlind::gui::load_png_surface;
 using microlind::gui::load_png_texture;
 
+void apply_gui_theme(microlind::app::GuiTheme theme) {
+    switch (theme) {
+    case microlind::app::GuiTheme::Dark:
+        ImGui::StyleColorsDark();
+        break;
+    case microlind::app::GuiTheme::Light:
+        ImGui::StyleColorsLight();
+        break;
+    }
+}
+
+SDL_Color clear_color(microlind::app::GuiTheme theme) {
+    switch (theme) {
+    case microlind::app::GuiTheme::Dark: return SDL_Color{20, 22, 24, 255};
+    case microlind::app::GuiTheme::Light: return SDL_Color{240, 240, 240, 255};
+    }
+    return SDL_Color{20, 22, 24, 255};
+}
+
 int run_gui() {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
@@ -58,12 +77,13 @@ int run_gui() {
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 #endif
     (void)io;
-    ImGui::StyleColorsDark();
 
     ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer2_Init(renderer);
 
     GuiState state;
+    auto applied_theme = state.theme;
+    apply_gui_theme(applied_theme);
     state.about_logo = load_png_texture(renderer, "resources/mlsim_logo.png");
     if (state.about_logo.texture == nullptr) {
         state.session.add_log("Could not load About logo: resources/mlsim_logo.png");
@@ -124,6 +144,11 @@ int run_gui() {
             }
         }
 
+        if (state.theme != applied_theme) {
+            applied_theme = state.theme;
+            apply_gui_theme(applied_theme);
+        }
+
         ImGui_ImplSDLRenderer2_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
@@ -134,7 +159,8 @@ int run_gui() {
         }
 
         ImGui::Render();
-        SDL_SetRenderDrawColor(renderer, 20, 22, 24, 255);
+        const SDL_Color background = clear_color(applied_theme);
+        SDL_SetRenderDrawColor(renderer, background.r, background.g, background.b, background.a);
         SDL_RenderClear(renderer);
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
         SDL_RenderPresent(renderer);

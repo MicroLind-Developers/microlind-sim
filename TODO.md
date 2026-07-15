@@ -24,13 +24,19 @@
 
 ## CPU Specification Compliance
 
-- Enforce micro-op parity with regular execution modes.
-  - Expand tests for newly converted instruction families as micro-op coverage grows.
+- Keep micro-op parity with regular execution modes.
+  - Add parity tests when new CPU instructions or timing fixes are added.
+  - Keep checking 6809 mode, HD6309 emulation mode, and HD6309 native mode.
+
+- Continue CPU implementation cleanup.
+  - Consider splitting the private `cpu_detail.hpp` helper set into smaller focused helper headers if it keeps growing.
+  - Keep `cpu.cpp`, `cpu_instructions.cpp`, and `cpu_micro_ops.cpp` aligned around shared helper behavior.
 
 - Improve cycle accuracy.
   - Continue auditing implemented 6809 and HD6309 cycle counts against `docs/hd6309ref.txt`.
   - Account for remaining MD native/emulation timing where the HD6309 differs.
   - Add more representative cycle-count tests as instruction coverage expands.
+  - Done: corrected and covered documented `JSR` direct/indexed/extended timing.
 
 - Complete interrupt execution.
   - Compare `CWAI`/`SYNC` wake-up timing against hardware traces when available.

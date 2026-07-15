@@ -39,7 +39,7 @@ void draw_power_led(const app::SerialSnapshot& serial) {
 
 void draw_file_panel(GuiState& state) {
     set_next_window_defaults(8.0f, 28.0f, 360.0f, 340.0f);
-    ImGui::Begin("Files");
+    ImGui::Begin("Files", &state.show_file_panel);
 
     ImGui::InputText("Session", state.session_path.data(), state.session_path.size());
 #ifdef MICROLIND_HAS_PORTABLE_FILE_DIALOGS
@@ -112,7 +112,7 @@ void draw_file_panel(GuiState& state) {
 
 void draw_control_panel(GuiState& state) {
     set_next_window_defaults(376.0f, 28.0f, 500.0f, 150.0f);
-    ImGui::Begin("Control");
+    ImGui::Begin("Control", &state.show_control_panel);
     if (ImGui::Button("Reset")) {
         state.stop_execution();
         state.session.reset();
@@ -155,7 +155,7 @@ void draw_control_panel(GuiState& state) {
 
 void draw_serial(GuiState& state) {
     set_next_window_defaults(944.0f, 694.0f, 480.0f, 80.0f);
-    ImGui::Begin("Serial");
+    ImGui::Begin("Serial", &state.show_serial);
     const auto serial = state.session.serial_snapshot();
     draw_power_led(serial);
     ImGui::Separator();
@@ -163,9 +163,13 @@ void draw_serial(GuiState& state) {
     ImGui::BeginDisabled(!state.session.serial_mapped());
     ImGui::Checkbox("Hex RX", &state.serial_rx_hex);
     ImGui::SameLine();
-    ImGui::InputText("RX text", state.serial_input.data(), state.serial_input.size());
+    const bool submitted = ImGui::InputText(
+        "RX text",
+        state.serial_input.data(),
+        state.serial_input.size(),
+        ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
-    if (ImGui::Button("Send")) {
+    if ((submitted && !buffer_string(state.serial_input).empty()) || ImGui::Button("Send")) {
         state.send_serial_text();
     }
     ImGui::EndDisabled();
@@ -214,7 +218,7 @@ void draw_serial(GuiState& state) {
 
 void draw_log(GuiState& state) {
     set_next_window_defaults(944.0f, 780.0f, 480.0f, 86.0f);
-    ImGui::Begin("Log");
+    ImGui::Begin("Log", &state.show_log);
     if (ImGui::Button("Clear")) {
         state.session.clear_log();
     }

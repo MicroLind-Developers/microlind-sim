@@ -6,9 +6,9 @@ namespace microlind::gui {
 
 void draw_file_panel(GuiState& state);
 void draw_control_panel(GuiState& state);
-void draw_registers(const GuiState& state);
+void draw_registers(GuiState& state);
 void draw_disassembly(GuiState& state);
-void draw_memory_map(const GuiState& state);
+void draw_memory_map(GuiState& state);
 void draw_memory_viewer(GuiState& state);
 void draw_stack(GuiState& state);
 void draw_breakpoints(GuiState& state);

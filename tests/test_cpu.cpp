@@ -1270,6 +1270,49 @@ TEST(CpuExecutionTest, LbsrUsesNativeHD6309Timing) {
     EXPECT_EQ(cpu.regs().pc, 0x0100);
 }
 
+TEST(CpuExecutionTest, JsrUsesDocumentedHD6309Timing) {
+    struct JsrCase {
+        std::string name;
+        std::vector<uint8_t> bytes;
+        uint8_t dp{};
+        uint16_t x{};
+        uint8_t md{};
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint16_t expected_return{};
+    };
+
+    const std::vector<JsrCase> cases = {
+        {"JSR direct emulation", {0x9D, 0x34}, 0x12, 0x0000, 0x00, 7, 0x1234, 0x0102},
+        {"JSR direct native", {0x9D, 0x34}, 0x12, 0x0000, 0x01, 6, 0x1234, 0x0102},
+        {"JSR indexed emulation", {0xAD, 0x84}, 0x00, 0x2345, 0x00, 7, 0x2345, 0x0102},
+        {"JSR indexed native", {0xAD, 0x84}, 0x00, 0x2345, 0x01, 6, 0x2345, 0x0102},
+        {"JSR extended emulation", {0xBD, 0x23, 0x45}, 0x00, 0x0000, 0x00, 8, 0x2345, 0x0103},
+        {"JSR extended native", {0xBD, 0x23, 0x45}, 0x00, 0x0000, 0x01, 7, 0x2345, 0x0103},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, test.bytes);
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().dp = test.dp;
+        cpu.regs().x = test.x;
+        cpu.regs().s = 0x9000;
+        cpu.regs().md = test.md;
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, test.expected_cycles);
+        EXPECT_EQ(cpu.regs().pc, test.expected_pc);
+        EXPECT_EQ(cpu.regs().s, 0x8FFE);
+        EXPECT_EQ(bus.peek8(0x8FFE), static_cast<uint8_t>((test.expected_return >> 8) & 0xFF));
+        EXPECT_EQ(bus.peek8(0x8FFF), static_cast<uint8_t>(test.expected_return & 0xFF));
+    }
+}
+
 TEST(CpuExecutionTest, UsesDocumentedIndexedCycleAdditions) {
     struct CycleCase {
         std::string name;
