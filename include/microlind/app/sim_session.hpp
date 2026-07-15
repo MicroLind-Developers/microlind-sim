@@ -108,6 +108,15 @@ struct CfSnapshot {
     std::size_t transfer_index{};
 };
 
+struct SerialSnapshot {
+    bool present{};
+    uint8_t output_port{};
+    bool led_red{};
+    bool led_green{};
+    bool led_blue{};
+    bool irq_asserted{};
+};
+
 struct LogicDecodeSnapshot {
     bool configured{};
     bool available{};
@@ -149,6 +158,7 @@ public:
     CpuTickResult step_instruction();
     SimulatorMicrocycleResult step_microcycle();
     RunResult run_instructions(uint32_t count);
+    RunResult run_microcycles(uint32_t count);
     RunResult run_until_address(uint16_t address, uint32_t max_instructions);
     RunResult run_until_return(uint32_t max_instructions);
     void tick_cycles(uint64_t cycles);
@@ -186,6 +196,7 @@ public:
     void clear_trace();
 
     [[nodiscard]] bool serial_mapped() const { return serial_dev_ != nullptr; }
+    [[nodiscard]] SerialSnapshot serial_snapshot() const;
     [[nodiscard]] std::vector<std::string> memory_map() const;
     [[nodiscard]] MapperSnapshot mapper_snapshot() const;
     [[nodiscard]] CfSnapshot cf_snapshot() const;
@@ -223,6 +234,8 @@ private:
     std::vector<Breakpoint> breakpoints_;
     std::vector<Watchpoint> watchpoints_;
     std::vector<InstructionTraceEntry> trace_;
+    std::optional<uint16_t> pending_micro_trace_pc_;
+    std::string pending_micro_trace_instruction_;
     uint64_t trace_cycle_base_{};
     std::vector<std::string> log_;
 };

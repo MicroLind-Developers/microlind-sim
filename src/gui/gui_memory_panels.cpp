@@ -179,7 +179,28 @@ void draw_mapper(GuiState& state) {
                 ImGui::TextDisabled("-");
             }
             ImGui::TableNextColumn();
-            ImGui::Text("%02X", mapper.selected_banks[i]);
+            if (mapper.bank_registers[i] != 0) {
+                uint8_t bank = mapper.selected_banks[i];
+                ImGui::PushID(i);
+                ImGui::SetNextItemWidth(48.0f);
+                if (ImGui::InputScalar(
+                        "##mapper_bank",
+                        ImGuiDataType_U8,
+                        &bank,
+                        nullptr,
+                        nullptr,
+                        "%02X",
+                        ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_AutoSelectAll)) {
+                    const uint16_t reg = mapper.bank_registers[i];
+                    state.session.write_memory(reg, bank);
+                    state.session.add_log(
+                        "Mapper window " + std::to_string(i) + " bank set to " +
+                        hex_value(bank, 2) + " via " + hex_value(reg, 4) + ".");
+                }
+                ImGui::PopID();
+            } else {
+                ImGui::TextDisabled("-");
+            }
         }
         ImGui::EndTable();
     }

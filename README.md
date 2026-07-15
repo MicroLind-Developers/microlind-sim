@@ -1,15 +1,21 @@
 # microlind-sim
 
-Early C++ skeleton for a modular, cycle-ticked HD6309/MC6809 simulator with a pluggable bus.
+C++ HD6309/MC6809 simulator for the microLind system, with a pluggable bus,
+hardware configuration, parsed PLD decode logic, CLI tools, and an ImGui/SDL
+debugger GUI.
 
 ![Microlind Simulator GUI](resources/screen.png)
 
 ## Structure
-- `include/microlind/` public headers for bus, CPU, clock, simulator, logic helper.
+- `include/microlind/` public headers for bus, CPU, clock, simulator, devices,
+  app-layer helpers, and PLD logic support.
 - `src/` implementations.
-- `src/devices/memory.cpp` simple RAM/ROM device.
-- `src/devices/compact_flash.cpp` minimal CF-ATA storage device.
-- `src/cli/` interactive CLI, image loading, hardware config parsing, and simulator setup.
+- `src/devices/` RAM/ROM, banked RAM, memory mapper, serial, IRQ controller,
+  and CompactFlash devices.
+- `src/cli/` interactive CLI, image loading, hardware config parsing, and
+  simulator setup.
+- `src/gui/` ImGui/SDL debugger GUI.
+- `docs/` hardware config, PLD logic plan, and reference material.
 
 ## Build
 ```
@@ -40,17 +46,24 @@ You can use a local Dear ImGui checkout instead with
 `-DMICROLIND_IMGUI_DIR=/path/to/imgui`, or change the fetched branch/tag with
 `-DMICROLIND_IMGUI_GIT_TAG=...`.
 
-The initial GUI is a simulator workbench with text path fields and browse
-dialogs for ROM, hardware config, and CF image loading; run, pause, step,
-step-over, run-until-address, run-until-return, registers, flags, disassembly,
-memory inspection/write, stack inspection, serial RX/TX, breakpoints,
-watchpoints, memory mapper display, instruction trace, mapped-device display,
-and an event log.
+The GUI is a simulator workbench with text path fields and browse dialogs for
+ROM, hardware config, and CF image loading. It includes run, pause, reset,
+instruction step, micro-step, step-over, run-until-address, run-until-return,
+and rate-limited Run controls. The run rate is configured as operations per
+minute and displayed as operations per second; Run can execute either full
+instructions or individual micro-steps.
+
+Debugger panels include registers, flags, disassembly with instruction bytes,
+editable memory, stack inspection, serial RX/TX, breakpoints, watchpoints,
+editable memory-mapper registers, instruction trace, mapped-device display,
+CompactFlash state, live PLD/bus decode, and an event log. The trace window is
+updated for both regular stepping and completed micro-stepped instructions.
 
 ## Hardware config
 `examples/hw.cfg` maps the current microLind memory and I/O layout: ROM, RAM,
-serial, CompactFlash, memory mapper windows, and optional PLD logic routing.
-See [docs/hardware-config.md](docs/hardware-config.md) for the full syntax.
+XR88C92 serial, CompactFlash, memory mapper windows, board IRQ register, and
+optional PLD logic routing. See [docs/hardware-config.md](docs/hardware-config.md)
+for the full syntax.
 
 A minimal CompactFlash section looks like:
 
@@ -116,14 +129,31 @@ binary/hex constants. Parsed active-low outputs are exposed as asserted logical
 signals. See `docs/logic-plan.md` for details and parser limits.
 
 ## Current CPU coverage
-- Core registers (plus 6309 E/F and MD), direct/extended/indexed addressing (common postbyte forms), DP register, CC flag updates for NZ and arithmetic flags on ALU ops.
-- Implemented instructions with cycle counts: NOP, CLRA/CLRB, LDA/B (imm/direct/extended/indexed), LDD (imm/direct/extended/indexed), STA/B/D (direct/extended/indexed), BRA/BSR plus full conditional branches, JMP/JSR (direct/extended/indexed), RTS/RTI, SWI/SWI2/SWI3, CWAI, SYNC, MUL, TFR/EXG, logical ops AND/OR/EOR/BIT on A/B (imm/direct/extended/indexed), arithmetic ADD/SUB/ADC/SBC/COMPARE on A/B (imm/direct/extended/indexed), 16-bit ADDD/SUBD/CMPD, LEA X/Y/U/S, 16-bit loads/stores for X/Y/U/S (imm/direct/extended/indexed) and compares for X/Y/U/S, stack ops PSHS/PULS/PSHU/PULU, accumulator and memory unary/shift ops (NEG/COM/LSR/ROR/ASR/ASL/ROL/DEC/INC/TST/CLR) across accumulator, direct, indexed, extended, misc ABX/SEX/ANDCC/ORCC/DAA.
-- 6309 extensions wired: W/V/Q handling; LDQ/STQ, LDW/STW, ADDW/SUBW/CMPW/INCW/DECW/TSTW/CLRW; ADDE/F/SUBE/F/CMPE/F/CMPF; ADCD/SBCD/ORD; register-register ADDR/SUBR/CMPR/ADCR/SBCR/ORR; DIVQ with div-by-zero trap to FFF0; MULD; LDMD/SEXW; TFM variants; bit immediates AIM/OIM/EIM/TIM; bit transfer/logic ops BAND/BIAND/BOR/BIOR/BEOR/BIEOR/LDBT/STBT (direct).
-- Unknown opcodes currently consume 1 cycle and do nothing; remaining TODO includes hardware-trace comparison for CWAI/SYNC wake-up timing, precise cycle tables for each indexed form, additional 6309 edge cases as they appear, and deeper interruptible TFM behavior. The microLind `$F404` IRQ register is modeled as a board-level IRQ source for instruction-boundary IRQ service and resumable IRQ stack/vector microcycles; CPU IRQ, FIRQ, and edge-latched NMI line handling is present.
+- Core registers plus HD6309 E/F/W/V/Q and MD state, DP register, condition
+  code updates, and direct/extended/indexed addressing for common 6809 and 6309
+  forms.
+- Implemented instructions include branches, jumps/subroutines, stack
+  operations, software interrupts, CWAI/SYNC, ALU/logical/compare families,
+  accumulator and memory unary/shift operations, 16-bit loads/stores/compares,
+  transfer/exchange, LEA, MUL, and many HD6309 extensions including W/Q
+  operations, register-register ALU, divide/multiply variants, LDMD/SEXW, TFM,
+  bit immediate, and bit transfer instructions.
+- MC6809 mode rejects HD6309-only opcodes. HD6309 invalid opcode paths trap
+  through `$FFF0/$FFF1` where modeled. Remaining TODO includes hardware-trace
+  comparison for CWAI/SYNC wake-up timing, continued cycle-table auditing,
+  additional 6309 edge cases as they appear, and deeper interruptible TFM
+  behavior.
+- The microLind `$F404` IRQ register is modeled as a board-level IRQ source for
+  instruction-boundary IRQ service and resumable IRQ stack/vector microcycles.
+  CPU IRQ, FIRQ, and edge-latched NMI line handling is present. The XR88C92
+  serial device can drive the IRQ controller, and its output port models the
+  microLind RGB LED wiring.
 
 ## Next steps
-- Implement the full HD6309/MC6809 core with cycle-accurate micro-ops and per-instruction timing.
-- Flesh out bus arbitration, wait states, and hardware-trace interrupt timing details.
-- Add device modules: parallel I/O, video/sound stubs, and deeper CF timing/interrupt behavior.
-- Model ATF22V10/ATF16V8 logic: parse equations and expose signal outputs per cycle; drive address decode and R/W logic from those chips.
-- Add tests for bus overlap, memory behavior, and CPU instruction timing.
+- Continue cycle-accuracy audits against reference material and hardware traces.
+- Flesh out bus arbitration, wait states, and hardware-trace interrupt timing
+  details.
+- Add device modules: parallel I/O, video/sound stubs, and deeper CF
+  timing/interrupt behavior.
+- Continue expanding tests for CPU edge cases, micro-op parity, device behavior,
+  and GUI-adjacent session state.

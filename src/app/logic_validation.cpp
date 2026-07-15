@@ -326,7 +326,9 @@ std::string generate_partial_hardware_config_from_logic(const microlind::logic::
     if (!serial.ranges.empty()) {
         out << "[SERIAL]\n";
         out << "IO_START_ADDRESS=" << config_hex(serial.ranges.front().start) << "\n";
-        out << "IO_END_ADDRESS=" << config_hex(serial.ranges.back().end) << "\n\n";
+        out << "IO_END_ADDRESS=" << config_hex(serial.ranges.back().end) << "\n";
+        out << "# Simulator default; adjust if board wiring differs.\n";
+        out << "IRQ_LEVEL=1\n\n";
     }
 
     if (!mapper.ranges.empty()) {

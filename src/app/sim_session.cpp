@@ -160,9 +160,20 @@ CpuTickResult SimSession::step_instruction() {
 }
 
 SimulatorMicrocycleResult SimSession::step_microcycle() {
+    const uint16_t pc = sim_.cpu().regs().pc;
+    const auto disasm = cli::disassemble(sim_.bus(), sim_.cpu(), pc);
     sim_.bus().clear_access_log();
     sim_.bus().clear_decode_log();
     SimulatorMicrocycleResult result = sim_.tick_microcycle();
+    if (result.instruction_started) {
+        pending_micro_trace_pc_ = pc;
+        pending_micro_trace_instruction_ = disasm.text;
+    }
+    if (result.instruction_complete && pending_micro_trace_pc_) {
+        record_trace(*pending_micro_trace_pc_, pending_micro_trace_instruction_, result.instruction_result);
+        pending_micro_trace_pc_.reset();
+        pending_micro_trace_instruction_.clear();
+    }
     for (const auto& diagnostic : sim_.bus().decode_log()) {
         add_log(diagnostic);
     }
@@ -181,6 +192,25 @@ RunResult SimSession::run_instructions(uint32_t count) {
             return result;
         }
         if (check_breakpoint(result.executed, result)) {
+            return result;
+        }
+    }
+    return result;
+}
+
+RunResult SimSession::run_microcycles(uint32_t count) {
+    RunResult result;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (!sim_.has_pending_microcycles() && check_breakpoint(result.executed, result)) {
+            return result;
+        }
+
+        const auto step = step_microcycle();
+        ++result.executed;
+        if (check_watchpoints(result)) {
+            return result;
+        }
+        if (step.instruction_complete && check_breakpoint(result.executed, result)) {
             return result;
         }
     }
@@ -275,6 +305,22 @@ bool SimSession::inject_serial_bytes(const std::vector<uint8_t>& bytes) {
     }
     add_log("Injected " + std::to_string(bytes.size()) + " serial byte(s).");
     return true;
+}
+
+SerialSnapshot SimSession::serial_snapshot() const {
+    SerialSnapshot snapshot;
+    snapshot.present = serial_dev_ != nullptr;
+    if (!serial_dev_) {
+        return snapshot;
+    }
+
+    const auto led = serial_dev_->rgb_led();
+    snapshot.output_port = serial_dev_->output_port();
+    snapshot.led_red = led.red;
+    snapshot.led_green = led.green;
+    snapshot.led_blue = led.blue;
+    snapshot.irq_asserted = serial_dev_->irq_asserted();
+    return snapshot;
 }
 
 bool SimSession::add_breakpoint(uint16_t address, std::string label) {
@@ -440,6 +486,8 @@ void SimSession::set_watchpoints(std::vector<Watchpoint> watchpoints) {
 
 void SimSession::clear_trace() {
     trace_.clear();
+    pending_micro_trace_pc_.reset();
+    pending_micro_trace_instruction_.clear();
     trace_cycle_base_ = sim_.clock().total_cycles();
 }
 

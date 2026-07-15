@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <exception>
 
@@ -68,8 +69,15 @@ int run_gui() {
         state.session.add_log("Could not load About logo: resources/mlsim_logo.png");
     }
     bool done = false;
+    uint64_t last_counter = SDL_GetPerformanceCounter();
+    double operation_budget = 0.0;
 
     while (!done) {
+        const uint64_t now_counter = SDL_GetPerformanceCounter();
+        const double elapsed_seconds =
+            static_cast<double>(now_counter - last_counter) / static_cast<double>(SDL_GetPerformanceFrequency());
+        last_counter = now_counter;
+
         SDL_Event event;
         while (SDL_PollEvent(&event) != 0) {
             ImGui_ImplSDL2_ProcessEvent(&event);
@@ -85,17 +93,34 @@ int run_gui() {
             }
         }
 
-        if (state.run_until_active) {
+        const bool timed_run_active = state.run_until_active || state.running;
+        if (timed_run_active) {
+            operation_budget += elapsed_seconds * state.operations_per_second();
+            operation_budget = std::min(operation_budget, 1000.0);
+        } else {
+            operation_budget = 0.0;
+        }
+
+        const auto operations_to_run = static_cast<uint32_t>(std::min(operation_budget, 1000.0));
+        if (operations_to_run > 0) {
+            operation_budget -= static_cast<double>(operations_to_run);
+        }
+
+        if (state.run_until_active && operations_to_run > 0) {
             const auto result = state.session.run_until_address(
                 static_cast<uint16_t>(state.run_until_address),
-                static_cast<uint32_t>(state.steps_per_frame));
+                operations_to_run);
             if (result.hit_target || result.hit_breakpoint || result.hit_watchpoint) {
                 state.run_until_active = false;
+                operation_budget = 0.0;
             }
-        } else if (state.running) {
-            const auto result = state.session.run_instructions(static_cast<uint32_t>(state.steps_per_frame));
+        } else if (state.running && operations_to_run > 0) {
+            const auto result = state.run_micro_steps
+                ? state.session.run_microcycles(operations_to_run)
+                : state.session.run_instructions(operations_to_run);
             if (result.hit_breakpoint || result.hit_watchpoint) {
                 state.running = false;
+                operation_budget = 0.0;
             }
         }
 

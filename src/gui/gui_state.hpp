@@ -72,7 +72,7 @@ struct GuiState {
     int rom_format_index{1};
     int raw_base{0x8000};
     int cf_min_sectors{0};
-    int steps_per_frame{100};
+    int operations_per_minute{600};
     int memory_start{0x0000};
     int memory_rows{16};
     bool memory_follow_pc{false};
@@ -90,6 +90,7 @@ struct GuiState {
     bool pld_follow_pc{true};
     bool pld_read{true};
     bool running{false};
+    bool run_micro_steps{false};
     bool run_until_active{false};
     bool quit_requested{false};
     bool about_open{false};
@@ -142,7 +143,7 @@ struct GuiState {
         rom_format_index = rom_format_combo_index(loaded->rom_format);
         raw_base = loaded->raw_base;
         cf_min_sectors = static_cast<int>(loaded->cf_sectors);
-        steps_per_frame = loaded->gui.steps_per_frame;
+        operations_per_minute = loaded->gui.operations_per_minute;
         memory_start = loaded->gui.memory_start;
         memory_rows = loaded->gui.memory_rows;
         memory_follow_pc = loaded->gui.memory_follow_pc;
@@ -152,6 +153,7 @@ struct GuiState {
         stack_follow_pointer = loaded->gui.stack_follow_pointer;
         serial_hex_view = loaded->gui.serial_hex_view;
         serial_rx_hex = loaded->gui.serial_rx_hex;
+        run_micro_steps = loaded->gui.run_micro_steps;
 
         const bool config_ok = session.load_hardware_config(loaded->config_path);
         const bool rom_ok = config_ok && session.load_rom(loaded->rom_path, loaded->rom_format, loaded->raw_base);
@@ -186,7 +188,8 @@ struct GuiState {
         definition.mode = session.mode();
         definition.breakpoints = session.breakpoints();
         definition.watchpoints = session.watchpoints();
-        definition.gui.steps_per_frame = steps_per_frame;
+        definition.gui.operations_per_minute = operations_per_minute;
+        definition.gui.run_micro_steps = run_micro_steps;
         definition.gui.memory_start = static_cast<uint16_t>(memory_start);
         definition.gui.memory_rows = memory_rows;
         definition.gui.memory_follow_pc = memory_follow_pc;
@@ -268,6 +271,10 @@ struct GuiState {
         if (running) {
             run_until_active = false;
         }
+    }
+
+    double operations_per_second() const {
+        return static_cast<double>(std::max(operations_per_minute, 0)) / 60.0;
     }
 
     void step_over() {

@@ -59,6 +59,58 @@ TEST(SimSessionTest, ReportsExplicitMapperWindowsAndCompactFlashSnapshot) {
     EXPECT_EQ(cf.transfer_mode, microlind::app::CfTransferMode::None);
 }
 
+TEST(SimSessionTest, MapperRegisterWritesSwitchVisibleRamBank) {
+    auto session = loaded_session();
+
+    auto mapper = session.mapper_snapshot();
+    ASSERT_TRUE(mapper.present);
+    ASSERT_EQ(mapper.bank_registers[0], 0xF400);
+
+    session.write_memory(0xF400, 0x00);
+    session.write_memory(0x0000, 0x11);
+    EXPECT_EQ(session.peek_memory(0x0000), 0x11);
+
+    session.write_memory(0xF400, 0x01);
+    mapper = session.mapper_snapshot();
+    EXPECT_EQ(mapper.selected_banks[0], 0x01);
+    session.write_memory(0x0000, 0x22);
+    EXPECT_EQ(session.peek_memory(0x0000), 0x22);
+
+    session.write_memory(0xF400, 0x00);
+    mapper = session.mapper_snapshot();
+    EXPECT_EQ(mapper.selected_banks[0], 0x00);
+    EXPECT_EQ(session.peek_memory(0x0000), 0x11);
+
+    session.write_memory(0xF400, 0x01);
+    EXPECT_EQ(session.peek_memory(0x0000), 0x22);
+}
+
+TEST(SimSessionTest, ReportsSerialLedSnapshotForGui) {
+    auto session = loaded_session();
+
+    auto serial = session.serial_snapshot();
+    ASSERT_TRUE(serial.present);
+    EXPECT_EQ(serial.output_port, 0x00);
+    EXPECT_FALSE(serial.led_red);
+    EXPECT_FALSE(serial.led_green);
+    EXPECT_FALSE(serial.led_blue);
+
+    session.write_memory(0xF43E, 0x50);
+    serial = session.serial_snapshot();
+    EXPECT_EQ(serial.output_port, 0x50);
+    EXPECT_TRUE(serial.led_red);
+    EXPECT_FALSE(serial.led_green);
+    EXPECT_TRUE(serial.led_blue);
+
+    session.write_memory(0xF43E, 0x20);
+    session.write_memory(0xF43F, 0x10);
+    serial = session.serial_snapshot();
+    EXPECT_EQ(serial.output_port, 0x60);
+    EXPECT_FALSE(serial.led_red);
+    EXPECT_TRUE(serial.led_green);
+    EXPECT_TRUE(serial.led_blue);
+}
+
 TEST(SimSessionTest, ReportsPldLogicDecodeSnapshotForGui) {
     auto session = loaded_session();
 
@@ -93,6 +145,26 @@ TEST(SimSessionTest, StepsSingleMicrocycleForGui) {
     EXPECT_EQ(sim.bus().access_log().front().address, 0xFF00);
     EXPECT_EQ(sim.bus().access_log().front().cycle_kind, microlind::BusCycleKind::OpcodeFetch);
     EXPECT_EQ(result.signals.cycle_kind, microlind::BusCycleKind::OpcodeFetch);
+}
+
+TEST(SimSessionTest, RecordsTraceWhenMicroSteppedInstructionCompletes) {
+    auto session = loaded_session();
+
+    auto result = session.step_microcycle();
+    ASSERT_TRUE(result.emitted);
+    EXPECT_TRUE(result.instruction_started);
+    EXPECT_FALSE(result.instruction_complete);
+    EXPECT_TRUE(session.trace().empty());
+
+    for (int i = 0; i < 16 && !result.instruction_complete; ++i) {
+        result = session.step_microcycle();
+    }
+
+    ASSERT_TRUE(result.instruction_complete);
+    ASSERT_THAT(session.trace(), SizeIs(1));
+    EXPECT_EQ(session.trace().front().pc, 0xFF00);
+    EXPECT_EQ(session.trace().front().instruction, "jmp ext $ff03");
+    EXPECT_EQ(session.trace().front().cycles, result.instruction_result.cycles);
 }
 
 TEST(SimSessionTest, MergesReadWriteWatchpointsAndStopsOnHit) {
@@ -321,7 +393,8 @@ TEST(SessionFileTest, LoadsPathsLayoutAndPersistedDebuggerState) {
         file << "STACK_FOLLOW=false\n";
         file << "SERIAL_HEX_VIEW=true\n";
         file << "SERIAL_RX_HEX=on\n";
-        file << "STEPS_PER_FRAME=250\n";
+        file << "OPERATIONS_PER_MINUTE=250\n";
+        file << "RUN_MICRO_STEPS=true\n";
         file << "BREAKPOINT=0xFF00;ENABLED=false;HITS=7;LABEL_HEX=456E747279\n";
         file << "WATCHPOINT=0xF430;TYPE=RW;ENABLED=1;HITS=3;LABEL_HEX=53657269616C\n";
     }
@@ -348,7 +421,8 @@ TEST(SessionFileTest, LoadsPathsLayoutAndPersistedDebuggerState) {
     EXPECT_FALSE(loaded->gui.stack_follow_pointer);
     EXPECT_TRUE(loaded->gui.serial_hex_view);
     EXPECT_TRUE(loaded->gui.serial_rx_hex);
-    EXPECT_EQ(loaded->gui.steps_per_frame, 250);
+    EXPECT_EQ(loaded->gui.operations_per_minute, 250);
+    EXPECT_TRUE(loaded->gui.run_micro_steps);
 
     ASSERT_THAT(loaded->breakpoints, SizeIs(1));
     EXPECT_EQ(loaded->breakpoints.front().address, 0xFF00);
@@ -362,6 +436,22 @@ TEST(SessionFileTest, LoadsPathsLayoutAndPersistedDebuggerState) {
     EXPECT_TRUE(loaded->watchpoints.front().enabled);
     EXPECT_EQ(loaded->watchpoints.front().hits, 3u);
     EXPECT_EQ(loaded->watchpoints.front().label, "Serial");
+}
+
+TEST(SessionFileTest, LoadsLegacyStepsPerFrameAsOperationsPerMinute) {
+    const auto path = test_output_path("legacy-steps.session");
+    {
+        std::ofstream file(path);
+        file << "[Session]\n";
+        file << "CONFIG=configs/hw.cfg\n";
+        file << "ROM=roms/test.ihex\n";
+        file << "STEPS_PER_FRAME=250\n";
+    }
+
+    std::string error;
+    const auto loaded = microlind::app::load_session_definition(path, error);
+    ASSERT_TRUE(loaded) << error;
+    EXPECT_EQ(loaded->gui.operations_per_minute, 250);
 }
 
 TEST(SessionFileTest, SavesAndReloadsPersistedDebuggerState) {
@@ -387,7 +477,8 @@ TEST(SessionFileTest, SavesAndReloadsPersistedDebuggerState) {
     session.gui.stack_follow_pointer = true;
     session.gui.serial_hex_view = true;
     session.gui.serial_rx_hex = false;
-    session.gui.steps_per_frame = 123;
+    session.gui.operations_per_minute = 123;
+    session.gui.run_micro_steps = true;
     session.breakpoints.push_back(microlind::app::Breakpoint{0xFF00, false, "Main entry", 11});
     session.watchpoints.push_back(
         microlind::app::Watchpoint{0xF433, microlind::app::WatchpointType::Write, true, "Serial TX", 4});
@@ -403,7 +494,8 @@ TEST(SessionFileTest, SavesAndReloadsPersistedDebuggerState) {
     EXPECT_EQ(loaded->layout_ini, session.layout_ini);
     EXPECT_EQ(loaded->gui.memory_start, session.gui.memory_start);
     EXPECT_EQ(loaded->gui.stack_start, session.gui.stack_start);
-    EXPECT_EQ(loaded->gui.steps_per_frame, session.gui.steps_per_frame);
+    EXPECT_EQ(loaded->gui.operations_per_minute, session.gui.operations_per_minute);
+    EXPECT_EQ(loaded->gui.run_micro_steps, session.gui.run_micro_steps);
 
     ASSERT_THAT(loaded->breakpoints, SizeIs(1));
     EXPECT_EQ(loaded->breakpoints.front().address, 0xFF00);

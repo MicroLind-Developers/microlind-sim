@@ -91,7 +91,7 @@ void draw_status_bar(GuiState& state) {
         const auto& sim = state.session.simulator();
         const char* run_state = sim.has_pending_microcycles()
             ? "micro"
-            : (state.run_until_active ? "until" : (state.running ? "running" : "paused"));
+            : (state.run_until_active ? "until" : (state.running ? (state.run_micro_steps ? "running micro" : "running") : "paused"));
         ImGui::Text("State: %s", run_state);
         ImGui::SameLine();
         ImGui::TextUnformatted("|");

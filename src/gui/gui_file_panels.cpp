@@ -8,6 +8,34 @@
 #include "imgui.h"
 
 namespace microlind::gui {
+namespace {
+
+ImVec4 serial_led_color(const app::SerialSnapshot& serial) {
+    if (!serial.present) {
+        return ImVec4(0.16f, 0.16f, 0.16f, 1.0f);
+    }
+    const float red = serial.led_red ? 0.95f : 0.08f;
+    const float green = serial.led_green ? 0.95f : 0.08f;
+    const float blue = serial.led_blue ? 0.95f : 0.08f;
+    return ImVec4(red, green, blue, 1.0f);
+}
+
+void draw_power_led(const app::SerialSnapshot& serial) {
+    ImGui::TextUnformatted("Power LED");
+    ImGui::SameLine();
+    ImGui::ColorButton(
+        "##serial_power_led",
+        serial_led_color(serial),
+        ImGuiColorEditFlags_NoPicker | ImGuiColorEditFlags_NoDragDrop,
+        ImVec2(20.0f, 20.0f));
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("OP4 red, OP5 green, OP6 blue");
+    }
+    ImGui::SameLine();
+    ImGui::Text("OP $%02X", serial.output_port);
+}
+
+} // namespace
 
 void draw_file_panel(GuiState& state) {
     set_next_window_defaults(8.0f, 28.0f, 360.0f, 340.0f);
@@ -105,7 +133,9 @@ void draw_control_panel(GuiState& state) {
     if (ImGui::Button(state.running ? "Pause" : "Run")) {
         state.toggle_run();
     }
-    ImGui::SliderInt("Steps/frame", &state.steps_per_frame, 1, 5000);
+    ImGui::SliderInt("Operations/min", &state.operations_per_minute, 10, 6000);
+    ImGui::Text("Frequency: %.2f operations/s", state.operations_per_second());
+    ImGui::Checkbox("Micro-step run", &state.run_micro_steps);
     ImGui::InputInt("Run until", &state.run_until_address, 1, 256, ImGuiInputTextFlags_CharsHexadecimal);
     state.run_until_address = std::clamp(state.run_until_address, 0, 0xFFFF);
     if (ImGui::Button(state.run_until_active ? "Stop Until" : "Run Until")) {
@@ -126,6 +156,10 @@ void draw_control_panel(GuiState& state) {
 void draw_serial(GuiState& state) {
     set_next_window_defaults(944.0f, 694.0f, 480.0f, 80.0f);
     ImGui::Begin("Serial");
+    const auto serial = state.session.serial_snapshot();
+    draw_power_led(serial);
+    ImGui::Separator();
+
     ImGui::BeginDisabled(!state.session.serial_mapped());
     ImGui::Checkbox("Hex RX", &state.serial_rx_hex);
     ImGui::SameLine();

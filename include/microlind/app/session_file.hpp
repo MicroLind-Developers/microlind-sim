@@ -24,7 +24,8 @@ struct GuiSessionState {
     bool stack_follow_pointer{true};
     bool serial_hex_view{};
     bool serial_rx_hex{};
-    int steps_per_frame{100};
+    int operations_per_minute{600};
+    bool run_micro_steps{};
 };
 
 struct SessionDefinition {

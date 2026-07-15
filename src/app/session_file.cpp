@@ -409,13 +409,20 @@ std::optional<SessionDefinition> load_session_definition(const std::filesystem::
                 return std::nullopt;
             }
             session.gui.serial_rx_hex = *parsed;
-        } else if (cli::iequals(key, "STEPS_PER_FRAME")) {
+        } else if (cli::iequals(key, "OPERATIONS_PER_MINUTE") || cli::iequals(key, "STEPS_PER_FRAME")) {
             const auto parsed = cli::parse_number(value);
             if (!parsed) {
-                error = "Bad STEPS_PER_FRAME at line " + std::to_string(lineno);
+                error = "Bad " + key + " at line " + std::to_string(lineno);
                 return std::nullopt;
             }
-            session.gui.steps_per_frame = static_cast<int>(*parsed);
+            session.gui.operations_per_minute = static_cast<int>(*parsed);
+        } else if (cli::iequals(key, "RUN_MICRO_STEPS")) {
+            const auto parsed = parse_bool(value);
+            if (!parsed) {
+                error = "Bad RUN_MICRO_STEPS at line " + std::to_string(lineno);
+                return std::nullopt;
+            }
+            session.gui.run_micro_steps = *parsed;
         } else if (cli::iequals(key, "BREAKPOINT")) {
             auto breakpoint = parse_breakpoint(value, error, lineno);
             if (!breakpoint) return std::nullopt;
@@ -474,7 +481,8 @@ bool save_session_definition(const std::filesystem::path& path, const SessionDef
     file << "STACK_FOLLOW=" << (session.gui.stack_follow_pointer ? "true" : "false") << '\n';
     file << "SERIAL_HEX_VIEW=" << (session.gui.serial_hex_view ? "true" : "false") << '\n';
     file << "SERIAL_RX_HEX=" << (session.gui.serial_rx_hex ? "true" : "false") << '\n';
-    file << "STEPS_PER_FRAME=" << session.gui.steps_per_frame << '\n';
+    file << "OPERATIONS_PER_MINUTE=" << session.gui.operations_per_minute << '\n';
+    file << "RUN_MICRO_STEPS=" << (session.gui.run_micro_steps ? "true" : "false") << '\n';
 
     for (const auto& breakpoint : session.breakpoints) {
         file << "BREAKPOINT=0x" << cli::hex4(breakpoint.address)

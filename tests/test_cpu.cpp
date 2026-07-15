@@ -11,6 +11,7 @@
 #include "microlind/cpu.hpp"
 #include "microlind/devices/interrupt_controller.hpp"
 #include "microlind/devices/memory.hpp"
+#include "microlind/devices/serial.hpp"
 #include "microlind/simulator.hpp"
 
 #include "test_harness.hpp"
@@ -95,9 +96,142 @@ TEST(InterruptControllerTest, ReportsPendingLevelAndMaskAndAssertsAboveMask) {
     irq.write8(0, 0x10);
     EXPECT_TRUE(irq.irq_asserted());
     irq.clear(3);
+    EXPECT_EQ(irq.peek8(0), 0x12);
+    EXPECT_TRUE(irq.irq_asserted());
+    EXPECT_TRUE(irq_line);
+
+    irq.clear(2);
     EXPECT_EQ(irq.peek8(0), 0x10);
     EXPECT_FALSE(irq.irq_asserted());
     EXPECT_FALSE(irq_line);
+}
+
+TEST(InterruptControllerTest, TracksIndependentRequestLevels) {
+    bool irq_line = false;
+    microlind::devices::InterruptController irq([&](bool asserted) {
+        irq_line = asserted;
+    });
+
+    irq.write8(0, 0x20);
+
+    irq.request(1);
+    EXPECT_EQ(irq.request_mask(), 0x0002);
+    EXPECT_EQ(irq.pending_level(), 1);
+    EXPECT_FALSE(irq.irq_asserted());
+    EXPECT_FALSE(irq_line);
+
+    irq.request(4);
+    EXPECT_EQ(irq.request_mask(), 0x0012);
+    EXPECT_EQ(irq.pending_level(), 4);
+    EXPECT_TRUE(irq.irq_asserted());
+    EXPECT_TRUE(irq_line);
+
+    irq.clear(4);
+    EXPECT_EQ(irq.request_mask(), 0x0002);
+    EXPECT_EQ(irq.pending_level(), 1);
+    EXPECT_FALSE(irq.irq_asserted());
+    EXPECT_FALSE(irq_line);
+
+    irq.request(3);
+    EXPECT_EQ(irq.pending_level(), 3);
+    EXPECT_TRUE(irq.irq_asserted());
+    EXPECT_TRUE(irq_line);
+
+    irq.clear(1);
+    EXPECT_EQ(irq.pending_level(), 3);
+    EXPECT_TRUE(irq.irq_asserted());
+    EXPECT_TRUE(irq_line);
+
+    irq.clear(3);
+    EXPECT_EQ(irq.request_mask(), 0x0000);
+    EXPECT_EQ(irq.pending_level(), 0);
+    EXPECT_FALSE(irq.irq_asserted());
+    EXPECT_FALSE(irq_line);
+}
+
+TEST(SerialDeviceTest, OutputPortControlsRgbLed) {
+    microlind::devices::XR88C92 serial;
+
+    serial.write8(0x0E, 0x50);
+    EXPECT_EQ(serial.output_port(), 0x50);
+    auto led = serial.rgb_led();
+    EXPECT_TRUE(led.red);
+    EXPECT_FALSE(led.green);
+    EXPECT_TRUE(led.blue);
+
+    serial.write8(0x0E, 0x20);
+    EXPECT_EQ(serial.output_port(), 0x70);
+    led = serial.rgb_led();
+    EXPECT_TRUE(led.red);
+    EXPECT_TRUE(led.green);
+    EXPECT_TRUE(led.blue);
+
+    serial.write8(0x0F, 0x50);
+    EXPECT_EQ(serial.output_port(), 0x20);
+    EXPECT_EQ(serial.read8(0x0E), 0x20);
+    EXPECT_EQ(serial.peek8(0x0F), 0x20);
+    led = serial.rgb_led();
+    EXPECT_FALSE(led.red);
+    EXPECT_TRUE(led.green);
+    EXPECT_FALSE(led.blue);
+}
+
+TEST(SerialDeviceTest, RxReadyInterruptFollowsImrAndFifo) {
+    bool irq_line = false;
+    microlind::devices::XR88C92 serial(nullptr, [&](bool asserted) {
+        irq_line = asserted;
+    });
+
+    EXPECT_EQ(serial.interrupt_status() & 0x01, 0x01);
+    EXPECT_FALSE(serial.irq_asserted());
+    EXPECT_FALSE(irq_line);
+
+    serial.write8(0x05, 0x02);
+    EXPECT_FALSE(serial.irq_asserted());
+    EXPECT_FALSE(irq_line);
+
+    serial.inject_rx(0x41);
+    EXPECT_TRUE(serial.irq_asserted());
+    EXPECT_TRUE(irq_line);
+    EXPECT_EQ(serial.read8(0x05) & 0x02, 0x02);
+
+    EXPECT_EQ(serial.read8(0x03), 0x41);
+    EXPECT_FALSE(serial.irq_asserted());
+    EXPECT_FALSE(irq_line);
+
+    serial.write8(0x05, 0x01);
+    EXPECT_TRUE(serial.irq_asserted());
+    EXPECT_TRUE(irq_line);
+
+    serial.write8(0x05, 0x00);
+    EXPECT_FALSE(serial.irq_asserted());
+    EXPECT_FALSE(irq_line);
+}
+
+TEST(SerialDeviceTest, SerialIrqCanDriveInterruptController) {
+    bool cpu_irq_line = false;
+    microlind::devices::InterruptController irq([&](bool asserted) {
+        cpu_irq_line = asserted;
+    });
+    microlind::devices::XR88C92 serial(nullptr, [&](bool asserted) {
+        if (asserted) {
+            irq.request(1);
+        } else {
+            irq.clear(1);
+        }
+    });
+
+    irq.write8(0, 0x00);
+    serial.write8(0x05, 0x02);
+    EXPECT_FALSE(cpu_irq_line);
+
+    serial.inject_rx(0x41);
+    EXPECT_EQ(irq.pending_level(), 1);
+    EXPECT_TRUE(cpu_irq_line);
+
+    EXPECT_EQ(serial.read8(0x03), 0x41);
+    EXPECT_EQ(irq.pending_level(), 0);
+    EXPECT_FALSE(cpu_irq_line);
 }
 
 TEST(CpuExecutionTest, HD6309InvalidOpcodeTrapsThroughFFF0Vector) {

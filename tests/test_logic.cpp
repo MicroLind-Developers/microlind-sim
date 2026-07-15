@@ -290,6 +290,8 @@ TEST(BoardLogicTest, MatchesConfiguredHardwareMapForRepresentativeAddresses) {
     EXPECT_EQ(cfg->logic.memory_logic_path, std::filesystem::path("examples/mem-logic.pld"));
     EXPECT_EQ(cfg->logic.address_logic_path, std::filesystem::path("examples/address-logic.pld"));
     EXPECT_EQ(cfg->logic.bus_mode, microlind::BusDecodeMode::Route);
+    ASSERT_TRUE(cfg->serial.present);
+    EXPECT_EQ(cfg->serial.irq_level, 1);
     const auto devices = load_board_logic_devices();
 
     const auto issues = microlind::cli::validate_hardware_config_against_logic(*cfg, devices);

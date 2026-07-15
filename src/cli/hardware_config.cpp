@@ -130,6 +130,8 @@ std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& 
                 if (auto v = parse_number(value)) cfg.serial.start = static_cast<uint16_t>(*v); else { error = "Bad IO_START_ADDRESS at line " + std::to_string(lineno); return std::nullopt; }
             } else if (iequals(key, "IO_END_ADDRESS")) {
                 if (auto v = parse_number(value)) cfg.serial.end = static_cast<uint16_t>(*v); else { error = "Bad IO_END_ADDRESS at line " + std::to_string(lineno); return std::nullopt; }
+            } else if (iequals(key, "IRQ_LEVEL")) {
+                if (auto v = parse_number(value); v && *v <= 0x0F) cfg.serial.irq_level = static_cast<uint8_t>(*v); else { error = "Bad SERIAL IRQ_LEVEL at line " + std::to_string(lineno); return std::nullopt; }
             }
         } else if (section == Section::Cf) {
             cfg.cf.present = true;

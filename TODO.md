@@ -19,7 +19,6 @@
   - Add more HD6309 indexed-mode tests as edge cases appear.
 
 - Update documentation.
-  - Document building and running the GUI.
   - Document the session file format.
   - Add a short debugger workflow section.
 
@@ -40,7 +39,12 @@
   - Consider modeling interruptible transfer behavior.
   - Be careful with memory-mapped I/O reads that may be repeated after an interrupt.
 
-## Other TODOs
+## Device Models
 
-- Add support for changing values in:
-  - Memory Mapper Registers, to be able to test RAM banking behaviour.
+- Add deeper Serial/XR88C92 behavior as software needs it.
+  - Model more channel B behavior if used.
+  - Audit interrupt/status register details against the datasheet.
+
+- Add device modules for remaining board peripherals.
+  - Parallel I/O.
+  - Video/sound stubs.

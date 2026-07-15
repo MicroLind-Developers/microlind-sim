@@ -77,12 +77,19 @@ writable memory device.
 [SERIAL]
 IO_START_ADDRESS=0xF430
 IO_END_ADDRESS=0xF43F
+IRQ_LEVEL=1
 ```
 
 Keys:
 
 - `IO_START_ADDRESS`: first serial I/O register address.
 - `IO_END_ADDRESS`: last serial I/O register address.
+- `IRQ_LEVEL`: optional microLind IRQ controller level asserted by the serial
+  device when an enabled XR88C92 interrupt is pending. Defaults to `1`.
+
+The XR88C92 output port also models the microLind RGB LED wiring: setting
+`STCR_SOPR`/OP4 turns red on, OP5 turns green on, and OP6 turns blue on.
+Writing the same bits to `SPCR_ROPR` turns them off.
 
 ## CompactFlash
 

@@ -27,6 +27,7 @@ struct RamConfig {
 struct SerialConfig {
     uint16_t start{};
     uint16_t end{};
+    uint8_t irq_level{1};
     bool present{false};
 };
 

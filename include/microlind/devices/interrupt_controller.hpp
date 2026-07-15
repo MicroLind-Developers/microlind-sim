@@ -22,13 +22,16 @@ public:
     void clear(uint8_t level);
 
     [[nodiscard]] uint8_t pending_level() const { return pending_level_; }
+    [[nodiscard]] uint16_t request_mask() const { return request_mask_; }
     [[nodiscard]] uint8_t mask() const { return mask_; }
     [[nodiscard]] bool irq_asserted() const;
 
 private:
+    void refresh_pending_level();
     void update_irq_line();
 
     uint8_t pending_level_{};
+    uint16_t request_mask_{};
     uint8_t mask_{0x0F};
     bool last_irq_asserted_{};
     IrqLineCallback on_irq_change_;

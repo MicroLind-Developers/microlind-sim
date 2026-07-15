@@ -139,8 +139,18 @@ Simulator build_sim(
     BankedMemory::BackingStore banked_ram_store;
     std::vector<AddressRange> ram_overlays;
     XR88C92* serial_dev_raw = nullptr;
+    InterruptController* irq_controller_raw = nullptr;
+    std::unique_ptr<InterruptController> irq_controller;
     CompactFlash* cf_dev_raw = nullptr;
     std::shared_ptr<microlind::logic::BoardLogicDevices> logic_devices;
+
+    if (cfg) {
+        const auto irq_line = sim.cpu().irq_line_state();
+        irq_controller = std::make_unique<InterruptController>([irq_line](bool asserted) {
+            *irq_line = asserted;
+        });
+        irq_controller_raw = irq_controller.get();
+    }
 
     if (cfg && cfg->logic.present && diagnostics_out) {
         std::string error;
@@ -303,7 +313,17 @@ Simulator build_sim(
                 std::cout << "> " << std::flush;
             };
         }
-        auto serial_up = std::make_unique<XR88C92>(on_tx);
+        auto on_irq = [irq_controller_raw, irq_level = cfg->serial.irq_level](bool asserted) {
+            if (!irq_controller_raw || irq_level == 0) {
+                return;
+            }
+            if (asserted) {
+                irq_controller_raw->request(irq_level);
+            } else {
+                irq_controller_raw->clear(irq_level);
+            }
+        };
+        auto serial_up = std::make_unique<XR88C92>(on_tx, on_irq);
         serial_dev_raw = serial_up.get();
         sim.map_device(cfg->serial.start, cfg->serial.end, BusDeviceSelect::Serial, std::move(serial_up));
     }
@@ -346,15 +366,12 @@ Simulator build_sim(
         }
     }
 
-    if (cfg) {
-        const auto irq_line = sim.cpu().irq_line_state();
+    if (irq_controller) {
         sim.map_device(
             0xF404,
             0xF404,
             BusDeviceSelect::InterruptController,
-            std::make_unique<InterruptController>([irq_line](bool asserted) {
-                *irq_line = asserted;
-            }));
+            std::move(irq_controller));
     }
 
     if (cfg && cfg->logic.present && logic_devices && cfg->logic.bus_mode != BusDecodeMode::RangeMap) {

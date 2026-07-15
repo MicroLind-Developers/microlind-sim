@@ -16,6 +16,9 @@ The simulator GUI is an ImGui/SDL application that runs beside the CLI and provi
 
 - Reset the simulated machine.
 - Run, pause, and single-step instructions.
+- Run full instructions or individual micro-steps.
+- Rate-limit Run by operations per minute with a live operations-per-second
+  frequency label.
 - Step over subroutine calls.
 - Run until return.
 - Run until a chosen address.
@@ -47,15 +50,23 @@ The simulator GUI is an ImGui/SDL application that runs beside the CLI and provi
 - Add labels and inspect hit counts for breakpoints and watchpoints.
 - Stop execution on watchpoint hits.
 - Instruction trace window with newest entries at the top.
+- Trace entries are recorded for regular stepping and for completed
+  micro-stepped instructions.
 - Trace cycle counts reset on reset/clear.
 
 ## Device Panels
 
-- Memory mapper panel showing mapper presence, bank size, bank registers, selected banks, and visible windows.
+- Memory mapper panel showing mapper presence, bank size, bank registers,
+  selected banks, and visible windows.
+- Editable memory mapper bank registers for testing RAM banking behavior through
+  the normal bus/device path.
 - CompactFlash panel showing image path, sector count, status/error registers, selected LBA, command state, and transfer progress.
-- Serial panel with terminal view, raw hex view, RX text injection, RX hex-byte injection, and TX clear.
+- Serial panel with terminal view, raw hex view, RX text injection, RX hex-byte
+  injection, TX clear, output-port byte display, and RGB power LED display.
 
 ## Diagnostics
 
 - Log window for session actions, load/save messages, run events, and debugger notifications.
-- GTest coverage for app-layer session behavior, watchpoints, mapper/CompactFlash snapshots, and disassembler formatting.
+- GTest coverage for app-layer session behavior, watchpoints,
+  mapper/CompactFlash/serial snapshots, micro-step trace behavior, session
+  persistence, and disassembler formatting.
