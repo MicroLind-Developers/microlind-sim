@@ -18,6 +18,82 @@ bool is_native_hd6309(const Registers& regs, CpuMode mode) {
     return mode == CpuMode::HD6309 && (regs.md & 0x01) != 0;
 }
 
+uint8_t direct_alu_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 3 : 4;
+}
+
+uint8_t extended_alu_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 4 : 5;
+}
+
+uint8_t d_alu_immediate_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 3 : 4;
+}
+
+uint8_t d_alu_direct_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 4 : 6;
+}
+
+uint8_t d_alu_extended_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 5 : 7;
+}
+
+uint8_t cmpd_immediate_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 4 : 5;
+}
+
+uint8_t cmpd_direct_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 5 : 7;
+}
+
+uint8_t cmpd_extended_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 6 : 8;
+}
+
+uint8_t cmpx_immediate_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 3 : 4;
+}
+
+uint8_t cmpx_direct_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 4 : 6;
+}
+
+uint8_t cmpx_extended_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 5 : 7;
+}
+
+uint8_t prefixed_cmp16_immediate_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 4 : 5;
+}
+
+uint8_t prefixed_cmp16_direct_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 5 : 7;
+}
+
+uint8_t prefixed_cmp16_extended_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 6 : 8;
+}
+
+uint8_t x_u_word_direct_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 4 : 5;
+}
+
+uint8_t x_u_word_extended_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 5 : 6;
+}
+
+uint8_t y_word_immediate_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 4 : 5;
+}
+
+uint8_t y_s_word_direct_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 5 : 6;
+}
+
+uint8_t y_s_word_extended_cycles(const Registers& regs, CpuMode mode) {
+    return is_native_hd6309(regs, mode) ? 6 : 7;
+}
+
 uint16_t read_word(Bus& bus, uint16_t address, BusCycleKind cycle_kind = BusCycleKind::OperandRead) {
     return static_cast<uint16_t>(
         (bus.read8(address, cycle_kind) << 8) |
@@ -675,6 +751,20 @@ uint8_t Cpu::op_lbsr(Bus& bus) {
     return is_native_hd6309(regs_, mode_) ? 7 : 9;
 }
 
+uint8_t Cpu::op_brn(Bus& bus) {
+    (void)fetch_byte(bus);
+    return 2;
+}
+
+uint8_t Cpu::long_branch_if(Bus& bus, bool take) {
+    const int32_t offset = sign_extend16(fetch_word(bus));
+    if (take) {
+        regs_.pc = static_cast<uint16_t>(regs_.pc + offset);
+        return 6;
+    }
+    return 5;
+}
+
 uint8_t Cpu::op_bne(Bus& bus) {
     return branch_if(bus, (regs_.cc & CC_Z) == 0);
 }
@@ -695,6 +785,32 @@ uint8_t Cpu::op_bgt(Bus& bus) { return branch_if(bus, (regs_.cc & CC_Z) == 0 &&
 uint8_t Cpu::op_ble(Bus& bus) { return branch_if(bus, (regs_.cc & CC_Z) != 0 ||
                                                   (((regs_.cc & CC_N) >> 3) != ((regs_.cc & CC_V) >> 1))); }
 
+uint8_t Cpu::op_lbrn(Bus& bus) { return long_branch_if(bus, false); }
+uint8_t Cpu::op_lbne(Bus& bus) { return long_branch_if(bus, (regs_.cc & CC_Z) == 0); }
+uint8_t Cpu::op_lbeq(Bus& bus) { return long_branch_if(bus, (regs_.cc & CC_Z) != 0); }
+uint8_t Cpu::op_lbhi(Bus& bus) { return long_branch_if(bus, (regs_.cc & (CC_Z | CC_C)) == 0); }
+uint8_t Cpu::op_lbls(Bus& bus) { return long_branch_if(bus, (regs_.cc & (CC_Z | CC_C)) != 0); }
+uint8_t Cpu::op_lbcc(Bus& bus) { return long_branch_if(bus, (regs_.cc & CC_C) == 0); }
+uint8_t Cpu::op_lbcs(Bus& bus) { return long_branch_if(bus, (regs_.cc & CC_C) != 0); }
+uint8_t Cpu::op_lbpl(Bus& bus) { return long_branch_if(bus, (regs_.cc & CC_N) == 0); }
+uint8_t Cpu::op_lbmi(Bus& bus) { return long_branch_if(bus, (regs_.cc & CC_N) != 0); }
+uint8_t Cpu::op_lbvc(Bus& bus) { return long_branch_if(bus, (regs_.cc & CC_V) == 0); }
+uint8_t Cpu::op_lbvs(Bus& bus) { return long_branch_if(bus, (regs_.cc & CC_V) != 0); }
+uint8_t Cpu::op_lbge(Bus& bus) {
+    return long_branch_if(bus, ((regs_.cc & CC_N) >> 3) == ((regs_.cc & CC_V) >> 1));
+}
+uint8_t Cpu::op_lblt(Bus& bus) {
+    return long_branch_if(bus, ((regs_.cc & CC_N) >> 3) != ((regs_.cc & CC_V) >> 1));
+}
+uint8_t Cpu::op_lbgt(Bus& bus) {
+    return long_branch_if(bus, (regs_.cc & CC_Z) == 0 &&
+        (((regs_.cc & CC_N) >> 3) == ((regs_.cc & CC_V) >> 1)));
+}
+uint8_t Cpu::op_lble(Bus& bus) {
+    return long_branch_if(bus, (regs_.cc & CC_Z) != 0 ||
+        (((regs_.cc & CC_N) >> 3) != ((regs_.cc & CC_V) >> 1)));
+}
+
 // ----- Logical -----
 
 uint8_t Cpu::op_anda_imm(Bus& bus) {
@@ -706,13 +822,13 @@ uint8_t Cpu::op_anda_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.a &= read_byte(bus, addr);
     flags_logic8(regs_, regs_.a);
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_anda_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.a &= read_byte(bus, addr);
     flags_logic8(regs_, regs_.a);
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_anda_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -735,7 +851,7 @@ uint8_t Cpu::op_bita_dir(Bus& bus) {
     regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V));
     if (res == 0) regs_.cc |= CC_Z;
     if (res & 0x80) regs_.cc |= CC_N;
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_bita_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
@@ -743,7 +859,7 @@ uint8_t Cpu::op_bita_ext(Bus& bus) {
     regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V));
     if (res == 0) regs_.cc |= CC_Z;
     if (res & 0x80) regs_.cc |= CC_N;
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_bita_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -764,13 +880,13 @@ uint8_t Cpu::op_andb_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.b &= read_byte(bus, addr);
     flags_logic8(regs_, regs_.b);
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_andb_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.b &= read_byte(bus, addr);
     flags_logic8(regs_, regs_.b);
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_andb_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -793,7 +909,7 @@ uint8_t Cpu::op_bitb_dir(Bus& bus) {
     regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V));
     if (res == 0) regs_.cc |= CC_Z;
     if (res & 0x80) regs_.cc |= CC_N;
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_bitb_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
@@ -801,7 +917,7 @@ uint8_t Cpu::op_bitb_ext(Bus& bus) {
     regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z | CC_V));
     if (res == 0) regs_.cc |= CC_Z;
     if (res & 0x80) regs_.cc |= CC_N;
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_bitb_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -822,13 +938,13 @@ uint8_t Cpu::op_ora_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.a |= read_byte(bus, addr);
     flags_logic8(regs_, regs_.a);
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_ora_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.a |= read_byte(bus, addr);
     flags_logic8(regs_, regs_.a);
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_ora_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -847,13 +963,13 @@ uint8_t Cpu::op_orb_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.b |= read_byte(bus, addr);
     flags_logic8(regs_, regs_.b);
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_orb_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.b |= read_byte(bus, addr);
     flags_logic8(regs_, regs_.b);
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_orb_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -872,13 +988,13 @@ uint8_t Cpu::op_eora_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.a ^= read_byte(bus, addr);
     flags_logic8(regs_, regs_.a);
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_eora_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.a ^= read_byte(bus, addr);
     flags_logic8(regs_, regs_.a);
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_eora_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -897,13 +1013,13 @@ uint8_t Cpu::op_eorb_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.b ^= read_byte(bus, addr);
     flags_logic8(regs_, regs_.b);
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_eorb_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.b ^= read_byte(bus, addr);
     flags_logic8(regs_, regs_.b);
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_eorb_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -922,12 +1038,12 @@ uint8_t Cpu::op_adca_imm(Bus& bus) {
 uint8_t Cpu::op_adca_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.a = adc8(regs_, regs_.a, read_byte(bus, addr));
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_adca_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.a = adc8(regs_, regs_.a, read_byte(bus, addr));
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_adca_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -943,12 +1059,12 @@ uint8_t Cpu::op_adcb_imm(Bus& bus) {
 uint8_t Cpu::op_adcb_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.b = adc8(regs_, regs_.b, read_byte(bus, addr));
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_adcb_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.b = adc8(regs_, regs_.b, read_byte(bus, addr));
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_adcb_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -964,12 +1080,12 @@ uint8_t Cpu::op_sbca_imm(Bus& bus) {
 uint8_t Cpu::op_sbca_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.a = sbc8(regs_, regs_.a, read_byte(bus, addr));
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_sbca_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.a = sbc8(regs_, regs_.a, read_byte(bus, addr));
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_sbca_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -985,12 +1101,12 @@ uint8_t Cpu::op_sbcb_imm(Bus& bus) {
 uint8_t Cpu::op_sbcb_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.b = sbc8(regs_, regs_.b, read_byte(bus, addr));
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_sbcb_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.b = sbc8(regs_, regs_.b, read_byte(bus, addr));
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_sbcb_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1006,12 +1122,12 @@ uint8_t Cpu::op_adda_imm(Bus& bus) {
 uint8_t Cpu::op_adda_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.a = add8(regs_, regs_.a, read_byte(bus, addr));
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_adda_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.a = add8(regs_, regs_.a, read_byte(bus, addr));
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_adda_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1027,12 +1143,12 @@ uint8_t Cpu::op_addb_imm(Bus& bus) {
 uint8_t Cpu::op_addb_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.b = add8(regs_, regs_.b, read_byte(bus, addr));
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_addb_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.b = add8(regs_, regs_.b, read_byte(bus, addr));
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_addb_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1048,12 +1164,12 @@ uint8_t Cpu::op_suba_imm(Bus& bus) {
 uint8_t Cpu::op_suba_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.a = sub8(regs_, regs_.a, read_byte(bus, addr));
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_suba_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.a = sub8(regs_, regs_.a, read_byte(bus, addr));
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_suba_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1069,12 +1185,12 @@ uint8_t Cpu::op_subb_imm(Bus& bus) {
 uint8_t Cpu::op_subb_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.b = sub8(regs_, regs_.b, read_byte(bus, addr));
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_subb_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.b = sub8(regs_, regs_.b, read_byte(bus, addr));
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_subb_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1090,12 +1206,12 @@ uint8_t Cpu::op_cmpa_imm(Bus& bus) {
 uint8_t Cpu::op_cmpa_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     sub8(regs_, regs_.a, read_byte(bus, addr));
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmpa_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     sub8(regs_, regs_.a, read_byte(bus, addr));
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmpa_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1111,12 +1227,12 @@ uint8_t Cpu::op_cmpb_imm(Bus& bus) {
 uint8_t Cpu::op_cmpb_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     sub8(regs_, regs_.b, read_byte(bus, addr));
-    return 4;
+    return direct_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmpb_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     sub8(regs_, regs_.b, read_byte(bus, addr));
-    return 5;
+    return extended_alu_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmpb_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1131,7 +1247,7 @@ uint8_t Cpu::op_addd_imm(Bus& bus) {
     const uint16_t res = add16(regs_, d, value);
     regs_.a = hi(res);
     regs_.b = lo(res);
-    return 4;
+    return d_alu_immediate_cycles(regs_, mode_);
 }
 
 uint8_t Cpu::op_addd_dir(Bus& bus) {
@@ -1141,7 +1257,7 @@ uint8_t Cpu::op_addd_dir(Bus& bus) {
     const uint16_t res = add16(regs_, d, value);
     regs_.a = hi(res);
     regs_.b = lo(res);
-    return 6;
+    return d_alu_direct_cycles(regs_, mode_);
 }
 
 uint8_t Cpu::op_addd_ext(Bus& bus) {
@@ -1151,7 +1267,7 @@ uint8_t Cpu::op_addd_ext(Bus& bus) {
     const uint16_t res = add16(regs_, d, value);
     regs_.a = hi(res);
     regs_.b = lo(res);
-    return 7;
+    return d_alu_extended_cycles(regs_, mode_);
 }
 
 uint8_t Cpu::op_addd_idx(Bus& bus) {
@@ -1172,7 +1288,7 @@ uint8_t Cpu::op_subd_imm(Bus& bus) {
     const uint16_t res = sub16(regs_, d, value);
     regs_.a = hi(res);
     regs_.b = lo(res);
-    return 4;
+    return d_alu_immediate_cycles(regs_, mode_);
 }
 
 uint8_t Cpu::op_subd_dir(Bus& bus) {
@@ -1182,7 +1298,7 @@ uint8_t Cpu::op_subd_dir(Bus& bus) {
     const uint16_t res = sub16(regs_, d, value);
     regs_.a = hi(res);
     regs_.b = lo(res);
-    return 6;
+    return d_alu_direct_cycles(regs_, mode_);
 }
 
 uint8_t Cpu::op_subd_ext(Bus& bus) {
@@ -1192,7 +1308,7 @@ uint8_t Cpu::op_subd_ext(Bus& bus) {
     const uint16_t res = sub16(regs_, d, value);
     regs_.a = hi(res);
     regs_.b = lo(res);
-    return 7;
+    return d_alu_extended_cycles(regs_, mode_);
 }
 
 uint8_t Cpu::op_subd_idx(Bus& bus) {
@@ -1211,7 +1327,7 @@ uint8_t Cpu::op_cmpd_imm(Bus& bus) {
     const uint16_t value = fetch_word(bus);
     const uint16_t d = static_cast<uint16_t>((regs_.a << 8) | regs_.b);
     sub16(regs_, d, value);
-    return 5; // prefix opcode adds one cycle
+    return cmpd_immediate_cycles(regs_, mode_);
 }
 
 uint8_t Cpu::op_cmpd_dir(Bus& bus) {
@@ -1219,7 +1335,7 @@ uint8_t Cpu::op_cmpd_dir(Bus& bus) {
     const uint16_t value = static_cast<uint16_t>((read_byte(bus, addr) << 8) | read_byte(bus, static_cast<uint16_t>(addr + 1)));
     const uint16_t d = static_cast<uint16_t>((regs_.a << 8) | regs_.b);
     sub16(regs_, d, value);
-    return 7;
+    return cmpd_direct_cycles(regs_, mode_);
 }
 
 uint8_t Cpu::op_cmpd_ext(Bus& bus) {
@@ -1227,7 +1343,7 @@ uint8_t Cpu::op_cmpd_ext(Bus& bus) {
     const uint16_t value = static_cast<uint16_t>((read_byte(bus, addr) << 8) | read_byte(bus, static_cast<uint16_t>(addr + 1)));
     const uint16_t d = static_cast<uint16_t>((regs_.a << 8) | regs_.b);
     sub16(regs_, d, value);
-    return 8;
+    return cmpd_extended_cycles(regs_, mode_);
 }
 
 uint8_t Cpu::op_cmpd_idx(Bus& bus) {
@@ -1243,17 +1359,17 @@ uint8_t Cpu::op_cmpd_idx(Bus& bus) {
 uint8_t Cpu::op_cmpx_imm(Bus& bus) {
     const uint16_t value = fetch_word(bus);
     sub16(regs_, regs_.x, value);
-    return 4;
+    return cmpx_immediate_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmpx_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     sub16(regs_, regs_.x, read_word(bus, addr));
-    return 6;
+    return cmpx_direct_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmpx_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     sub16(regs_, regs_.x, read_word(bus, addr));
-    return 7;
+    return cmpx_extended_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmpx_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1265,17 +1381,17 @@ uint8_t Cpu::op_cmpx_idx(Bus& bus) {
 uint8_t Cpu::op_cmpy_imm(Bus& bus) {
     const uint16_t value = fetch_word(bus);
     sub16(regs_, regs_.y, value);
-    return 5;
+    return prefixed_cmp16_immediate_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmpy_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     sub16(regs_, regs_.y, read_word(bus, addr));
-    return 7;
+    return prefixed_cmp16_direct_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmpy_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     sub16(regs_, regs_.y, read_word(bus, addr));
-    return 8;
+    return prefixed_cmp16_extended_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmpy_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1287,17 +1403,17 @@ uint8_t Cpu::op_cmpy_idx(Bus& bus) {
 uint8_t Cpu::op_cmpu_imm(Bus& bus) {
     const uint16_t value = fetch_word(bus);
     sub16(regs_, regs_.u, value);
-    return 5;
+    return prefixed_cmp16_immediate_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmpu_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     sub16(regs_, regs_.u, read_word(bus, addr));
-    return 7;
+    return prefixed_cmp16_direct_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmpu_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     sub16(regs_, regs_.u, read_word(bus, addr));
-    return 8;
+    return prefixed_cmp16_extended_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmpu_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1309,17 +1425,17 @@ uint8_t Cpu::op_cmpu_idx(Bus& bus) {
 uint8_t Cpu::op_cmps_imm(Bus& bus) {
     const uint16_t value = fetch_word(bus);
     sub16(regs_, regs_.s, value);
-    return 5;
+    return prefixed_cmp16_immediate_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmps_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     sub16(regs_, regs_.s, read_word(bus, addr));
-    return 7;
+    return prefixed_cmp16_direct_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmps_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     sub16(regs_, regs_.s, read_word(bus, addr));
-    return 8;
+    return prefixed_cmp16_extended_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_cmps_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1339,13 +1455,13 @@ uint8_t Cpu::op_ldx_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.x = read_word(bus, addr);
     set_flags_nz16(regs_.x);
-    return 5;
+    return x_u_word_direct_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_ldx_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.x = read_word(bus, addr);
     set_flags_nz16(regs_.x);
-    return 6;
+    return x_u_word_extended_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_ldx_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1358,19 +1474,19 @@ uint8_t Cpu::op_ldx_idx(Bus& bus) {
 uint8_t Cpu::op_ldy_imm(Bus& bus) {
     regs_.y = fetch_word(bus);
     set_flags_nz16(regs_.y);
-    return 4;
+    return y_word_immediate_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_ldy_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.y = read_word(bus, addr);
     set_flags_nz16(regs_.y);
-    return 6;
+    return y_s_word_direct_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_ldy_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.y = read_word(bus, addr);
     set_flags_nz16(regs_.y);
-    return 7;
+    return y_s_word_extended_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_ldy_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1389,13 +1505,13 @@ uint8_t Cpu::op_ldu_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.u = read_word(bus, addr);
     set_flags_nz16(regs_.u);
-    return 5;
+    return x_u_word_direct_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_ldu_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.u = read_word(bus, addr);
     set_flags_nz16(regs_.u);
-    return 6;
+    return x_u_word_extended_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_ldu_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1414,13 +1530,13 @@ uint8_t Cpu::op_lds_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     regs_.s = read_word(bus, addr);
     set_flags_nz16(regs_.s);
-    return 6;
+    return y_s_word_direct_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_lds_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     regs_.s = read_word(bus, addr);
     set_flags_nz16(regs_.s);
-    return 7;
+    return y_s_word_extended_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_lds_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1434,13 +1550,13 @@ uint8_t Cpu::op_stx_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     write_word(bus, addr, regs_.x);
     set_flags_nz16(regs_.x);
-    return 5;
+    return x_u_word_direct_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_stx_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     write_word(bus, addr, regs_.x);
     set_flags_nz16(regs_.x);
-    return 6;
+    return x_u_word_extended_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_stx_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1454,13 +1570,13 @@ uint8_t Cpu::op_sty_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     write_word(bus, addr, regs_.y);
     set_flags_nz16(regs_.y);
-    return 6;
+    return y_s_word_direct_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_sty_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     write_word(bus, addr, regs_.y);
     set_flags_nz16(regs_.y);
-    return 7;
+    return y_s_word_extended_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_sty_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1474,13 +1590,13 @@ uint8_t Cpu::op_stu_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     write_word(bus, addr, regs_.u);
     set_flags_nz16(regs_.u);
-    return 5;
+    return x_u_word_direct_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_stu_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     write_word(bus, addr, regs_.u);
     set_flags_nz16(regs_.u);
-    return 6;
+    return x_u_word_extended_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_stu_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1494,13 +1610,13 @@ uint8_t Cpu::op_sts_dir(Bus& bus) {
     const uint16_t addr = direct_address(bus);
     write_word(bus, addr, regs_.s);
     set_flags_nz16(regs_.s);
-    return 6;
+    return y_s_word_direct_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_sts_ext(Bus& bus) {
     const uint16_t addr = extended_address(bus);
     write_word(bus, addr, regs_.s);
     set_flags_nz16(regs_.s);
-    return 7;
+    return y_s_word_extended_cycles(regs_, mode_);
 }
 uint8_t Cpu::op_sts_idx(Bus& bus) {
     const auto pb = indexed_address(bus);
@@ -1553,7 +1669,7 @@ uint8_t Cpu::op_pshs(Bus& bus) {
     if (mask & 0x04) { push_byte(bus, regs_.b); ++count; }
     if (mask & 0x02) { push_byte(bus, regs_.a); ++count; }
     if (mask & 0x01) { push_byte(bus, regs_.cc); ++count; }
-    return static_cast<uint8_t>(5 + count);
+    return static_cast<uint8_t>((is_native_hd6309(regs_, mode_) ? 4 : 5) + count);
 }
 
 uint8_t Cpu::op_puls(Bus& bus) {
@@ -1567,7 +1683,7 @@ uint8_t Cpu::op_puls(Bus& bus) {
     if (mask & 0x20) { regs_.y = pull_word(bus); count += 2; }
     if (mask & 0x40) { regs_.u = pull_word(bus); count += 2; }
     if (mask & 0x80) { regs_.pc = pull_word(bus); count += 2; }
-    return static_cast<uint8_t>(5 + count);
+    return static_cast<uint8_t>((is_native_hd6309(regs_, mode_) ? 4 : 5) + count);
 }
 
 uint8_t Cpu::op_pshu(Bus& bus) {
@@ -1590,7 +1706,7 @@ uint8_t Cpu::op_pshu(Bus& bus) {
     if (mask & 0x04) { push_u_byte(regs_.b); }
     if (mask & 0x02) { push_u_byte(regs_.a); }
     if (mask & 0x01) { push_u_byte(regs_.cc); }
-    return static_cast<uint8_t>(5 + count);
+    return static_cast<uint8_t>((is_native_hd6309(regs_, mode_) ? 4 : 5) + count);
 }
 
 uint8_t Cpu::op_pulu(Bus& bus) {
@@ -1615,7 +1731,7 @@ uint8_t Cpu::op_pulu(Bus& bus) {
     if (mask & 0x20) { regs_.y = pull_u_word(); }
     if (mask & 0x40) { regs_.s = pull_u_word(); }
     if (mask & 0x80) { regs_.pc = pull_u_word(); }
-    return static_cast<uint8_t>(5 + count);
+    return static_cast<uint8_t>((is_native_hd6309(regs_, mode_) ? 4 : 5) + count);
 }
 
 // ----- Accumulator unary/shift -----

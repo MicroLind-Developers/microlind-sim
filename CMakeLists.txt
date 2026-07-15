@@ -60,6 +60,7 @@ if(BUILD_TESTING)
         tests/test_bus.cpp
         tests/test_cpu.cpp
         tests/test_logic.cpp
+        tests/test_microcycle.cpp
         tests/test_sim_session.cpp
     )
     target_link_libraries(microlind-sim-tests PRIVATE

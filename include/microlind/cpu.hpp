@@ -125,9 +125,9 @@ private:
         LddExtended,
         StdDirect,
         StdExtended,
-        Bra,
-        Bne,
-        Beq,
+        Branch,
+        Lbra,
+        LongBranch,
         Bsr,
         Lbsr,
         Rts,
@@ -158,12 +158,36 @@ private:
         Rola,
         Rolb,
         Alu8Immediate,
+        Alu8Direct,
+        Alu8Extended,
+        Alu16Immediate,
+        Alu16Direct,
+        Alu16Extended,
+        CmpdImmediate,
+        CmpdDirect,
+        CmpdExtended,
+        Cmp16Immediate,
+        Cmp16Direct,
+        Cmp16Extended,
+        WordLoadImmediate,
+        WordLoadDirect,
+        WordLoadExtended,
+        WordStoreDirect,
+        WordStoreExtended,
+        StackPush,
+        StackPull,
+        MemoryUnaryDirect,
+        MemoryUnaryExtended,
+        MiscInherent,
+        CcImmediate,
+        RegisterTransfer,
     };
 
     struct MicroOpState {
         MicroOpKind kind{MicroOpKind::None};
         uint16_t start_pc{};
         uint8_t opcode{};
+        uint8_t prefix{};
         uint8_t step{};
         uint8_t total_cycles{};
         uint8_t direct_offset{};
@@ -195,6 +219,7 @@ private:
     void set_flags_nz8(uint8_t value);
     void set_flags_nz16(uint16_t value);
     uint8_t branch_if(Bus& bus, bool take);
+    uint8_t long_branch_if(Bus& bus, bool take);
 
     uint16_t& index_ref(IndexReg reg);
     uint16_t index_value(IndexReg reg) const;
@@ -207,7 +232,7 @@ private:
     uint32_t reg_q() const;
     void set_reg_q(uint32_t value);
     uint8_t op_tfm_common(Bus& bus, bool inc_src, bool inc_dst);
-    bool start_micro_op(uint8_t opcode);
+    bool start_micro_op(Bus& bus, uint8_t opcode);
     BusSignals micro_op_signals() const;
     CpuMicrocycleStatus micro_op_status(bool instruction_started, bool instruction_complete) const;
 
@@ -260,6 +285,8 @@ private:
     uint8_t op_bsr(Bus&);
     uint8_t op_lbra(Bus&);
     uint8_t op_lbsr(Bus&);
+    uint8_t op_brn(Bus&);
+    uint8_t op_lbrn(Bus&);
     uint8_t op_beq(Bus&);
     uint8_t op_bne(Bus&);
 
@@ -445,6 +472,20 @@ private:
     uint8_t op_blt(Bus&);
     uint8_t op_bgt(Bus&);
     uint8_t op_ble(Bus&);
+    uint8_t op_lbhi(Bus&);
+    uint8_t op_lbls(Bus&);
+    uint8_t op_lbcc(Bus&);
+    uint8_t op_lbcs(Bus&);
+    uint8_t op_lbpl(Bus&);
+    uint8_t op_lbmi(Bus&);
+    uint8_t op_lbvc(Bus&);
+    uint8_t op_lbvs(Bus&);
+    uint8_t op_lbge(Bus&);
+    uint8_t op_lblt(Bus&);
+    uint8_t op_lbgt(Bus&);
+    uint8_t op_lble(Bus&);
+    uint8_t op_lbne(Bus&);
+    uint8_t op_lbeq(Bus&);
 
     // Loads / stores for 16-bit regs
     uint8_t op_ldx_imm(Bus&);

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <initializer_list>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -174,6 +175,54 @@ TEST(CpuExecutionTest, LbraUsesNativeHD6309Timing) {
     const auto result = cpu.tick(bus);
     EXPECT_EQ(result.cycles, 4u);
     EXPECT_EQ(cpu.regs().pc, 0x0100);
+}
+
+TEST(CpuExecutionTest, BrnConsumesOffsetWithoutBranching) {
+    microlind::Bus bus;
+    microlind::test::map_flat_ram(bus);
+    write_bytes(bus, 0x0100, {0x21, 0x7F});
+
+    microlind::Cpu cpu(microlind::CpuMode::HD6309);
+    cpu.set_pc(0x0100);
+
+    const auto result = cpu.tick(bus);
+    EXPECT_EQ(result.cycles, 2u);
+    EXPECT_EQ(cpu.regs().pc, 0x0102);
+}
+
+TEST(CpuExecutionTest, PrefixedLongBranchesUseSignedWordOffsetAndConditionTiming) {
+    struct LongBranchCase {
+        std::string name;
+        std::vector<uint8_t> program;
+        uint8_t cc{};
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+    };
+
+    const LongBranchCase cases[] = {
+        {"LBRN never", {0x10, 0x21, 0x00, 0x03}, 0x00, 5, 0x0104},
+        {"LBNE taken", {0x10, 0x26, 0x00, 0x03}, 0x00, 6, 0x0107},
+        {"LBNE not taken", {0x10, 0x26, 0x00, 0x03}, microlind::CC_Z, 5, 0x0104},
+        {"LBEQ taken backward", {0x10, 0x27, 0xFF, 0xFC}, microlind::CC_Z, 6, 0x0100},
+        {"LBMI taken wrap", {0x10, 0x2B, 0xFE, 0xF0}, microlind::CC_N, 6, 0xFFF4},
+        {"LBGT not taken", {0x10, 0x2E, 0x00, 0x03}, microlind::CC_Z, 5, 0x0104},
+        {"LBLE taken", {0x10, 0x2F, 0x00, 0x03}, microlind::CC_Z, 6, 0x0107},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, test.program);
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().cc = test.cc;
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, test.expected_cycles);
+        EXPECT_EQ(cpu.regs().pc, test.expected_pc);
+    }
 }
 
 TEST(CpuExecutionTest, JmpDirectAndExtendedUseNativeHD6309Timing) {
@@ -358,6 +407,383 @@ TEST(CpuExecutionTest, ImmediateAccumulatorAluInstructionsSetFlags) {
         EXPECT_EQ((cpu.regs().cc & microlind::CC_V) != 0, test.expect_v);
         EXPECT_EQ((cpu.regs().cc & microlind::CC_C) != 0, test.expect_carry);
         EXPECT_EQ((cpu.regs().cc & microlind::CC_H) != 0, test.expect_half);
+    }
+}
+
+TEST(CpuExecutionTest, DirectAccumulatorAluInstructionsUseNativeTimingAndSetFlags) {
+    struct AluCase {
+        std::string name;
+        uint8_t opcode{};
+        bool target_a{};
+        uint8_t initial_target{};
+        uint8_t initial_other{};
+        uint8_t operand{};
+        uint8_t initial_cc{};
+        uint8_t expected_target{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_carry{};
+        bool expect_half{};
+    };
+
+    const AluCase cases[] = {
+        {"SUBA direct", 0x90, true, 0x10, 0x42, 0x20, 0, 0xF0, false, true, false, true, false},
+        {"CMPA direct", 0x91, true, 0x20, 0x42, 0x20, 0, 0x20, true, false, false, false, false},
+        {"SBCA direct", 0x92, true, 0x00, 0x42, 0x00, microlind::CC_C, 0xFF, false, true, false, true, false},
+        {"ANDA direct", 0x94, true, 0xF0, 0x42, 0x0F, microlind::CC_C, 0x00, true, false, false, false, false},
+        {"BITA direct", 0x95, true, 0x80, 0x42, 0x80, microlind::CC_C, 0x80, false, true, false, true, false},
+        {"EORA direct", 0x98, true, 0xFF, 0x42, 0x0F, microlind::CC_C, 0xF0, false, true, false, false, false},
+        {"ADCA direct", 0x99, true, 0x7F, 0x42, 0x00, microlind::CC_C, 0x80, false, true, true, false, true},
+        {"ORA direct", 0x9A, true, 0x10, 0x42, 0x80, microlind::CC_C, 0x90, false, true, false, false, false},
+        {"ADDA direct", 0x9B, true, 0x0F, 0x42, 0x01, 0, 0x10, false, false, false, false, true},
+        {"SUBB direct", 0xD0, false, 0x10, 0x42, 0x20, 0, 0xF0, false, true, false, true, false},
+        {"CMPB direct", 0xD1, false, 0x20, 0x42, 0x20, 0, 0x20, true, false, false, false, false},
+        {"SBCB direct", 0xD2, false, 0x00, 0x42, 0x00, microlind::CC_C, 0xFF, false, true, false, true, false},
+        {"ANDB direct", 0xD4, false, 0xF0, 0x42, 0x0F, microlind::CC_C, 0x00, true, false, false, false, false},
+        {"BITB direct", 0xD5, false, 0x80, 0x42, 0x80, microlind::CC_C, 0x80, false, true, false, true, false},
+        {"EORB direct", 0xD8, false, 0xFF, 0x42, 0x0F, microlind::CC_C, 0xF0, false, true, false, false, false},
+        {"ADCB direct", 0xD9, false, 0x7F, 0x42, 0x00, microlind::CC_C, 0x80, false, true, true, false, true},
+        {"ORB direct", 0xDA, false, 0x10, 0x42, 0x80, microlind::CC_C, 0x90, false, true, false, false, false},
+        {"ADDB direct", 0xDB, false, 0x0F, 0x42, 0x01, 0, 0x10, false, false, false, false, true},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, {test.opcode, 0x34});
+        bus.write8(0x1234, test.operand);
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().dp = 0x12;
+        cpu.regs().md = 0x01;
+        cpu.regs().a = test.target_a ? test.initial_target : test.initial_other;
+        cpu.regs().b = test.target_a ? test.initial_other : test.initial_target;
+        cpu.regs().cc = test.initial_cc;
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, 3u);
+        EXPECT_EQ(cpu.regs().pc, 0x0102);
+        EXPECT_EQ(test.target_a ? cpu.regs().a : cpu.regs().b, test.expected_target);
+        EXPECT_EQ(test.target_a ? cpu.regs().b : cpu.regs().a, test.initial_other);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_C) != 0, test.expect_carry);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_H) != 0, test.expect_half);
+    }
+}
+
+TEST(CpuExecutionTest, ExtendedAccumulatorAluInstructionsUseNativeTimingAndSetFlags) {
+    struct AluCase {
+        std::string name;
+        uint8_t opcode{};
+        bool target_a{};
+        uint8_t initial_target{};
+        uint8_t initial_other{};
+        uint8_t operand{};
+        uint8_t initial_cc{};
+        uint8_t expected_target{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_carry{};
+        bool expect_half{};
+    };
+
+    const AluCase cases[] = {
+        {"SUBA extended", 0xB0, true, 0x10, 0x42, 0x20, 0, 0xF0, false, true, false, true, false},
+        {"CMPA extended", 0xB1, true, 0x20, 0x42, 0x20, 0, 0x20, true, false, false, false, false},
+        {"SBCA extended", 0xB2, true, 0x00, 0x42, 0x00, microlind::CC_C, 0xFF, false, true, false, true, false},
+        {"ANDA extended", 0xB4, true, 0xF0, 0x42, 0x0F, microlind::CC_C, 0x00, true, false, false, false, false},
+        {"BITA extended", 0xB5, true, 0x80, 0x42, 0x80, microlind::CC_C, 0x80, false, true, false, true, false},
+        {"EORA extended", 0xB8, true, 0xFF, 0x42, 0x0F, microlind::CC_C, 0xF0, false, true, false, false, false},
+        {"ADCA extended", 0xB9, true, 0x7F, 0x42, 0x00, microlind::CC_C, 0x80, false, true, true, false, true},
+        {"ORA extended", 0xBA, true, 0x10, 0x42, 0x80, microlind::CC_C, 0x90, false, true, false, false, false},
+        {"ADDA extended", 0xBB, true, 0x0F, 0x42, 0x01, 0, 0x10, false, false, false, false, true},
+        {"SUBB extended", 0xF0, false, 0x10, 0x42, 0x20, 0, 0xF0, false, true, false, true, false},
+        {"CMPB extended", 0xF1, false, 0x20, 0x42, 0x20, 0, 0x20, true, false, false, false, false},
+        {"SBCB extended", 0xF2, false, 0x00, 0x42, 0x00, microlind::CC_C, 0xFF, false, true, false, true, false},
+        {"ANDB extended", 0xF4, false, 0xF0, 0x42, 0x0F, microlind::CC_C, 0x00, true, false, false, false, false},
+        {"BITB extended", 0xF5, false, 0x80, 0x42, 0x80, microlind::CC_C, 0x80, false, true, false, true, false},
+        {"EORB extended", 0xF8, false, 0xFF, 0x42, 0x0F, microlind::CC_C, 0xF0, false, true, false, false, false},
+        {"ADCB extended", 0xF9, false, 0x7F, 0x42, 0x00, microlind::CC_C, 0x80, false, true, true, false, true},
+        {"ORB extended", 0xFA, false, 0x10, 0x42, 0x80, microlind::CC_C, 0x90, false, true, false, false, false},
+        {"ADDB extended", 0xFB, false, 0x0F, 0x42, 0x01, 0, 0x10, false, false, false, false, true},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, {test.opcode, 0x12, 0x34});
+        bus.write8(0x1234, test.operand);
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().md = 0x01;
+        cpu.regs().a = test.target_a ? test.initial_target : test.initial_other;
+        cpu.regs().b = test.target_a ? test.initial_other : test.initial_target;
+        cpu.regs().cc = test.initial_cc;
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, 4u);
+        EXPECT_EQ(cpu.regs().pc, 0x0103);
+        EXPECT_EQ(test.target_a ? cpu.regs().a : cpu.regs().b, test.expected_target);
+        EXPECT_EQ(test.target_a ? cpu.regs().b : cpu.regs().a, test.initial_other);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_C) != 0, test.expect_carry);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_H) != 0, test.expect_half);
+    }
+}
+
+TEST(CpuExecutionTest, DRegisterAddSubUseNativeTimingAndSetFlags) {
+    struct DAluCase {
+        std::string name;
+        std::vector<uint8_t> program;
+        std::optional<uint16_t> memory_address;
+        uint16_t memory_operand{};
+        uint16_t initial_d{};
+        uint16_t expected_d{};
+        uint8_t md{};
+        uint8_t expected_cycles{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_carry{};
+    };
+
+    const DAluCase cases[] = {
+        {"ADDD immediate native", {0xC3, 0x00, 0x01}, std::nullopt, 0x0000, 0x0FFF, 0x1000, 0x01, 3, false, false, false, false},
+        {"ADDD direct emulation", {0xD3, 0x34}, 0x1234, 0x0001, 0xFFFF, 0x0000, 0x00, 6, true, false, false, true},
+        {"ADDD extended native", {0xF3, 0x12, 0x34}, 0x1234, 0x0001, 0x7FFF, 0x8000, 0x01, 5, false, true, true, false},
+        {"SUBD immediate native", {0x83, 0x00, 0x01}, std::nullopt, 0x0000, 0x0000, 0xFFFF, 0x01, 3, false, true, false, true},
+        {"SUBD direct emulation", {0x93, 0x34}, 0x1234, 0x0001, 0x8000, 0x7FFF, 0x00, 6, false, false, true, false},
+        {"SUBD extended native", {0xB3, 0x12, 0x34}, 0x1234, 0x1234, 0x1234, 0x0000, 0x01, 5, true, false, false, false},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, test.program);
+        if (test.memory_address.has_value()) {
+            bus.write8(*test.memory_address, static_cast<uint8_t>((test.memory_operand >> 8) & 0xFF));
+            bus.write8(static_cast<uint16_t>(*test.memory_address + 1), static_cast<uint8_t>(test.memory_operand & 0xFF));
+        }
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().dp = 0x12;
+        cpu.regs().md = test.md;
+        cpu.regs().a = static_cast<uint8_t>((test.initial_d >> 8) & 0xFF);
+        cpu.regs().b = static_cast<uint8_t>(test.initial_d & 0xFF);
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, test.expected_cycles);
+        EXPECT_EQ(cpu.regs().pc, static_cast<uint16_t>(0x0100 + test.program.size()));
+        EXPECT_EQ(static_cast<uint16_t>((cpu.regs().a << 8) | cpu.regs().b), test.expected_d);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_C) != 0, test.expect_carry);
+    }
+}
+
+TEST(CpuExecutionTest, CmpdUsesPrefixedTimingAndOnlyUpdatesFlags) {
+    struct CmpdCase {
+        std::string name;
+        std::vector<uint8_t> program;
+        std::optional<uint16_t> memory_address;
+        uint16_t memory_operand{};
+        uint16_t initial_d{};
+        uint8_t md{};
+        uint8_t expected_cycles{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_carry{};
+    };
+
+    const CmpdCase cases[] = {
+        {"CMPD immediate native", {0x10, 0x83, 0x12, 0x34}, std::nullopt, 0x0000, 0x1234, 0x01, 4, true, false, false, false},
+        {"CMPD direct emulation", {0x10, 0x93, 0x34}, 0x1234, 0x0001, 0x8000, 0x00, 7, false, false, true, false},
+        {"CMPD extended native", {0x10, 0xB3, 0x12, 0x34}, 0x1234, 0x0001, 0x0000, 0x01, 6, false, true, false, true},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, test.program);
+        if (test.memory_address.has_value()) {
+            bus.write8(*test.memory_address, static_cast<uint8_t>((test.memory_operand >> 8) & 0xFF));
+            bus.write8(static_cast<uint16_t>(*test.memory_address + 1), static_cast<uint8_t>(test.memory_operand & 0xFF));
+        }
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().dp = 0x12;
+        cpu.regs().md = test.md;
+        cpu.regs().a = static_cast<uint8_t>((test.initial_d >> 8) & 0xFF);
+        cpu.regs().b = static_cast<uint8_t>(test.initial_d & 0xFF);
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, test.expected_cycles);
+        EXPECT_EQ(cpu.regs().pc, static_cast<uint16_t>(0x0100 + test.program.size()));
+        EXPECT_EQ(static_cast<uint16_t>((cpu.regs().a << 8) | cpu.regs().b), test.initial_d);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_C) != 0, test.expect_carry);
+    }
+}
+
+TEST(CpuExecutionTest, IndexAndStackComparesUseNativeTimingAndOnlyUpdateFlags) {
+    struct CmpCase {
+        std::string name;
+        std::vector<uint8_t> program;
+        std::optional<uint16_t> memory_address;
+        uint16_t memory_operand{};
+        char target{};
+        uint16_t initial_value{};
+        uint8_t md{};
+        uint8_t expected_cycles{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_carry{};
+    };
+
+    const CmpCase cases[] = {
+        {"CMPX immediate native", {0x8C, 0x12, 0x34}, std::nullopt, 0x0000, 'x', 0x1234, 0x01, 3, true, false, false, false},
+        {"CMPX direct emulation", {0x9C, 0x34}, 0x1234, 0x0001, 'x', 0x8000, 0x00, 6, false, false, true, false},
+        {"CMPY extended native", {0x10, 0xBC, 0x12, 0x34}, 0x1234, 0x0001, 'y', 0x0000, 0x01, 6, false, true, false, true},
+        {"CMPU direct native", {0x11, 0x93, 0x34}, 0x1234, 0x0001, 'u', 0x0000, 0x01, 5, false, true, false, true},
+        {"CMPS immediate emulation", {0x11, 0x8C, 0x12, 0x34}, std::nullopt, 0x0000, 's', 0x1234, 0x00, 5, true, false, false, false},
+        {"CMPS extended native", {0x11, 0xBC, 0x12, 0x34}, 0x1234, 0x0001, 's', 0x8000, 0x01, 6, false, false, true, false},
+    };
+
+    const auto set_target = [](microlind::Cpu& cpu, char target, uint16_t value) {
+        switch (target) {
+        case 'x': cpu.regs().x = value; break;
+        case 'y': cpu.regs().y = value; break;
+        case 'u': cpu.regs().u = value; break;
+        case 's': cpu.regs().s = value; break;
+        }
+    };
+    const auto target_value = [](const microlind::Cpu& cpu, char target) {
+        switch (target) {
+        case 'x': return cpu.regs().x;
+        case 'y': return cpu.regs().y;
+        case 'u': return cpu.regs().u;
+        case 's': return cpu.regs().s;
+        }
+        return uint16_t{};
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, test.program);
+        if (test.memory_address.has_value()) {
+            bus.write8(*test.memory_address, static_cast<uint8_t>((test.memory_operand >> 8) & 0xFF));
+            bus.write8(static_cast<uint16_t>(*test.memory_address + 1), static_cast<uint8_t>(test.memory_operand & 0xFF));
+        }
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().dp = 0x12;
+        cpu.regs().md = test.md;
+        set_target(cpu, test.target, test.initial_value);
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, test.expected_cycles);
+        EXPECT_EQ(cpu.regs().pc, static_cast<uint16_t>(0x0100 + test.program.size()));
+        EXPECT_EQ(target_value(cpu, test.target), test.initial_value);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_C) != 0, test.expect_carry);
+    }
+}
+
+TEST(CpuExecutionTest, IndexAndStackWordLoadsStoresUseNativeTimingAndSetFlags) {
+    struct WordCase {
+        std::string name;
+        std::vector<uint8_t> program;
+        bool store{};
+        std::optional<uint16_t> memory_address;
+        uint16_t memory_value{};
+        char target{};
+        uint16_t initial_value{};
+        uint16_t expected_value{};
+        uint8_t md{};
+        uint8_t expected_cycles{};
+        bool expect_z{};
+        bool expect_n{};
+    };
+
+    const WordCase cases[] = {
+        {"LDX direct native", {0x9E, 0x34}, false, 0x1234, 0x8000, 'x', 0x1111, 0x8000, 0x01, 4, false, true},
+        {"LDY immediate native", {0x10, 0x8E, 0x00, 0x00}, false, std::nullopt, 0x0000, 'y', 0x1111, 0x0000, 0x01, 4, true, false},
+        {"LDU extended emulation", {0xFE, 0x12, 0x34}, false, 0x1234, 0x1234, 'u', 0x1111, 0x1234, 0x00, 6, false, false},
+        {"LDS extended native", {0x10, 0xFE, 0x12, 0x34}, false, 0x1234, 0xFFFF, 's', 0x1111, 0xFFFF, 0x01, 6, false, true},
+        {"STX direct native", {0x9F, 0x34}, true, 0x1234, 0x0000, 'x', 0x1234, 0x1234, 0x01, 4, false, false},
+        {"STY extended native", {0x10, 0xBF, 0x12, 0x34}, true, 0x1234, 0x0000, 'y', 0x8000, 0x8000, 0x01, 6, false, true},
+        {"STS direct emulation", {0x10, 0xDF, 0x34}, true, 0x1234, 0x0000, 's', 0x0000, 0x0000, 0x00, 6, true, false},
+    };
+
+    const auto set_target = [](microlind::Cpu& cpu, char target, uint16_t value) {
+        switch (target) {
+        case 'x': cpu.regs().x = value; break;
+        case 'y': cpu.regs().y = value; break;
+        case 'u': cpu.regs().u = value; break;
+        case 's': cpu.regs().s = value; break;
+        }
+    };
+    const auto target_value = [](const microlind::Cpu& cpu, char target) {
+        switch (target) {
+        case 'x': return cpu.regs().x;
+        case 'y': return cpu.regs().y;
+        case 'u': return cpu.regs().u;
+        case 's': return cpu.regs().s;
+        }
+        return uint16_t{};
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, test.program);
+        if (test.memory_address.has_value() && !test.store) {
+            bus.write8(*test.memory_address, static_cast<uint8_t>((test.memory_value >> 8) & 0xFF));
+            bus.write8(static_cast<uint16_t>(*test.memory_address + 1), static_cast<uint8_t>(test.memory_value & 0xFF));
+        }
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().dp = 0x12;
+        cpu.regs().md = test.md;
+        set_target(cpu, test.target, test.initial_value);
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, test.expected_cycles);
+        EXPECT_EQ(cpu.regs().pc, static_cast<uint16_t>(0x0100 + test.program.size()));
+        EXPECT_EQ(target_value(cpu, test.target), test.expected_value);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((cpu.regs().cc & microlind::CC_V) != 0, false);
+        if (test.store && test.memory_address.has_value()) {
+            EXPECT_EQ(bus.peek8(*test.memory_address), static_cast<uint8_t>((test.initial_value >> 8) & 0xFF));
+            EXPECT_EQ(bus.peek8(static_cast<uint16_t>(*test.memory_address + 1)), static_cast<uint8_t>(test.initial_value & 0xFF));
+        }
     }
 }
 
