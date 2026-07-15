@@ -1,8 +1,10 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -10,6 +12,8 @@ namespace microlind {
 
 class Bus;
 class Cpu;
+enum class BusCycleKind;
+struct BusSignals;
 struct Registers;
 uint16_t read_reg_for_dest(const Registers& regs, uint8_t src_code, bool dest_is_16);
 void write_reg_sized(Cpu& cpu, uint8_t dest_code, uint16_t value, bool dest_is_16);
@@ -35,6 +39,13 @@ struct CpuTickResult {
     uint32_t cycles{};
 };
 
+struct CpuMicrocycleStatus {
+    bool instruction_started{};
+    bool instruction_complete{};
+    CpuTickResult instruction_result{};
+    std::size_t pending_bus_cycles{};
+};
+
 struct Registers {
     uint8_t a{};
     uint8_t b{};
@@ -49,7 +60,6 @@ struct Registers {
     uint16_t v{};
     uint16_t z{};
     uint16_t s{};
-    uint16_t v{};
     uint16_t pc{};
 };
 
@@ -68,6 +78,26 @@ public:
     [[nodiscard]] uint8_t last_prefix() const { return last_prefix_; }
     const std::string& opcode_name(uint8_t prefix, uint8_t opcode) const;
     uint8_t opcode_length(Bus& bus, uint16_t pc) const;
+    [[nodiscard]] bool has_pending_micro_ops() const;
+    void set_irq_line(bool asserted) { *irq_line_asserted_ = asserted; }
+    void set_firq_line(bool asserted) { firq_line_asserted_ = asserted; }
+    void set_nmi_line(bool asserted);
+    [[nodiscard]] bool irq_line_asserted() const { return *irq_line_asserted_; }
+    [[nodiscard]] bool firq_line_asserted() const { return firq_line_asserted_; }
+    [[nodiscard]] bool nmi_line_asserted() const { return nmi_line_asserted_; }
+    [[nodiscard]] bool nmi_latched() const { return nmi_latched_; }
+    [[nodiscard]] std::shared_ptr<bool> irq_line_state() const { return irq_line_asserted_; }
+    [[nodiscard]] bool irq_pending() const;
+    [[nodiscard]] bool firq_pending() const;
+    [[nodiscard]] bool nmi_pending() const;
+    [[nodiscard]] bool interrupt_line_asserted() const;
+    [[nodiscard]] bool waiting_for_interrupt() const { return sync_wait_ || cwai_wait_; }
+    CpuTickResult service_irq(Bus& bus);
+    CpuTickResult service_firq(Bus& bus);
+    CpuTickResult service_nmi(Bus& bus);
+    bool prepare_microcycle(Bus& bus, BusSignals& signals, CpuMicrocycleStatus& status);
+    CpuMicrocycleStatus complete_microcycle(const BusSignals& signals);
+    void discard_micro_ops();
 
 private:
     friend uint16_t read_reg_for_dest(const Registers& regs, uint8_t src_code, bool dest_is_16);
@@ -81,6 +111,7 @@ private:
         std::string name;
         uint8_t bytes{};
         uint8_t cycles{};
+        bool hd6309_only{};
         AddressMode address_mode{AddressMode::NONE};
         Handler handler{nullptr};
     };
@@ -90,15 +121,166 @@ private:
     struct PostbyteResult {
         uint16_t address{};
         uint8_t cycles{};
+        bool valid{true};
     };
 
+    enum class MicroOpKind : uint8_t {
+        None,
+        Nop,
+        LoadImmediate,
+        LoadDirect,
+        StoreDirect,
+        LoadExtended,
+        StoreExtended,
+        Branch,
+        Lbra,
+        LongBranch,
+        IrqEntry,
+        InterruptVector,
+        Swi,
+        Rti,
+        Cwai,
+        Sync,
+        Bsr,
+        Lbsr,
+        Rts,
+        JsrDirect,
+        JsrExtended,
+        JsrIndexed,
+        JmpDirect,
+        JmpExtended,
+        JmpIndexed,
+        RegisterUnary,
+        Alu8Immediate,
+        Alu8Direct,
+        Alu8Extended,
+        Alu16Immediate,
+        Alu16Direct,
+        Alu16Extended,
+        CmpdImmediate,
+        CmpdDirect,
+        CmpdExtended,
+        DAluImmediate,
+        DAluDirect,
+        DAluExtended,
+        Cmp16Immediate,
+        Cmp16Direct,
+        Cmp16Extended,
+        WordLoadImmediate,
+        WordLoadDirect,
+        WordLoadExtended,
+        WordStoreDirect,
+        WordStoreExtended,
+        StackPush,
+        StackPull,
+        WStackPush,
+        WStackPull,
+        ImmediateMemoryDirect,
+        ImmediateMemoryExtended,
+        IndexedImmediateMemory,
+        MemoryUnaryDirect,
+        MemoryUnaryExtended,
+        MiscInherent,
+        CcImmediate,
+        MdImmediate,
+        RegisterTransfer,
+        RegisterAlu,
+        BitTransfer,
+        DivDImmediate,
+        DivDDirect,
+        DivDExtended,
+        IndexedDivD,
+        DivQImmediate,
+        DivQDirect,
+        DivQExtended,
+        IndexedDivQ,
+        Tfm,
+        PrefixedRegisterUnary,
+        IndexedLoad8,
+        IndexedLoad16,
+        IndexedStore8,
+        IndexedStore16,
+        IndexedAlu8,
+        IndexedMemoryUnary,
+        IndexedAlu16,
+        IndexedCmpd,
+        IndexedDAlu,
+        IndexedCmp16,
+        IndexedWordLoad,
+        IndexedWordStore,
+        IndexedLea,
+        WLoadImmediate,
+        WLoadDirect,
+        WLoadExtended,
+        WStoreDirect,
+        WStoreExtended,
+        WAluImmediate,
+        WAluDirect,
+        WAluExtended,
+        WCmpImmediate,
+        WCmpDirect,
+        WCmpExtended,
+        QLoadDirect,
+        QLoadExtended,
+        QStoreDirect,
+        QStoreExtended,
+        EFAluImmediate,
+        EFAluDirect,
+        EFAluExtended,
+        IndexedEFAlu,
+        IndexedWLoad,
+        IndexedWStore,
+        IndexedWAlu,
+        IndexedWCmp,
+        IndexedQLoad,
+        IndexedQStore,
+    };
+
+    enum class MicroOpTarget : uint8_t {
+        None,
+        A,
+        B,
+        D,
+        Q,
+    };
+
+    enum class MicroOpWidth : uint8_t {
+        None,
+        Byte = 1,
+        Word = 2,
+        Long = 4,
+    };
+
+    struct MicroOpState {
+        MicroOpKind kind{MicroOpKind::None};
+        uint16_t start_pc{};
+        uint8_t opcode{};
+        uint8_t prefix{};
+        int32_t step{};
+        int32_t total_cycles{};
+        uint8_t direct_offset{};
+        uint16_t effective_address{};
+        uint16_t data{};
+        uint32_t data32{};
+        bool branch_taken{};
+        bool indexed_indirect{};
+        MicroOpTarget target{MicroOpTarget::None};
+        MicroOpWidth width{MicroOpWidth::None};
+    };
+
+    uint8_t fetch_opcode_byte(Bus& bus);
     uint8_t fetch_byte(Bus& bus);
+    uint8_t fetch_byte(Bus& bus, BusCycleKind cycle_kind);
     uint16_t fetch_word(Bus& bus);
+    uint16_t fetch_word(Bus& bus, BusCycleKind cycle_kind);
     uint8_t read_byte(Bus& bus, uint16_t address);
     void write_byte(Bus& bus, uint16_t address, uint8_t value);
+    uint8_t read_stack_byte(Bus& bus, uint16_t address);
+    void write_stack_byte(Bus& bus, uint16_t address, uint8_t value);
 
     uint16_t direct_address(Bus& bus);
     uint16_t extended_address(Bus& bus);
+    PostbyteResult unsupported_indexed_address(Bus& bus);
     PostbyteResult indexed_address(Bus& bus);
 
     void push_byte(Bus& bus, uint8_t value);
@@ -109,6 +291,7 @@ private:
     void set_flags_nz8(uint8_t value);
     void set_flags_nz16(uint16_t value);
     uint8_t branch_if(Bus& bus, bool take);
+    uint8_t long_branch_if(Bus& bus, bool take);
 
     uint16_t& index_ref(IndexReg reg);
     uint16_t index_value(IndexReg reg) const;
@@ -120,7 +303,13 @@ private:
     void set_reg_w(uint16_t value);
     uint32_t reg_q() const;
     void set_reg_q(uint32_t value);
-    uint8_t op_tfm_common(Bus& bus, bool inc_src, bool inc_dst);
+    uint8_t op_tfm_common(Bus& bus, int8_t src_delta, int8_t dst_delta);
+    void push_interrupt_frame(Bus& bus, uint8_t interrupt_source);
+    CpuTickResult service_interrupt(Bus& bus, uint8_t interrupt_source, bool stack_frame);
+    bool start_micro_op(Bus& bus, uint8_t opcode);
+    bool start_interrupt_micro_op(uint8_t interrupt_source, bool stack_frame);
+    BusSignals micro_op_signals() const;
+    CpuMicrocycleStatus micro_op_status(bool instruction_started, bool instruction_complete) const;
 
     // Instruction handlers (return cycles consumed).
     uint8_t op_nop(Bus&);
@@ -169,6 +358,10 @@ private:
 
     uint8_t op_bra(Bus&);
     uint8_t op_bsr(Bus&);
+    uint8_t op_lbra(Bus&);
+    uint8_t op_lbsr(Bus&);
+    uint8_t op_brn(Bus&);
+    uint8_t op_lbrn(Bus&);
     uint8_t op_beq(Bus&);
     uint8_t op_bne(Bus&);
 
@@ -354,6 +547,20 @@ private:
     uint8_t op_blt(Bus&);
     uint8_t op_bgt(Bus&);
     uint8_t op_ble(Bus&);
+    uint8_t op_lbhi(Bus&);
+    uint8_t op_lbls(Bus&);
+    uint8_t op_lbcc(Bus&);
+    uint8_t op_lbcs(Bus&);
+    uint8_t op_lbpl(Bus&);
+    uint8_t op_lbmi(Bus&);
+    uint8_t op_lbvc(Bus&);
+    uint8_t op_lbvs(Bus&);
+    uint8_t op_lbge(Bus&);
+    uint8_t op_lblt(Bus&);
+    uint8_t op_lbgt(Bus&);
+    uint8_t op_lble(Bus&);
+    uint8_t op_lbne(Bus&);
+    uint8_t op_lbeq(Bus&);
 
     // Loads / stores for 16-bit regs
     uint8_t op_ldx_imm(Bus&);
@@ -469,6 +676,18 @@ private:
     uint8_t op_cmpf_ext(Bus&);
     uint8_t op_cmpf_idx(Bus&);
 
+    uint8_t op_andd_dir(Bus&);
+    uint8_t op_andd_ext(Bus&);
+    uint8_t op_andd_idx(Bus&);
+    uint8_t op_andd_imm(Bus&);
+    uint8_t op_bitd_dir(Bus&);
+    uint8_t op_bitd_ext(Bus&);
+    uint8_t op_bitd_idx(Bus&);
+    uint8_t op_bitd_imm(Bus&);
+    uint8_t op_eord_dir(Bus&);
+    uint8_t op_eord_ext(Bus&);
+    uint8_t op_eord_idx(Bus&);
+    uint8_t op_eord_imm(Bus&);
     uint8_t op_adcd_dir(Bus&);
     uint8_t op_adcd_ext(Bus&);
     uint8_t op_adcd_idx(Bus&);
@@ -486,6 +705,10 @@ private:
     uint8_t op_divq_dir(Bus&);
     uint8_t op_divq_ext(Bus&);
     uint8_t op_divq_idx(Bus&);
+    uint8_t op_divd_imm(Bus&);
+    uint8_t op_divd_dir(Bus&);
+    uint8_t op_divd_ext(Bus&);
+    uint8_t op_divd_idx(Bus&);
     uint8_t op_muld_imm(Bus&);
     uint8_t op_muld_dir(Bus&);
     uint8_t op_muld_ext(Bus&);
@@ -496,17 +719,45 @@ private:
     uint8_t op_cmpr(Bus&);
     uint8_t op_sbcr(Bus&);
     uint8_t op_adcr(Bus&);
+    uint8_t op_andr(Bus&);
     uint8_t op_orr(Bus&);
     uint8_t op_eorr(Bus&);
 
+    uint8_t op_negd(Bus&);
+    uint8_t op_comd(Bus&);
+    uint8_t op_lsrd(Bus&);
+    uint8_t op_asrd(Bus&);
+    uint8_t op_decd(Bus&);
+    uint8_t op_incd(Bus&);
+    uint8_t op_tstd(Bus&);
+    uint8_t op_clrd(Bus&);
     uint8_t op_lsl_d(Bus&);
     uint8_t op_rold(Bus&);
     uint8_t op_rord(Bus&);
+    uint8_t op_comw_inh(Bus&);
+    uint8_t op_lsrw_inh(Bus&);
     uint8_t op_lslw_inh(Bus&);
     uint8_t op_rolw(Bus&);
     uint8_t op_rorw(Bus&);
     uint8_t op_ldmd(Bus&);
+    uint8_t op_bitmd(Bus&);
     uint8_t op_sexw(Bus&);
+
+    uint8_t op_pshsw(Bus&);
+    uint8_t op_pulsw(Bus&);
+    uint8_t op_pshuw(Bus&);
+    uint8_t op_puluw(Bus&);
+
+    uint8_t op_come(Bus&);
+    uint8_t op_comf(Bus&);
+    uint8_t op_dece(Bus&);
+    uint8_t op_decf(Bus&);
+    uint8_t op_ince(Bus&);
+    uint8_t op_incf(Bus&);
+    uint8_t op_tste(Bus&);
+    uint8_t op_tstf(Bus&);
+    uint8_t op_clre(Bus&);
+    uint8_t op_clrf(Bus&);
 
     uint8_t op_tfm_pp(Bus&);
     uint8_t op_tfm_mm(Bus&);
@@ -541,14 +792,21 @@ private:
     CpuMode mode_{};
     Registers regs_{};
     uint64_t cycles_executed_{};
+    uint32_t instruction_cycle_override_{};
     uint16_t last_pc_{};
     uint8_t last_opcode_{};
     uint8_t last_prefix_{};
+    MicroOpState micro_op_{};
 
     Instruction instructions0_[256]{};
     Instruction instructions10_[256]{};
     Instruction instructions11_[256]{};
     bool sync_wait_{false};
+    bool cwai_wait_{false};
+    bool firq_line_asserted_{false};
+    bool nmi_line_asserted_{false};
+    bool nmi_latched_{false};
+    std::shared_ptr<bool> irq_line_asserted_{std::make_shared<bool>(false)};
 };
 
 } // namespace microlind

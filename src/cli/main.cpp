@@ -8,12 +8,14 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
-#include "disassembler.hpp"
-#include "hardware_config.hpp"
-#include "image_loader.hpp"
-#include "sim_builder.hpp"
-#include "util.hpp"
+#include "microlind/app/disassembler.hpp"
+#include "microlind/app/hardware_config.hpp"
+#include "microlind/app/image_loader.hpp"
+#include "microlind/app/logic_validation.hpp"
+#include "microlind/app/sim_builder.hpp"
+#include "microlind/app/util.hpp"
 
 #include "microlind/devices/serial.hpp"
 #include "microlind/simulator.hpp"
@@ -26,6 +28,7 @@ static void print_help() {
               << "  help                     - show this help\n"
               << "  regs                     - show registers\n"
               << "  step [n]                 - execute n instructions (default 1)\n"
+              << "  mstep [n]                - execute n bus microcycles (default 1)\n"
               << "  tick [n]                 - advance bus/clock by n cycles (default 1)\n"
               << "  run [n]                  - execute n instructions (default 1000)\n"
               << "  peek <addr> [count]      - read memory\n"
@@ -36,10 +39,70 @@ static void print_help() {
               << "  loadsrec <path>          - load S-record (absolute addresses)\n"
               << "  loadcfg <path>           - load hardware config\n"
               << "  loadcf <path> [sectors]  - load raw CF disk image\n"
+              << "  pldcfg <signal> <mem> <addr> - print partial hw.cfg from PLD logic\n"
+              << "  pldcheck <cfg> <signal> <mem> <addr> - validate hw.cfg against PLD logic\n"
               << "  serin <text>             - push ASCII text into serial RX\n"
               << "  map                      - show mapped address ranges\n"
               << "  reset                    - reset PC from reset vector\n"
               << "  exit                     - quit\n";
+}
+
+static const char* bus_phase_label(BusPhase phase) {
+    switch (phase) {
+    case BusPhase::QHighELow: return "Q+ E-";
+    case BusPhase::QHighEHigh: return "Q+ E+";
+    case BusPhase::QLowEHigh: return "Q- E+";
+    case BusPhase::QLowELow: return "Q- E-";
+    }
+    return "?";
+}
+
+static const char* bus_cycle_kind_label(BusCycleKind kind) {
+    switch (kind) {
+    case BusCycleKind::Idle: return "idle";
+    case BusCycleKind::OpcodeFetch: return "opcode";
+    case BusCycleKind::OperandRead: return "operand-r";
+    case BusCycleKind::OperandWrite: return "operand-w";
+    case BusCycleKind::StackRead: return "stack-r";
+    case BusCycleKind::StackWrite: return "stack-w";
+    case BusCycleKind::VectorRead: return "vector-r";
+    case BusCycleKind::Internal: return "internal";
+    }
+    return "?";
+}
+
+static void print_microcycle_result(const SimulatorMicrocycleResult& result, const Simulator& sim) {
+    if (!result.emitted) {
+        std::cout << "No bus cycle emitted.\n";
+        return;
+    }
+
+    const auto& s = result.signals;
+    std::cout << std::hex << std::setfill('0')
+              << "bus=" << std::dec << sim.bus().bus_cycle_count()
+              << " phase=" << bus_phase_label(s.phase)
+              << " kind=" << bus_cycle_kind_label(s.cycle_kind)
+              << " addr=" << std::hex << std::setw(4) << s.address
+              << " data=" << std::setw(2) << static_cast<int>(s.data)
+              << " " << (s.rw ? "RD" : "WR")
+              << " mem=" << (s.memory_enable ? 1 : 0)
+              << " e=" << (s.e ? 1 : 0)
+              << " q=" << (s.q ? 1 : 0)
+              << std::dec
+              << " pending=" << result.pending_bus_cycles;
+    if (result.instruction_started) {
+        std::cout << " started";
+    }
+    if (result.instruction_complete) {
+        std::cout << " complete";
+    }
+    std::cout << "\n";
+}
+
+static void print_build_diagnostics(const std::vector<std::string>& diagnostics) {
+    for (const auto& diagnostic : diagnostics) {
+        std::cout << diagnostic << "\n";
+    }
 }
 
 int main(int argc, char** argv) {
@@ -89,7 +152,17 @@ int main(int argc, char** argv) {
         std::cout << "Loaded hardware config from " << config_path << "\n";
     }
 
-    Simulator sim = build_sim(mode, current_image ? &*current_image : nullptr, hw_cfg ? &*hw_cfg : nullptr, &serial_dev);
+    std::vector<std::string> build_diagnostics;
+    Simulator sim = build_sim(
+        mode,
+        current_image ? &*current_image : nullptr,
+        hw_cfg ? &*hw_cfg : nullptr,
+        &serial_dev,
+        nullptr,
+        nullptr,
+        nullptr,
+        &build_diagnostics);
+    print_build_diagnostics(build_diagnostics);
 
     std::cout << "Microlind-sim interactive CLI. Type 'help' for commands.\n";
 
@@ -159,6 +232,16 @@ int main(int argc, char** argv) {
                 std::cout << "PC=" << std::hex << std::setw(4) << sim.cpu().regs().pc
                           << " cycles=" << std::dec << sim.clock().total_cycles() << "\n";
             }
+        } else if (cmd == "mstep") {
+            uint64_t n = 1;
+            std::string nstr;
+            if (iss >> nstr) {
+                if (auto v = parse_number(nstr)) n = *v;
+            }
+            for (uint64_t i = 0; i < n; ++i) {
+                const auto result = sim.tick_microcycle();
+                print_microcycle_result(result, sim);
+            }
         } else if (cmd == "tick") {
             uint64_t n = 1;
             std::string nstr;
@@ -220,7 +303,9 @@ int main(int argc, char** argv) {
             }
             current_image = load_image(path, f, base);
             if (!current_image) { std::cout << "Failed to load image\n"; continue; }
-            sim = build_sim(mode, &*current_image, hw_cfg ? &*hw_cfg : nullptr, &serial_dev);
+            build_diagnostics.clear();
+            sim = build_sim(mode, &*current_image, hw_cfg ? &*hw_cfg : nullptr, &serial_dev, nullptr, nullptr, nullptr, &build_diagnostics);
+            print_build_diagnostics(build_diagnostics);
             std::cout << "Image loaded and CPU reset.\n";
         } else if (cmd == "loadcfg") {
             std::string path;
@@ -232,7 +317,9 @@ int main(int argc, char** argv) {
                 continue;
             }
             hw_cfg = std::move(cfg);
-            sim = build_sim(mode, current_image ? &*current_image : nullptr, hw_cfg ? &*hw_cfg : nullptr, &serial_dev);
+            build_diagnostics.clear();
+            sim = build_sim(mode, current_image ? &*current_image : nullptr, hw_cfg ? &*hw_cfg : nullptr, &serial_dev, nullptr, nullptr, nullptr, &build_diagnostics);
+            print_build_diagnostics(build_diagnostics);
             std::cout << "Hardware config loaded and CPU reset.\n";
         } else if (cmd == "loadcf") {
             std::string path;
@@ -257,8 +344,57 @@ int main(int argc, char** argv) {
                     continue;
                 }
             }
-            sim = build_sim(mode, current_image ? &*current_image : nullptr, hw_cfg ? &*hw_cfg : nullptr, &serial_dev);
+            build_diagnostics.clear();
+            sim = build_sim(mode, current_image ? &*current_image : nullptr, hw_cfg ? &*hw_cfg : nullptr, &serial_dev, nullptr, nullptr, nullptr, &build_diagnostics);
+            print_build_diagnostics(build_diagnostics);
             std::cout << "CF disk image loaded and CPU reset.\n";
+        } else if (cmd == "pldcfg") {
+            std::string signal_path;
+            std::string memory_path;
+            std::string address_path;
+            if (!(iss >> signal_path >> memory_path >> address_path)) {
+                std::cout << "Usage: pldcfg <signal.pld> <memory.pld> <address.pld>\n";
+                continue;
+            }
+            std::string err;
+            const auto devices = load_board_logic_devices(signal_path, memory_path, address_path, err);
+            if (!devices) {
+                std::cout << err;
+                continue;
+            }
+            std::cout << generate_partial_hardware_config_from_logic(*devices);
+        } else if (cmd == "pldcheck") {
+            std::string cfg_path;
+            std::string signal_path;
+            std::string memory_path;
+            std::string address_path;
+            if (!(iss >> cfg_path >> signal_path >> memory_path >> address_path)) {
+                std::cout << "Usage: pldcheck <hw.cfg> <signal.pld> <memory.pld> <address.pld>\n";
+                continue;
+            }
+
+            std::string err;
+            const auto cfg = load_hardware_config(cfg_path, err);
+            if (!cfg) {
+                std::cout << "Config error: " << err << "\n";
+                continue;
+            }
+
+            const auto devices = load_board_logic_devices(signal_path, memory_path, address_path, err);
+            if (!devices) {
+                std::cout << err;
+                continue;
+            }
+
+            const auto issues = validate_hardware_config_against_logic(*cfg, *devices);
+            if (issues.empty()) {
+                std::cout << "PLD validation OK.\n";
+            } else {
+                std::cout << "PLD validation found " << issues.size() << " issue(s):\n";
+                for (const auto& issue : issues) {
+                    std::cout << "  " << format_logic_validation_issue(issue) << "\n";
+                }
+            }
         } else if (cmd == "map") {
             auto summary = sim.bus().map_summary();
             for (const auto& s : summary) {

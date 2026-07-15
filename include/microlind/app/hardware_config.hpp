@@ -1,10 +1,13 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
+
+#include "microlind/bus.hpp"
 
 namespace microlind::cli {
 
@@ -24,6 +27,7 @@ struct RamConfig {
 struct SerialConfig {
     uint16_t start{};
     uint16_t end{};
+    uint8_t irq_level{1};
     bool present{false};
 };
 
@@ -36,8 +40,23 @@ struct CfConfig {
     bool present{false};
 };
 
+struct MapperWindowConfig {
+    uint16_t start{};
+    uint16_t end{};
+    bool present{false};
+};
+
 struct MapperConfig {
     uint16_t bank_reg[4]{};
+    std::array<MapperWindowConfig, 4> windows{};
+    bool present{false};
+};
+
+struct LogicConfig {
+    std::filesystem::path signal_logic_path;
+    std::filesystem::path memory_logic_path;
+    std::filesystem::path address_logic_path;
+    BusDecodeMode bus_mode{BusDecodeMode::Validate};
     bool present{false};
 };
 
@@ -47,6 +66,7 @@ struct HardwareConfig {
     SerialConfig serial;
     CfConfig cf;
     MapperConfig mapper;
+    LogicConfig logic;
 };
 
 std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& path, std::string& error);

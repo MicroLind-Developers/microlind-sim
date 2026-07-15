@@ -1,0 +1,21 @@
+if(NOT DEFINED INPUT_FILE)
+    message(FATAL_ERROR "INPUT_FILE is required")
+endif()
+if(NOT DEFINED OUTPUT_FILE)
+    message(FATAL_ERROR "OUTPUT_FILE is required")
+endif()
+
+file(READ "${INPUT_FILE}" CONTENT)
+
+if(CONTENT MATCHES "\\)MICROLINDHELP\"")
+    message(FATAL_ERROR "Input contains the generated raw-string delimiter")
+endif()
+
+file(WRITE "${OUTPUT_FILE}" "#include \"help_document.hpp\"\n\n")
+file(APPEND "${OUTPUT_FILE}" "namespace microlind::gui {\n\n")
+file(APPEND "${OUTPUT_FILE}" "std::string_view help_document_text() {\n")
+file(APPEND "${OUTPUT_FILE}" "    return R\"MICROLINDHELP(")
+file(APPEND "${OUTPUT_FILE}" "${CONTENT}")
+file(APPEND "${OUTPUT_FILE}" ")MICROLINDHELP\";\n")
+file(APPEND "${OUTPUT_FILE}" "}\n\n")
+file(APPEND "${OUTPUT_FILE}" "} // namespace microlind::gui\n")
