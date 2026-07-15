@@ -53,6 +53,7 @@ private:
     void queue_instruction_microcycles();
     SimulatorMicrocycleResult emit_pending_microcycle(bool instruction_started);
     SimulatorMicrocycleResult emit_cpu_microcycle();
+    SimulatorMicrocycleResult emit_cpu_wait_microcycle();
 
     Cpu cpu_;
     Bus bus_;

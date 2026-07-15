@@ -113,9 +113,30 @@ SimulatorMicrocycleResult Simulator::emit_cpu_microcycle() {
     };
 }
 
+SimulatorMicrocycleResult Simulator::emit_cpu_wait_microcycle() {
+    BusSignals signals;
+    signals.address = cpu_.regs().pc;
+    signals.cycle_kind = BusCycleKind::Internal;
+    bus_.tick_bus_cycle(signals);
+    clock_.advance_cycles(1);
+    bus_.tick_devices(1);
+    return SimulatorMicrocycleResult{
+        true,
+        false,
+        false,
+        CpuTickResult{1},
+        bus_.last_signals(),
+        0,
+    };
+}
+
 SimulatorMicrocycleResult Simulator::tick_microcycle() {
     if (cpu_.has_pending_micro_ops()) {
         return emit_cpu_microcycle();
+    }
+
+    if (cpu_.waiting_for_interrupt() && !cpu_.interrupt_line_asserted()) {
+        return emit_cpu_wait_microcycle();
     }
 
     if (pending_bus_cycles_.empty()) {

@@ -80,10 +80,21 @@ public:
     uint8_t opcode_length(Bus& bus, uint16_t pc) const;
     [[nodiscard]] bool has_pending_micro_ops() const;
     void set_irq_line(bool asserted) { *irq_line_asserted_ = asserted; }
+    void set_firq_line(bool asserted) { firq_line_asserted_ = asserted; }
+    void set_nmi_line(bool asserted);
     [[nodiscard]] bool irq_line_asserted() const { return *irq_line_asserted_; }
+    [[nodiscard]] bool firq_line_asserted() const { return firq_line_asserted_; }
+    [[nodiscard]] bool nmi_line_asserted() const { return nmi_line_asserted_; }
+    [[nodiscard]] bool nmi_latched() const { return nmi_latched_; }
     [[nodiscard]] std::shared_ptr<bool> irq_line_state() const { return irq_line_asserted_; }
     [[nodiscard]] bool irq_pending() const;
+    [[nodiscard]] bool firq_pending() const;
+    [[nodiscard]] bool nmi_pending() const;
+    [[nodiscard]] bool interrupt_line_asserted() const;
+    [[nodiscard]] bool waiting_for_interrupt() const { return sync_wait_ || cwai_wait_; }
     CpuTickResult service_irq(Bus& bus);
+    CpuTickResult service_firq(Bus& bus);
+    CpuTickResult service_nmi(Bus& bus);
     bool prepare_microcycle(Bus& bus, BusSignals& signals, CpuMicrocycleStatus& status);
     CpuMicrocycleStatus complete_microcycle(const BusSignals& signals);
     void discard_micro_ops();
@@ -135,6 +146,7 @@ private:
         Lbra,
         LongBranch,
         IrqEntry,
+        InterruptVector,
         Swi,
         Rti,
         Cwai,
@@ -307,7 +319,10 @@ private:
     uint32_t reg_q() const;
     void set_reg_q(uint32_t value);
     uint8_t op_tfm_common(Bus& bus, int8_t src_delta, int8_t dst_delta);
+    void push_interrupt_frame(Bus& bus, uint8_t interrupt_source);
+    CpuTickResult service_interrupt(Bus& bus, uint8_t interrupt_source, bool stack_frame);
     bool start_micro_op(Bus& bus, uint8_t opcode);
+    bool start_interrupt_micro_op(uint8_t interrupt_source, bool stack_frame);
     BusSignals micro_op_signals() const;
     CpuMicrocycleStatus micro_op_status(bool instruction_started, bool instruction_complete) const;
 
@@ -792,6 +807,7 @@ private:
     CpuMode mode_{};
     Registers regs_{};
     uint64_t cycles_executed_{};
+    uint32_t instruction_cycle_override_{};
     uint16_t last_pc_{};
     uint8_t last_opcode_{};
     uint8_t last_prefix_{};
@@ -801,6 +817,10 @@ private:
     Instruction instructions10_[256]{};
     Instruction instructions11_[256]{};
     bool sync_wait_{false};
+    bool cwai_wait_{false};
+    bool firq_line_asserted_{false};
+    bool nmi_line_asserted_{false};
+    bool nmi_latched_{false};
     std::shared_ptr<bool> irq_line_asserted_{std::make_shared<bool>(false)};
 };
 

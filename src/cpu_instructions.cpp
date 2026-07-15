@@ -637,11 +637,17 @@ uint8_t Cpu::op_rti(Bus& bus) {
     if (regs_.cc & CC_E) {
         regs_.a = pull_byte(bus);
         regs_.b = pull_byte(bus);
+        if (is_native_hd6309(regs_, mode_)) {
+            regs_.e = pull_byte(bus);
+            regs_.f = pull_byte(bus);
+            cycles = 17;
+        } else {
+            cycles = 15;
+        }
         regs_.dp = pull_byte(bus);
         regs_.x = pull_word(bus);
         regs_.y = pull_word(bus);
         regs_.u = pull_word(bus);
-        cycles = 15;
     }
     regs_.pc = pull_word(bus);
     return cycles;
@@ -649,68 +655,39 @@ uint8_t Cpu::op_rti(Bus& bus) {
 
 uint8_t Cpu::op_swi(Bus& bus) {
     regs_.cc |= CC_E;
-    push_word(bus, regs_.pc);
-    push_word(bus, regs_.u);
-    push_word(bus, regs_.y);
-    push_word(bus, regs_.x);
-    push_byte(bus, regs_.dp);
-    push_byte(bus, regs_.b);
-    push_byte(bus, regs_.a);
-    push_byte(bus, regs_.cc);
+    push_interrupt_frame(bus, 0);
     regs_.cc |= static_cast<uint8_t>(CC_I | CC_F);
     regs_.pc = read_word(bus, VECTOR_SWI, BusCycleKind::VectorRead);
-    return 19;
+    return is_native_hd6309(regs_, mode_) ? 21 : 19;
 }
 
 uint8_t Cpu::op_swi2(Bus& bus) {
     regs_.cc |= CC_E;
-    push_word(bus, regs_.pc);
-    push_word(bus, regs_.u);
-    push_word(bus, regs_.y);
-    push_word(bus, regs_.x);
-    push_byte(bus, regs_.dp);
-    push_byte(bus, regs_.b);
-    push_byte(bus, regs_.a);
-    push_byte(bus, regs_.cc);
+    push_interrupt_frame(bus, 0);
     regs_.cc |= CC_I;
     regs_.pc = read_word(bus, VECTOR_SWI2, BusCycleKind::VectorRead);
-    return 20;
+    return is_native_hd6309(regs_, mode_) ? 22 : 20;
 }
 
 uint8_t Cpu::op_swi3(Bus& bus) {
     regs_.cc |= CC_E;
-    push_word(bus, regs_.pc);
-    push_word(bus, regs_.u);
-    push_word(bus, regs_.y);
-    push_word(bus, regs_.x);
-    push_byte(bus, regs_.dp);
-    push_byte(bus, regs_.b);
-    push_byte(bus, regs_.a);
-    push_byte(bus, regs_.cc);
+    push_interrupt_frame(bus, 0);
     regs_.cc |= CC_I;
     regs_.pc = read_word(bus, VECTOR_SWI3, BusCycleKind::VectorRead);
-    return 20;
+    return is_native_hd6309(regs_, mode_) ? 22 : 20;
 }
 
 uint8_t Cpu::op_cwai(Bus& bus) {
     const uint8_t mask = fetch_byte(bus);
     regs_.cc &= mask;
     regs_.cc |= CC_E;
-    push_word(bus, regs_.pc);
-    push_word(bus, regs_.u);
-    push_word(bus, regs_.y);
-    push_word(bus, regs_.x);
-    push_byte(bus, regs_.dp);
-    push_byte(bus, regs_.b);
-    push_byte(bus, regs_.a);
-    push_byte(bus, regs_.cc);
-    regs_.cc |= CC_I;
-    // No waiting state modeled yet.
-    return 19;
+    push_interrupt_frame(bus, 0);
+    cwai_wait_ = true;
+    return is_native_hd6309(regs_, mode_) ? 20 : 22;
 }
 
 uint8_t Cpu::op_sync(Bus&) {
-    sync_wait_ = true; // not modeled yet
+    sync_wait_ = true;
     return 2;
 }
 
@@ -3058,8 +3035,8 @@ uint8_t Cpu::op_tfm_common(Bus& bus, int8_t src_delta, int8_t dst_delta) {
         regs_.pc = read_word(bus, 0xFFF0, BusCycleKind::VectorRead);
         return 6;
     }
-    uint32_t count = reg_w();
-    if (count == 0) count = 0x10000;
+    const uint32_t original_count = reg_w() == 0 ? 0x10000u : reg_w();
+    uint32_t count = original_count;
     for (uint32_t i = 0; i < count; ++i) {
         const uint8_t byte = read_byte(bus, *src_ptr);
         *src_ptr = static_cast<uint16_t>(*src_ptr + src_delta);
@@ -3068,7 +3045,8 @@ uint8_t Cpu::op_tfm_common(Bus& bus, int8_t src_delta, int8_t dst_delta) {
         set_reg_w(static_cast<uint16_t>(reg_w() - 1));
         if (reg_w() == 0) break;
     }
-    return 6; // base cycles; ignores per-byte timing.
+    instruction_cycle_override_ = static_cast<uint32_t>(6 + 3 * original_count);
+    return static_cast<uint8_t>(instruction_cycle_override_ & 0xFF);
 }
 
 uint8_t Cpu::op_tfm_pp(Bus& bus) { return op_tfm_common(bus, 1, 1); }

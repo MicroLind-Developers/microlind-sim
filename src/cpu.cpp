@@ -1385,6 +1385,132 @@ uint8_t full_interrupt_stack_push_byte(const Registers& regs, uint8_t index) {
     return stack_push_byte(stacked, 0xFF, index, false);
 }
 
+enum class InterruptSource : uint8_t {
+    Irq = 0,
+    Firq = 1,
+    Nmi = 2,
+};
+
+bool native_hd6309_frame(const Registers& regs, CpuMode mode) {
+    return mode == CpuMode::HD6309 && (regs.md & 0x01) != 0;
+}
+
+bool interrupt_uses_full_frame(const Registers& regs, InterruptSource source) {
+    return source != InterruptSource::Firq || (regs.md & 0x02) != 0;
+}
+
+uint16_t interrupt_vector(InterruptSource source) {
+    switch (source) {
+    case InterruptSource::Firq: return 0xFFF6;
+    case InterruptSource::Nmi: return 0xFFFC;
+    case InterruptSource::Irq:
+    default:
+        return 0xFFF8;
+    }
+}
+
+uint8_t interrupt_stack_byte_count(const Registers& regs, CpuMode mode, InterruptSource source) {
+    if (!interrupt_uses_full_frame(regs, source)) {
+        return 3;
+    }
+    return native_hd6309_frame(regs, mode) ? 14 : 12;
+}
+
+uint8_t interrupt_total_cycles(const Registers& regs, CpuMode mode, InterruptSource source) {
+    if (!interrupt_uses_full_frame(regs, source)) {
+        return 10;
+    }
+    return native_hd6309_frame(regs, mode) ? 21 : 19;
+}
+
+uint8_t interrupt_stack_push_byte(const Registers& regs, CpuMode mode, InterruptSource source, uint8_t index) {
+    if (!interrupt_uses_full_frame(regs, source)) {
+        Registers stacked = regs;
+        stacked.cc = static_cast<uint8_t>(stacked.cc & ~CC_E);
+        return stack_push_byte(stacked, 0x81, index, false);
+    }
+
+    if (!native_hd6309_frame(regs, mode)) {
+        return full_interrupt_stack_push_byte(regs, index);
+    }
+
+    uint8_t current = 0;
+    const auto emit_byte = [&](uint8_t value, uint8_t& out) {
+        if (current == index) {
+            out = value;
+            return true;
+        }
+        ++current;
+        return false;
+    };
+    const auto emit_word = [&](uint16_t value, uint8_t& out) {
+        if (emit_byte(lo(value), out)) return true;
+        return emit_byte(hi(value), out);
+    };
+
+    uint8_t result = 0x00;
+    if (emit_word(regs.pc, result)) return result;
+    if (emit_word(regs.u, result)) return result;
+    if (emit_word(regs.y, result)) return result;
+    if (emit_word(regs.x, result)) return result;
+    if (emit_byte(regs.dp, result)) return result;
+    if (emit_byte(regs.f, result)) return result;
+    if (emit_byte(regs.e, result)) return result;
+    if (emit_byte(regs.b, result)) return result;
+    if (emit_byte(regs.a, result)) return result;
+    if (emit_byte(static_cast<uint8_t>(regs.cc | CC_E), result)) return result;
+    return result;
+}
+
+void apply_native_interrupt_pull_byte(Registers& regs, uint8_t index, uint8_t value, uint16_t& word_data) {
+    uint8_t current = 0;
+    const auto consume_byte = [&](auto&& setter) {
+        if (current == index) {
+            setter(value);
+            return true;
+        }
+        ++current;
+        return false;
+    };
+    const auto consume_word = [&](auto&& setter) {
+        if (current == index) {
+            word_data = static_cast<uint16_t>(static_cast<uint16_t>(value) << 8);
+            return true;
+        }
+        ++current;
+        if (current == index) {
+            word_data = static_cast<uint16_t>(word_data | value);
+            setter(word_data);
+            return true;
+        }
+        ++current;
+        return false;
+    };
+
+    if (consume_byte([&](uint8_t v) { regs.cc = v; })) return;
+    if (consume_byte([&](uint8_t v) { regs.a = v; })) return;
+    if (consume_byte([&](uint8_t v) { regs.b = v; })) return;
+    if (consume_byte([&](uint8_t v) { regs.e = v; })) return;
+    if (consume_byte([&](uint8_t v) { regs.f = v; })) return;
+    if (consume_byte([&](uint8_t v) { regs.dp = v; })) return;
+    if (consume_word([&](uint16_t v) { regs.x = v; })) return;
+    if (consume_word([&](uint16_t v) { regs.y = v; })) return;
+    if (consume_word([&](uint16_t v) { regs.u = v; })) return;
+    consume_word([&](uint16_t v) { regs.pc = v; });
+}
+
+void apply_interrupt_masks(Registers& regs, InterruptSource source) {
+    switch (source) {
+    case InterruptSource::Irq:
+        regs.cc = static_cast<uint8_t>(regs.cc | CC_I);
+        break;
+    case InterruptSource::Firq:
+    case InterruptSource::Nmi:
+        regs.cc = static_cast<uint8_t>(regs.cc | CC_I | CC_F);
+        break;
+    }
+}
+
 void set_stack_partner_register(Registers& regs, bool use_u_stack, uint16_t value) {
     if (use_u_stack) {
         regs.s = value;
@@ -2074,14 +2200,54 @@ void Cpu::reset() {
     regs_.s = 0xFFFF;
     regs_.cc = CC_I; // IRQ masked on reset by default.
     cycles_executed_ = 0;
+    instruction_cycle_override_ = 0;
     last_pc_ = 0;
     last_opcode_ = 0;
     last_prefix_ = 0;
     micro_op_ = {};
     sync_wait_ = false;
+    cwai_wait_ = false;
+    firq_line_asserted_ = false;
+    nmi_line_asserted_ = false;
+    nmi_latched_ = false;
+}
+
+void Cpu::set_nmi_line(bool asserted) {
+    if (asserted && !nmi_line_asserted_) {
+        nmi_latched_ = true;
+    }
+    nmi_line_asserted_ = asserted;
 }
 
 CpuTickResult Cpu::tick(Bus& bus) {
+    if (sync_wait_) {
+        if (!interrupt_line_asserted()) {
+            cycles_executed_ += 1;
+            return CpuTickResult{1};
+        }
+        sync_wait_ = false;
+    }
+
+    if (cwai_wait_) {
+        if (nmi_pending()) {
+            return service_nmi(bus);
+        }
+        if (firq_pending()) {
+            return service_firq(bus);
+        }
+        if (irq_pending()) {
+            return service_irq(bus);
+        }
+        cycles_executed_ += 1;
+        return CpuTickResult{1};
+    }
+
+    if (nmi_pending()) {
+        return service_nmi(bus);
+    }
+    if (firq_pending()) {
+        return service_firq(bus);
+    }
     if (irq_pending()) {
         return service_irq(bus);
     }
@@ -2106,7 +2272,10 @@ CpuTickResult Cpu::tick(Bus& bus) {
     const Handler handler = (inst && inst->handler && !(mode_ == CpuMode::MC6809 && inst->hd6309_only))
         ? inst->handler
         : &Cpu::op_invalid;
-    const uint8_t cycles = (this->*handler)(bus);
+    instruction_cycle_override_ = 0;
+    const uint8_t handler_cycles = (this->*handler)(bus);
+    const uint32_t cycles = instruction_cycle_override_ != 0 ? instruction_cycle_override_ : handler_cycles;
+    instruction_cycle_override_ = 0;
     cycles_executed_ += cycles;
     return CpuTickResult{cycles};
 }
@@ -2300,15 +2469,17 @@ bool Cpu::start_micro_op(Bus& bus, uint8_t opcode) {
         break;
     case 0x3B:
         kind = MicroOpKind::Rti;
-        total_cycles = (bus.peek8(regs_.s) & CC_E) ? 15 : 6;
+        total_cycles = (bus.peek8(regs_.s) & CC_E)
+            ? (native_hd6309_frame(regs_, mode_) ? 17 : 15)
+            : 6;
         break;
     case 0x3C:
         kind = MicroOpKind::Cwai;
-        total_cycles = 19;
+        total_cycles = native_hd6309_frame(regs_, mode_) ? 20 : 22;
         break;
     case 0x3F:
         kind = MicroOpKind::Swi;
-        total_cycles = 19;
+        total_cycles = native_hd6309_frame(regs_, mode_) ? 21 : 19;
         break;
     case 0x34:
     case 0x36:
@@ -2577,7 +2748,7 @@ bool Cpu::start_micro_op(Bus& bus, uint8_t opcode) {
             }
             if (next == 0x3F) {
                 kind = MicroOpKind::Swi;
-                total_cycles = 20;
+                total_cycles = native_hd6309_frame(regs_, mode_) ? 22 : 20;
                 prefix = opcode;
                 opcode = next;
                 break;
@@ -2885,7 +3056,7 @@ bool Cpu::start_micro_op(Bus& bus, uint8_t opcode) {
             const uint8_t next = bus.peek8(static_cast<uint16_t>(regs_.pc + 1));
             if (next == 0x3F) {
                 kind = MicroOpKind::Swi;
-                total_cycles = 20;
+                total_cycles = native_hd6309_frame(regs_, mode_) ? 22 : 20;
                 prefix = opcode;
                 opcode = next;
                 break;
@@ -3148,6 +3319,33 @@ bool Cpu::start_micro_op(Bus& bus, uint8_t opcode) {
         initial_data32,
         branch_taken,
         indexed_indirect,
+    };
+    return true;
+}
+
+bool Cpu::start_interrupt_micro_op(uint8_t interrupt_source, bool stack_frame) {
+    const auto source = static_cast<InterruptSource>(interrupt_source);
+    last_pc_ = regs_.pc;
+    last_prefix_ = 0x00;
+    last_opcode_ = 0x00;
+    if (stack_frame && interrupt_uses_full_frame(regs_, source)) {
+        regs_.cc = static_cast<uint8_t>(regs_.cc | CC_E);
+    } else if (stack_frame) {
+        regs_.cc = static_cast<uint8_t>(regs_.cc & ~CC_E);
+    }
+    micro_op_ = MicroOpState{
+        stack_frame ? MicroOpKind::IrqEntry : MicroOpKind::InterruptVector,
+        regs_.pc,
+        interrupt_source,
+        0x00,
+        0,
+        stack_frame ? interrupt_total_cycles(regs_, mode_, source) : 2,
+        0,
+        0,
+        0,
+        0,
+        false,
+        false,
     };
     return true;
 }
@@ -3927,14 +4125,24 @@ BusSignals Cpu::micro_op_signals() const {
         return micro_op_.step == 0
             ? read_cycle(regs_.pc, BusCycleKind::OpcodeFetch)
             : internal_cycle(regs_.pc);
+    case MicroOpKind::InterruptVector: {
+        const auto source = static_cast<InterruptSource>(micro_op_.opcode);
+        const uint16_t vector = interrupt_vector(source);
+        if (micro_op_.step == 0) return read_cycle(vector, BusCycleKind::VectorRead);
+        if (micro_op_.step == 1) return read_cycle(static_cast<uint16_t>(vector + 1), BusCycleKind::VectorRead);
+        return internal_cycle(regs_.pc);
+    }
     case MicroOpKind::IrqEntry:
     case MicroOpKind::Swi: {
-        const int32_t stack_start = micro_op_.kind == MicroOpKind::IrqEntry
-            ? 0
-            : (micro_op_.prefix == 0x00 ? 1 : 2);
-        const int32_t vector_step = stack_start + 12;
-        const uint16_t vector = micro_op_.kind == MicroOpKind::IrqEntry
-            ? 0xFFF8
+        const bool external_interrupt = micro_op_.kind == MicroOpKind::IrqEntry;
+        const auto source = static_cast<InterruptSource>(micro_op_.opcode);
+        const int32_t stack_start = external_interrupt ? 0 : (micro_op_.prefix == 0x00 ? 1 : 2);
+        const int32_t stack_bytes = external_interrupt
+            ? interrupt_stack_byte_count(regs_, mode_, source)
+            : (native_hd6309_frame(regs_, mode_) ? 14 : 12);
+        const int32_t vector_step = stack_start + stack_bytes;
+        const uint16_t vector = external_interrupt
+            ? interrupt_vector(source)
             : micro_op_.prefix == 0x10
                 ? 0xFFF4
                 : micro_op_.prefix == 0x11
@@ -3948,7 +4156,9 @@ BusSignals Cpu::micro_op_signals() const {
             const uint8_t byte_index = static_cast<uint8_t>(micro_op_.step - stack_start);
             return write_cycle(
                 static_cast<uint16_t>(regs_.s - 1),
-                full_interrupt_stack_push_byte(regs_, byte_index),
+                external_interrupt
+                    ? interrupt_stack_push_byte(regs_, mode_, source, byte_index)
+                    : interrupt_stack_push_byte(regs_, mode_, InterruptSource::Irq, byte_index),
                 BusCycleKind::StackWrite);
         }
         if (micro_op_.step == vector_step) return read_cycle(vector, BusCycleKind::VectorRead);
@@ -3957,14 +4167,14 @@ BusSignals Cpu::micro_op_signals() const {
     }
     case MicroOpKind::Cwai: {
         constexpr int32_t stack_start = 2;
-        constexpr int32_t stack_end = stack_start + 12;
+        const int32_t stack_end = stack_start + (native_hd6309_frame(regs_, mode_) ? 14 : 12);
         if (micro_op_.step == 0) return read_cycle(regs_.pc, BusCycleKind::OpcodeFetch);
         if (micro_op_.step == 1) return read_cycle(regs_.pc, BusCycleKind::OperandRead);
         if (micro_op_.step >= stack_start && micro_op_.step < stack_end) {
             const uint8_t byte_index = static_cast<uint8_t>(micro_op_.step - stack_start);
             return write_cycle(
                 static_cast<uint16_t>(regs_.s - 1),
-                full_interrupt_stack_push_byte(regs_, byte_index),
+                interrupt_stack_push_byte(regs_, mode_, InterruptSource::Irq, byte_index),
                 BusCycleKind::StackWrite);
         }
         return internal_cycle(regs_.pc);
@@ -3977,7 +4187,8 @@ BusSignals Cpu::micro_op_signals() const {
             if (micro_op_.step == 3) return read_cycle(regs_.s, BusCycleKind::StackRead);
             return internal_cycle(regs_.pc);
         }
-        if (micro_op_.step >= 2 && micro_op_.step <= 12) {
+        const int32_t last_stack_step = native_hd6309_frame(regs_, mode_) ? 14 : 12;
+        if (micro_op_.step >= 2 && micro_op_.step <= last_stack_step) {
             return read_cycle(regs_.s, BusCycleKind::StackRead);
         }
         return internal_cycle(regs_.pc);
@@ -4192,25 +4403,32 @@ BusSignals Cpu::micro_op_signals() const {
 bool Cpu::prepare_microcycle(Bus& bus, BusSignals& signals, CpuMicrocycleStatus& status) {
     bool instruction_started = false;
     if (!has_pending_micro_ops()) {
-        if (irq_pending()) {
-            last_pc_ = regs_.pc;
-            last_prefix_ = 0x00;
-            last_opcode_ = 0x00;
-            regs_.cc = static_cast<uint8_t>(regs_.cc | CC_E);
-            micro_op_ = MicroOpState{
-                MicroOpKind::IrqEntry,
-                regs_.pc,
-                0x00,
-                0x00,
-                0,
-                19,
-                0,
-                0,
-                0,
-                0,
-                false,
-                false,
-            };
+        if (sync_wait_ && !interrupt_line_asserted()) {
+            return false;
+        }
+        if (sync_wait_) {
+            sync_wait_ = false;
+        }
+
+        if (cwai_wait_) {
+            if (nmi_pending()) {
+                start_interrupt_micro_op(static_cast<uint8_t>(InterruptSource::Nmi), false);
+            } else if (firq_pending()) {
+                start_interrupt_micro_op(static_cast<uint8_t>(InterruptSource::Firq), false);
+            } else if (irq_pending()) {
+                start_interrupt_micro_op(static_cast<uint8_t>(InterruptSource::Irq), false);
+            } else {
+                return false;
+            }
+            instruction_started = true;
+        } else if (nmi_pending()) {
+            start_interrupt_micro_op(static_cast<uint8_t>(InterruptSource::Nmi), true);
+            instruction_started = true;
+        } else if (firq_pending()) {
+            start_interrupt_micro_op(static_cast<uint8_t>(InterruptSource::Firq), true);
+            instruction_started = true;
+        } else if (irq_pending()) {
+            start_interrupt_micro_op(static_cast<uint8_t>(InterruptSource::Irq), true);
             instruction_started = true;
         } else {
             const uint8_t opcode = bus.peek8(regs_.pc);
@@ -5612,12 +5830,31 @@ CpuMicrocycleStatus Cpu::complete_microcycle(const BusSignals& signals) {
             sync_wait_ = true;
         }
         break;
+    case MicroOpKind::InterruptVector: {
+        const auto source = static_cast<InterruptSource>(micro_op_.opcode);
+        if (completed_step == 0) {
+            micro_op_.data = static_cast<uint16_t>(static_cast<uint16_t>(signals.data) << 8);
+        } else if (completed_step == 1) {
+            micro_op_.data = static_cast<uint16_t>(micro_op_.data | signals.data);
+            apply_interrupt_masks(regs_, source);
+            regs_.pc = micro_op_.data;
+            if (source == InterruptSource::Nmi) {
+                nmi_latched_ = false;
+            }
+            sync_wait_ = false;
+            cwai_wait_ = false;
+        }
+        break;
+    }
     case MicroOpKind::IrqEntry:
     case MicroOpKind::Swi: {
-        const int32_t stack_start = micro_op_.kind == MicroOpKind::IrqEntry
-            ? 0
-            : (micro_op_.prefix == 0x00 ? 1 : 2);
-        const int32_t vector_step = stack_start + 12;
+        const bool external_interrupt = micro_op_.kind == MicroOpKind::IrqEntry;
+        const auto source = static_cast<InterruptSource>(micro_op_.opcode);
+        const int32_t stack_start = external_interrupt ? 0 : (micro_op_.prefix == 0x00 ? 1 : 2);
+        const int32_t stack_bytes = external_interrupt
+            ? interrupt_stack_byte_count(regs_, mode_, source)
+            : (native_hd6309_frame(regs_, mode_) ? 14 : 12);
+        const int32_t vector_step = stack_start + stack_bytes;
         if (micro_op_.kind == MicroOpKind::Swi &&
             (completed_step == 0 || (micro_op_.prefix != 0x00 && completed_step == 1))) {
             regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
@@ -5634,8 +5871,12 @@ CpuMicrocycleStatus Cpu::complete_microcycle(const BusSignals& signals) {
                         regs_.cc = static_cast<uint8_t>(regs_.cc | CC_F);
                     }
                 } else {
-                    regs_.cc = static_cast<uint8_t>(regs_.cc | CC_I);
+                    apply_interrupt_masks(regs_, source);
+                    if (source == InterruptSource::Nmi) {
+                        nmi_latched_ = false;
+                    }
                     sync_wait_ = false;
+                    cwai_wait_ = false;
                 }
             }
         } else if (completed_step == vector_step) {
@@ -5648,7 +5889,7 @@ CpuMicrocycleStatus Cpu::complete_microcycle(const BusSignals& signals) {
     }
     case MicroOpKind::Cwai: {
         constexpr int32_t stack_start = 2;
-        constexpr int32_t stack_end = stack_start + 12;
+        const int32_t stack_end = stack_start + (native_hd6309_frame(regs_, mode_) ? 14 : 12);
         if (completed_step == 0) {
             regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
         } else if (completed_step == 1) {
@@ -5657,7 +5898,7 @@ CpuMicrocycleStatus Cpu::complete_microcycle(const BusSignals& signals) {
         } else if (completed_step >= stack_start && completed_step < stack_end) {
             regs_.s = static_cast<uint16_t>(regs_.s - 1);
             if (completed_step == stack_end - 1) {
-                regs_.cc = static_cast<uint8_t>(regs_.cc | CC_I);
+                cwai_wait_ = true;
             }
         }
         break;
@@ -5666,10 +5907,16 @@ CpuMicrocycleStatus Cpu::complete_microcycle(const BusSignals& signals) {
         if (completed_step == 0) {
             regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
         } else {
+            const bool native_full_frame = micro_op_.total_cycles == 17;
             const uint8_t mask = micro_op_.total_cycles == 6 ? 0x81 : 0xFF;
             const uint8_t byte_index = static_cast<uint8_t>(completed_step - 1);
-            if (byte_index < stack_mask_byte_count(mask)) {
-                apply_stack_pull_byte(regs_, mask, byte_index, false, signals.data, micro_op_.data);
+            const uint8_t byte_count = native_full_frame ? 14 : stack_mask_byte_count(mask);
+            if (byte_index < byte_count) {
+                if (native_full_frame) {
+                    apply_native_interrupt_pull_byte(regs_, byte_index, signals.data, micro_op_.data);
+                } else {
+                    apply_stack_pull_byte(regs_, mask, byte_index, false, signals.data, micro_op_.data);
+                }
                 regs_.s = static_cast<uint16_t>(regs_.s + 1);
             }
         }
@@ -6256,33 +6503,69 @@ static inline void write_word(
 static constexpr uint16_t VECTOR_SWI = 0xFFFA;
 static constexpr uint16_t VECTOR_SWI2 = 0xFFF4;
 static constexpr uint16_t VECTOR_SWI3 = 0xFFF2;
-static constexpr uint16_t VECTOR_IRQ = 0xFFF8;
 
 bool Cpu::irq_pending() const {
     return irq_line_asserted() && (regs_.cc & CC_I) == 0;
 }
 
-CpuTickResult Cpu::service_irq(Bus& bus) {
+bool Cpu::firq_pending() const {
+    return firq_line_asserted() && (regs_.cc & CC_F) == 0;
+}
+
+bool Cpu::nmi_pending() const {
+    return nmi_latched_;
+}
+
+bool Cpu::interrupt_line_asserted() const {
+    return irq_line_asserted() || firq_line_asserted() || nmi_latched_;
+}
+
+void Cpu::push_interrupt_frame(Bus& bus, uint8_t interrupt_source) {
+    const auto source = static_cast<InterruptSource>(interrupt_source);
+    const uint8_t count = interrupt_stack_byte_count(regs_, mode_, source);
+    for (uint8_t i = 0; i < count; ++i) {
+        regs_.s = static_cast<uint16_t>(regs_.s - 1);
+        write_stack_byte(bus, regs_.s, interrupt_stack_push_byte(regs_, mode_, source, i));
+    }
+}
+
+CpuTickResult Cpu::service_interrupt(Bus& bus, uint8_t interrupt_source, bool stack_frame) {
+    const auto source = static_cast<InterruptSource>(interrupt_source);
     last_pc_ = regs_.pc;
     last_prefix_ = 0x00;
     last_opcode_ = 0x00;
 
-    regs_.cc |= CC_E;
-    push_word(bus, regs_.pc);
-    push_word(bus, regs_.u);
-    push_word(bus, regs_.y);
-    push_word(bus, regs_.x);
-    push_byte(bus, regs_.dp);
-    push_byte(bus, regs_.b);
-    push_byte(bus, regs_.a);
-    push_byte(bus, regs_.cc);
-    regs_.cc |= CC_I;
-    regs_.pc = read_word(bus, VECTOR_IRQ, BusCycleKind::VectorRead);
+    if (stack_frame && interrupt_uses_full_frame(regs_, source)) {
+        regs_.cc = static_cast<uint8_t>(regs_.cc | CC_E);
+    } else if (stack_frame) {
+        regs_.cc = static_cast<uint8_t>(regs_.cc & ~CC_E);
+    }
+    if (stack_frame) {
+        push_interrupt_frame(bus, interrupt_source);
+    }
+    apply_interrupt_masks(regs_, source);
+    regs_.pc = read_word(bus, interrupt_vector(source), BusCycleKind::VectorRead);
+    if (source == InterruptSource::Nmi) {
+        nmi_latched_ = false;
+    }
 
-    constexpr uint32_t irq_cycles = 19;
-    cycles_executed_ += irq_cycles;
+    const uint32_t cycles = stack_frame ? interrupt_total_cycles(regs_, mode_, source) : 2;
+    cycles_executed_ += cycles;
     sync_wait_ = false;
-    return CpuTickResult{irq_cycles};
+    cwai_wait_ = false;
+    return CpuTickResult{cycles};
+}
+
+CpuTickResult Cpu::service_irq(Bus& bus) {
+    return service_interrupt(bus, static_cast<uint8_t>(InterruptSource::Irq), !cwai_wait_);
+}
+
+CpuTickResult Cpu::service_firq(Bus& bus) {
+    return service_interrupt(bus, static_cast<uint8_t>(InterruptSource::Firq), !cwai_wait_);
+}
+
+CpuTickResult Cpu::service_nmi(Bus& bus) {
+    return service_interrupt(bus, static_cast<uint8_t>(InterruptSource::Nmi), !cwai_wait_);
 }
 
 uint16_t Cpu::direct_address(Bus& bus) {

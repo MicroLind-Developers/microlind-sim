@@ -6687,6 +6687,89 @@ TEST(BusPhaseTest, ResumableMicrocycleServicesExternalIrq) {
     }
 }
 
+TEST(BusPhaseTest, ResumableMicrocycleServicesFirqAndNativeIrqFrames) {
+    {
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        probe->data[0xFFF6] = 0x34;
+        probe->data[0xFFF7] = 0x56;
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().s = 0x9000;
+        sim.cpu().regs().cc = microlind::CC_C;
+        sim.cpu().set_firq_line(true);
+
+        constexpr uint8_t expected_cycles = 10;
+        constexpr std::size_t bus_cycles = 5;
+        for (std::size_t i = 0; i < bus_cycles; ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_FALSE(result.instruction_complete);
+            EXPECT_EQ(result.instruction_result.cycles, expected_cycles);
+        }
+        expect_internal_cycles(sim, static_cast<uint8_t>(expected_cycles - bus_cycles));
+
+        EXPECT_EQ(sim.cpu().regs().pc, 0x3456);
+        EXPECT_EQ(sim.cpu().regs().s, 0x8FFD);
+        EXPECT_EQ(sim.cpu().regs().cc, microlind::CC_I | microlind::CC_F | microlind::CC_C);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(bus_cycles));
+        EXPECT_EQ(sim.bus().access_log()[0].address, 0x8FFF);
+        EXPECT_EQ(sim.bus().access_log()[0].value, 0x00);
+        EXPECT_EQ(sim.bus().access_log()[1].address, 0x8FFE);
+        EXPECT_EQ(sim.bus().access_log()[1].value, 0x01);
+        EXPECT_EQ(sim.bus().access_log()[2].address, 0x8FFD);
+        EXPECT_EQ(sim.bus().access_log()[2].value, microlind::CC_C);
+        EXPECT_EQ(sim.bus().access_log()[3].address, 0xFFF6);
+        EXPECT_EQ(sim.bus().access_log()[4].address, 0xFFF7);
+    }
+
+    {
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        probe->data[0xFFF8] = 0x45;
+        probe->data[0xFFF9] = 0x67;
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().s = 0x9000;
+        sim.cpu().regs().u = 0xCAFE;
+        sim.cpu().regs().y = 0x5678;
+        sim.cpu().regs().x = 0x1234;
+        sim.cpu().regs().dp = 0xAB;
+        sim.cpu().regs().e = 0x33;
+        sim.cpu().regs().f = 0x44;
+        sim.cpu().regs().b = 0x22;
+        sim.cpu().regs().a = 0x11;
+        sim.cpu().regs().md = 0x01;
+        sim.cpu().regs().cc = microlind::CC_C;
+        sim.cpu().set_irq_line(true);
+
+        constexpr uint8_t expected_cycles = 21;
+        constexpr std::size_t bus_cycles = 16;
+        for (std::size_t i = 0; i < bus_cycles; ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_FALSE(result.instruction_complete);
+            EXPECT_EQ(result.instruction_result.cycles, expected_cycles);
+        }
+        expect_internal_cycles(sim, static_cast<uint8_t>(expected_cycles - bus_cycles));
+
+        EXPECT_EQ(sim.cpu().regs().pc, 0x4567);
+        EXPECT_EQ(sim.cpu().regs().s, 0x8FF2);
+        EXPECT_EQ(probe->data[0x8FF7], 0xAB);
+        EXPECT_EQ(probe->data[0x8FF6], 0x44);
+        EXPECT_EQ(probe->data[0x8FF5], 0x33);
+        EXPECT_EQ(probe->data[0x8FF2], static_cast<uint8_t>(microlind::CC_E | microlind::CC_C));
+        EXPECT_EQ(sim.bus().access_log()[14].address, 0xFFF8);
+        EXPECT_EQ(sim.bus().access_log()[15].address, 0xFFF9);
+    }
+}
+
 TEST(BusPhaseTest, ResumableMicrocycleSoftwareInterruptsPushStateAndVector) {
     struct Case {
         const char* name{};
@@ -6900,6 +6983,8 @@ TEST(BusPhaseTest, ResumableMicrocycleCwaiPushesMaskedStateAndSyncConsumesOpcode
         auto* probe = memory.get();
         probe->data[0x0100] = 0x3C;
         probe->data[0x0101] = 0xFE;
+        probe->data[0xFFF8] = 0x45;
+        probe->data[0xFFF9] = 0x67;
         ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
 
         sim.cpu().set_pc(0x0100);
@@ -6912,7 +6997,7 @@ TEST(BusPhaseTest, ResumableMicrocycleCwaiPushesMaskedStateAndSyncConsumesOpcode
         sim.cpu().regs().a = 0x11;
         sim.cpu().regs().cc = static_cast<uint8_t>(microlind::CC_C | microlind::CC_V);
 
-        constexpr uint8_t expected_cycles = 19;
+        constexpr uint8_t expected_cycles = 22;
         constexpr std::size_t bus_cycles = 14;
         for (std::size_t i = 0; i < bus_cycles; ++i) {
             const auto result = sim.tick_microcycle();
@@ -6925,19 +7010,47 @@ TEST(BusPhaseTest, ResumableMicrocycleCwaiPushesMaskedStateAndSyncConsumesOpcode
 
         EXPECT_EQ(sim.cpu().regs().pc, 0x0102);
         EXPECT_EQ(sim.cpu().regs().s, 0x8FF4);
-        EXPECT_EQ(sim.cpu().regs().cc, microlind::CC_E | microlind::CC_I | microlind::CC_V);
+        EXPECT_EQ(sim.cpu().regs().cc, microlind::CC_E | microlind::CC_V);
         EXPECT_EQ(probe->data[0x8FFF], 0x02);
         EXPECT_EQ(probe->data[0x8FFE], 0x01);
         EXPECT_EQ(probe->data[0x8FF4], microlind::CC_E | microlind::CC_V);
+
+        const auto wait_cycle = sim.tick_microcycle();
+        EXPECT_TRUE(wait_cycle.emitted);
+        EXPECT_FALSE(wait_cycle.instruction_started);
+        EXPECT_FALSE(wait_cycle.instruction_complete);
+        EXPECT_EQ(wait_cycle.instruction_result.cycles, 1u);
+        EXPECT_EQ(wait_cycle.signals.cycle_kind, microlind::BusCycleKind::Internal);
+        EXPECT_EQ(sim.cpu().regs().pc, 0x0102);
+        EXPECT_EQ(sim.cpu().regs().s, 0x8FF4);
+
+        sim.cpu().set_irq_line(true);
+        const auto vector_high = sim.tick_microcycle();
+        EXPECT_TRUE(vector_high.emitted);
+        EXPECT_TRUE(vector_high.instruction_started);
+        EXPECT_FALSE(vector_high.instruction_complete);
+        EXPECT_EQ(vector_high.instruction_result.cycles, 2u);
+        EXPECT_EQ(vector_high.signals.address, 0xFFF8);
+        EXPECT_EQ(vector_high.signals.cycle_kind, microlind::BusCycleKind::VectorRead);
+
+        const auto vector_low = sim.tick_microcycle();
+        EXPECT_TRUE(vector_low.emitted);
+        EXPECT_TRUE(vector_low.instruction_complete);
+        EXPECT_EQ(vector_low.signals.address, 0xFFF9);
+        EXPECT_EQ(sim.cpu().regs().pc, 0x4567);
+        EXPECT_EQ(sim.cpu().regs().s, 0x8FF4);
+        EXPECT_EQ(sim.cpu().regs().cc, microlind::CC_E | microlind::CC_I | microlind::CC_V);
     }
 
     {
         microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
         auto memory = std::make_unique<SideEffectMemory>();
         memory->data[0x0200] = 0x13;
+        memory->data[0x0201] = 0x12;
         ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
 
         sim.cpu().set_pc(0x0200);
+        sim.cpu().regs().cc = microlind::CC_I;
         const auto opcode = sim.tick_microcycle();
         EXPECT_TRUE(opcode.emitted);
         EXPECT_TRUE(opcode.instruction_started);
@@ -6945,6 +7058,21 @@ TEST(BusPhaseTest, ResumableMicrocycleCwaiPushesMaskedStateAndSyncConsumesOpcode
         EXPECT_EQ(opcode.signals.cycle_kind, microlind::BusCycleKind::OpcodeFetch);
         expect_internal_cycles(sim, 1);
         EXPECT_EQ(sim.cpu().regs().pc, 0x0201);
+
+        const auto wait_cycle = sim.tick_microcycle();
+        EXPECT_TRUE(wait_cycle.emitted);
+        EXPECT_FALSE(wait_cycle.instruction_started);
+        EXPECT_FALSE(wait_cycle.instruction_complete);
+        EXPECT_EQ(wait_cycle.signals.cycle_kind, microlind::BusCycleKind::Internal);
+        EXPECT_EQ(sim.cpu().regs().pc, 0x0201);
+
+        sim.cpu().set_irq_line(true);
+        const auto next_opcode = sim.tick_microcycle();
+        EXPECT_TRUE(next_opcode.emitted);
+        EXPECT_TRUE(next_opcode.instruction_started);
+        EXPECT_FALSE(next_opcode.instruction_complete);
+        EXPECT_EQ(next_opcode.signals.address, 0x0201);
+        EXPECT_EQ(next_opcode.signals.cycle_kind, microlind::BusCycleKind::OpcodeFetch);
     }
 }
 

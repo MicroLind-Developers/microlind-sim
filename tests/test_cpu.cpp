@@ -202,6 +202,172 @@ TEST(CpuExecutionTest, SimulatorIrqRegisterDrivesCpuIrqLine) {
     EXPECT_EQ(sim.bus().peek8(0xF404), 0x23);
 }
 
+TEST(CpuExecutionTest, ServicesFirqWithShortFrameAndMaskBits) {
+    microlind::Bus bus;
+    map_memory_around_irq_register(bus);
+    bus.write8(0x0100, 0x12);
+    bus.write8(0xFFF6, 0x34);
+    bus.write8(0xFFF7, 0x56);
+
+    microlind::Cpu cpu(microlind::CpuMode::HD6309);
+    cpu.set_pc(0x0100);
+    cpu.regs().s = 0x9000;
+    cpu.regs().cc = microlind::CC_C;
+    cpu.set_firq_line(true);
+
+    const auto result = cpu.tick(bus);
+    EXPECT_EQ(result.cycles, 10u);
+    EXPECT_EQ(cpu.regs().pc, 0x3456);
+    EXPECT_EQ(cpu.regs().s, 0x8FFD);
+    EXPECT_EQ(cpu.regs().cc, microlind::CC_I | microlind::CC_F | microlind::CC_C);
+    EXPECT_EQ(bus.peek8(0x8FFF), 0x00);
+    EXPECT_EQ(bus.peek8(0x8FFE), 0x01);
+    EXPECT_EQ(bus.peek8(0x8FFD), microlind::CC_C);
+}
+
+TEST(CpuExecutionTest, NmiHasPriorityAndUsesFullFrame) {
+    microlind::Bus bus;
+    map_memory_around_irq_register(bus);
+    bus.write8(0xFFFC, 0x77);
+    bus.write8(0xFFFD, 0x88);
+    bus.write8(0xFFF6, 0x34);
+    bus.write8(0xFFF7, 0x56);
+    bus.write8(0xFFF8, 0x12);
+    bus.write8(0xFFF9, 0x34);
+
+    microlind::Cpu cpu(microlind::CpuMode::HD6309);
+    cpu.set_pc(0x0100);
+    cpu.regs().s = 0x9000;
+    cpu.regs().u = 0xCAFE;
+    cpu.regs().cc = microlind::CC_I | microlind::CC_F | microlind::CC_C;
+    cpu.set_irq_line(true);
+    cpu.set_firq_line(true);
+    cpu.set_nmi_line(true);
+
+    const auto result = cpu.tick(bus);
+    EXPECT_EQ(result.cycles, 19u);
+    EXPECT_EQ(cpu.regs().pc, 0x7788);
+    EXPECT_EQ(cpu.regs().s, 0x8FF4);
+    EXPECT_EQ(cpu.regs().cc, microlind::CC_E | microlind::CC_I | microlind::CC_F | microlind::CC_C);
+    EXPECT_EQ(bus.peek8(0x8FFF), 0x00);
+    EXPECT_EQ(bus.peek8(0x8FFE), 0x01);
+    EXPECT_EQ(bus.peek8(0x8FFC), 0xCA);
+    EXPECT_EQ(bus.peek8(0x8FFD), 0xFE);
+    EXPECT_EQ(bus.peek8(0x8FF4), microlind::CC_E | microlind::CC_I | microlind::CC_F | microlind::CC_C);
+}
+
+TEST(CpuExecutionTest, NmiIsEdgeLatchedUntilServiced) {
+    microlind::Bus bus;
+    map_memory_around_irq_register(bus);
+    bus.write8(0xFFFC, 0x02);
+    bus.write8(0xFFFD, 0x00);
+    bus.write8(0x0200, 0x12); // NOP after first NMI.
+
+    microlind::Cpu cpu(microlind::CpuMode::HD6309);
+    cpu.set_pc(0x0100);
+    cpu.regs().s = 0x9000;
+    cpu.set_nmi_line(true);
+    EXPECT_TRUE(cpu.nmi_line_asserted());
+    EXPECT_TRUE(cpu.nmi_latched());
+
+    const auto first = cpu.tick(bus);
+    EXPECT_EQ(first.cycles, 19u);
+    EXPECT_EQ(cpu.regs().pc, 0x0200);
+    EXPECT_TRUE(cpu.nmi_line_asserted());
+    EXPECT_FALSE(cpu.nmi_latched());
+
+    const auto nop = cpu.tick(bus);
+    EXPECT_EQ(nop.cycles, 2u);
+    EXPECT_EQ(cpu.regs().pc, 0x0201);
+    EXPECT_FALSE(cpu.nmi_latched());
+
+    cpu.set_nmi_line(false);
+    EXPECT_FALSE(cpu.nmi_line_asserted());
+    EXPECT_FALSE(cpu.nmi_latched());
+    cpu.set_nmi_line(true);
+    EXPECT_TRUE(cpu.nmi_latched());
+}
+
+TEST(CpuExecutionTest, NativeInterruptFrameStoresWAndRtiRestoresIt) {
+    microlind::Bus bus;
+    map_memory_around_irq_register(bus);
+    bus.write8(0xFFF8, 0x03);
+    bus.write8(0xFFF9, 0x00);
+    bus.write8(0x0300, 0x3B); // RTI
+
+    microlind::Cpu cpu(microlind::CpuMode::HD6309);
+    cpu.set_pc(0x0100);
+    cpu.regs().s = 0x9000;
+    cpu.regs().u = 0xCAFE;
+    cpu.regs().y = 0x5678;
+    cpu.regs().x = 0x1234;
+    cpu.regs().dp = 0xAB;
+    cpu.regs().e = 0x33;
+    cpu.regs().f = 0x44;
+    cpu.regs().b = 0x22;
+    cpu.regs().a = 0x11;
+    cpu.regs().md = 0x01;
+    cpu.regs().cc = microlind::CC_C;
+    cpu.set_irq_line(true);
+
+    const auto irq_result = cpu.tick(bus);
+    EXPECT_EQ(irq_result.cycles, 21u);
+    EXPECT_EQ(cpu.regs().pc, 0x0300);
+    EXPECT_EQ(cpu.regs().s, 0x8FF2);
+    EXPECT_EQ(bus.peek8(0x8FF7), 0xAB);
+    EXPECT_EQ(bus.peek8(0x8FF6), 0x44);
+    EXPECT_EQ(bus.peek8(0x8FF5), 0x33);
+    EXPECT_EQ(bus.peek8(0x8FF2), microlind::CC_E | microlind::CC_C);
+
+    cpu.set_irq_line(false);
+    cpu.regs().a = 0;
+    cpu.regs().b = 0;
+    cpu.regs().e = 0;
+    cpu.regs().f = 0;
+    cpu.regs().dp = 0;
+    cpu.regs().x = 0;
+    cpu.regs().y = 0;
+    cpu.regs().u = 0;
+    const auto rti_result = cpu.tick(bus);
+    EXPECT_EQ(rti_result.cycles, 17u);
+    EXPECT_EQ(cpu.regs().pc, 0x0100);
+    EXPECT_EQ(cpu.regs().s, 0x9000);
+    EXPECT_EQ(cpu.regs().a, 0x11);
+    EXPECT_EQ(cpu.regs().b, 0x22);
+    EXPECT_EQ(cpu.regs().e, 0x33);
+    EXPECT_EQ(cpu.regs().f, 0x44);
+    EXPECT_EQ(cpu.regs().dp, 0xAB);
+    EXPECT_EQ(cpu.regs().x, 0x1234);
+    EXPECT_EQ(cpu.regs().y, 0x5678);
+    EXPECT_EQ(cpu.regs().u, 0xCAFE);
+}
+
+TEST(CpuExecutionTest, TfmReportsWideCycleCounts) {
+    microlind::Bus bus;
+    microlind::test::map_flat_ram(bus);
+    write_bytes(bus, 0x0100, {0x11, 0x38, 0x12}); // TFM X+,Y+
+    for (uint16_t i = 0; i < 0x0100; ++i) {
+        bus.write8(static_cast<uint16_t>(0x2000 + i), static_cast<uint8_t>(i));
+    }
+
+    microlind::Cpu cpu(microlind::CpuMode::HD6309);
+    cpu.set_pc(0x0100);
+    cpu.regs().x = 0x2000;
+    cpu.regs().y = 0x3000;
+    cpu.regs().e = 0x01;
+    cpu.regs().f = 0x00;
+
+    const auto result = cpu.tick(bus);
+    EXPECT_EQ(result.cycles, 774u);
+    EXPECT_EQ(cpu.regs().pc, 0x0103);
+    EXPECT_EQ(cpu.regs().x, 0x2100);
+    EXPECT_EQ(cpu.regs().y, 0x3100);
+    EXPECT_EQ(cpu.regs().e, 0x00);
+    EXPECT_EQ(cpu.regs().f, 0x00);
+    EXPECT_EQ(bus.peek8(0x3000), 0x00);
+    EXPECT_EQ(bus.peek8(0x30FF), 0xFF);
+}
+
 TEST(CpuExecutionTest, MC6809DoesNotExecuteHD6309SingleByteOpcode) {
     microlind::Bus bus;
     microlind::test::map_flat_ram(bus);
