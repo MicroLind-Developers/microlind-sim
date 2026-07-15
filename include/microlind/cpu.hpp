@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -78,6 +79,11 @@ public:
     const std::string& opcode_name(uint8_t prefix, uint8_t opcode) const;
     uint8_t opcode_length(Bus& bus, uint16_t pc) const;
     [[nodiscard]] bool has_pending_micro_ops() const;
+    void set_irq_line(bool asserted) { *irq_line_asserted_ = asserted; }
+    [[nodiscard]] bool irq_line_asserted() const { return *irq_line_asserted_; }
+    [[nodiscard]] std::shared_ptr<bool> irq_line_state() const { return irq_line_asserted_; }
+    [[nodiscard]] bool irq_pending() const;
+    CpuTickResult service_irq(Bus& bus);
     bool prepare_microcycle(Bus& bus, BusSignals& signals, CpuMicrocycleStatus& status);
     CpuMicrocycleStatus complete_microcycle(const BusSignals& signals);
     void discard_micro_ops();
@@ -128,13 +134,20 @@ private:
         Branch,
         Lbra,
         LongBranch,
+        IrqEntry,
+        Swi,
+        Rti,
+        Cwai,
+        Sync,
         Bsr,
         Lbsr,
         Rts,
         JsrDirect,
         JsrExtended,
+        JsrIndexed,
         JmpDirect,
         JmpExtended,
+        JmpIndexed,
         Clra,
         Clrb,
         Tsta,
@@ -166,6 +179,9 @@ private:
         CmpdImmediate,
         CmpdDirect,
         CmpdExtended,
+        DAluImmediate,
+        DAluDirect,
+        DAluExtended,
         Cmp16Immediate,
         Cmp16Direct,
         Cmp16Extended,
@@ -176,11 +192,68 @@ private:
         WordStoreExtended,
         StackPush,
         StackPull,
+        WStackPush,
+        WStackPull,
+        ImmediateMemoryDirect,
+        ImmediateMemoryExtended,
+        IndexedImmediateMemory,
         MemoryUnaryDirect,
         MemoryUnaryExtended,
         MiscInherent,
         CcImmediate,
+        MdImmediate,
         RegisterTransfer,
+        RegisterAlu,
+        BitTransfer,
+        DivDImmediate,
+        DivDDirect,
+        DivDExtended,
+        IndexedDivD,
+        DivQImmediate,
+        DivQDirect,
+        DivQExtended,
+        IndexedDivQ,
+        Tfm,
+        PrefixedRegisterUnary,
+        IndexedLoad8,
+        IndexedLoad16,
+        IndexedStore8,
+        IndexedStore16,
+        IndexedAlu8,
+        IndexedMemoryUnary,
+        IndexedAlu16,
+        IndexedCmpd,
+        IndexedDAlu,
+        IndexedCmp16,
+        IndexedWordLoad,
+        IndexedWordStore,
+        IndexedLea,
+        WLoadImmediate,
+        WLoadDirect,
+        WLoadExtended,
+        WStoreDirect,
+        WStoreExtended,
+        WAluImmediate,
+        WAluDirect,
+        WAluExtended,
+        WCmpImmediate,
+        WCmpDirect,
+        WCmpExtended,
+        QLoadImmediate,
+        QLoadDirect,
+        QLoadExtended,
+        QStoreDirect,
+        QStoreExtended,
+        EFAluImmediate,
+        EFAluDirect,
+        EFAluExtended,
+        IndexedEFAlu,
+        IndexedWLoad,
+        IndexedWStore,
+        IndexedWAlu,
+        IndexedWCmp,
+        IndexedQLoad,
+        IndexedQStore,
     };
 
     struct MicroOpState {
@@ -188,12 +261,14 @@ private:
         uint16_t start_pc{};
         uint8_t opcode{};
         uint8_t prefix{};
-        uint8_t step{};
-        uint8_t total_cycles{};
+        int32_t step{};
+        int32_t total_cycles{};
         uint8_t direct_offset{};
         uint16_t effective_address{};
         uint16_t data{};
+        uint32_t data32{};
         bool branch_taken{};
+        bool indexed_indirect{};
     };
 
     uint8_t fetch_opcode_byte(Bus& bus);
@@ -231,7 +306,7 @@ private:
     void set_reg_w(uint16_t value);
     uint32_t reg_q() const;
     void set_reg_q(uint32_t value);
-    uint8_t op_tfm_common(Bus& bus, bool inc_src, bool inc_dst);
+    uint8_t op_tfm_common(Bus& bus, int8_t src_delta, int8_t dst_delta);
     bool start_micro_op(Bus& bus, uint8_t opcode);
     BusSignals micro_op_signals() const;
     CpuMicrocycleStatus micro_op_status(bool instruction_started, bool instruction_complete) const;
@@ -726,6 +801,7 @@ private:
     Instruction instructions10_[256]{};
     Instruction instructions11_[256]{};
     bool sync_wait_{false};
+    std::shared_ptr<bool> irq_line_asserted_{std::make_shared<bool>(false)};
 };
 
 } // namespace microlind

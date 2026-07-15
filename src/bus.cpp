@@ -17,6 +17,7 @@ const char* select_label(BusDeviceSelect select) {
     case BusDeviceSelect::Ram: return "RAM";
     case BusDeviceSelect::Rom: return "ROM";
     case BusDeviceSelect::MemoryMapper: return "memory mapper";
+    case BusDeviceSelect::InterruptController: return "interrupt controller";
     case BusDeviceSelect::CompactFlash: return "CompactFlash";
     case BusDeviceSelect::Serial: return "serial";
     case BusDeviceSelect::Ps2: return "PS/2";

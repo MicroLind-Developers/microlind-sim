@@ -3007,7 +3007,7 @@ uint8_t Cpu::op_bitmd(Bus& bus) {
 
 uint8_t Cpu::op_sexw(Bus&) {
     const uint16_t w = reg_w();
-    const uint32_t q = (static_cast<int32_t>(static_cast<int16_t>(w)) << 16) | static_cast<uint16_t>(w);
+    const uint32_t q = (w & 0x8000) ? (0xFFFF0000u | w) : w;
     set_reg_q(q);
     regs_.cc &= static_cast<uint8_t>(~(CC_N | CC_Z));
     if (q == 0) regs_.cc |= CC_Z;
@@ -3037,7 +3037,7 @@ uint8_t Cpu::op_puluw(Bus& bus) {
     return 6;
 }
 
-uint8_t Cpu::op_tfm_common(Bus& bus, bool inc_src, bool inc_dst) {
+uint8_t Cpu::op_tfm_common(Bus& bus, int8_t src_delta, int8_t dst_delta) {
     const uint8_t post = fetch_byte(bus);
     const uint8_t src_code = post >> 4;
     const uint8_t dst_code = post & 0x0F;
@@ -3062,21 +3062,19 @@ uint8_t Cpu::op_tfm_common(Bus& bus, bool inc_src, bool inc_dst) {
     if (count == 0) count = 0x10000;
     for (uint32_t i = 0; i < count; ++i) {
         const uint8_t byte = read_byte(bus, *src_ptr);
-        if (inc_src) *src_ptr = static_cast<uint16_t>(*src_ptr + 1);
-        else *src_ptr = static_cast<uint16_t>(*src_ptr - 1);
+        *src_ptr = static_cast<uint16_t>(*src_ptr + src_delta);
         write_byte(bus, *dst_ptr, byte);
-        if (inc_dst) *dst_ptr = static_cast<uint16_t>(*dst_ptr + 1);
-        else *dst_ptr = static_cast<uint16_t>(*dst_ptr - 1);
+        *dst_ptr = static_cast<uint16_t>(*dst_ptr + dst_delta);
         set_reg_w(static_cast<uint16_t>(reg_w() - 1));
         if (reg_w() == 0) break;
     }
     return 6; // base cycles; ignores per-byte timing.
 }
 
-uint8_t Cpu::op_tfm_pp(Bus& bus) { return op_tfm_common(bus, true, true); }
-uint8_t Cpu::op_tfm_mm(Bus& bus) { return op_tfm_common(bus, false, false); }
-uint8_t Cpu::op_tfm_pn(Bus& bus) { return op_tfm_common(bus, true, false); }
-uint8_t Cpu::op_tfm_np(Bus& bus) { return op_tfm_common(bus, false, true); }
+uint8_t Cpu::op_tfm_pp(Bus& bus) { return op_tfm_common(bus, 1, 1); }
+uint8_t Cpu::op_tfm_mm(Bus& bus) { return op_tfm_common(bus, -1, -1); }
+uint8_t Cpu::op_tfm_pn(Bus& bus) { return op_tfm_common(bus, 1, 0); }
+uint8_t Cpu::op_tfm_np(Bus& bus) { return op_tfm_common(bus, 0, 1); }
 
 uint8_t Cpu::op_aim_dir(Bus& bus) {
     const uint8_t mask = fetch_byte(bus);

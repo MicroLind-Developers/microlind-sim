@@ -13,6 +13,7 @@ add_library(microlind-sim
     src/cpu.cpp
     src/cpu_instructions.cpp
     src/devices/compact_flash.cpp
+    src/devices/interrupt_controller.cpp
     src/simulator.cpp
     src/devices/memory.cpp
     src/devices/memory_mapper.cpp
@@ -59,6 +60,7 @@ if(BUILD_TESTING)
     add_executable(microlind-sim-tests
         tests/test_bus.cpp
         tests/test_cpu.cpp
+        tests/test_integration.cpp
         tests/test_logic.cpp
         tests/test_microcycle.cpp
         tests/test_sim_session.cpp

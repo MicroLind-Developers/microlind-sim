@@ -22,6 +22,7 @@ enum class BusDeviceSelect {
     Ram,
     Rom,
     MemoryMapper,
+    InterruptController,
     CompactFlash,
     Serial,
     Ps2,

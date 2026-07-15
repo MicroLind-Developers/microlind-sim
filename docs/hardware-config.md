@@ -140,6 +140,21 @@ When explicit `WINDOW_N` ranges are present, each window is mapped separately.
 If no windows are present, the simulator derives windows from the RAM range and
 `BANK_SIZE`.
 
+## Interrupt Controller
+
+When a hardware config is used, the simulator maps the microLind IRQ register
+at `0xF404`. The address is decoded by the project PLD as `IRQ_EN`.
+
+Register layout:
+
+- Bits 0-3: pending IRQ level.
+- Bits 4-7: IRQ mask level.
+
+Reads return `(mask << 4) | pending`. Writes update the high-nibble mask; the
+low nibble is ignored. The CPU IRQ line is asserted when the pending IRQ level
+is higher than the mask level. The CPU accepts the IRQ at an instruction
+boundary when `CC.I` is clear and vectors through `$FFF8/$FFF9`.
+
 ## PLD Logic
 
 `[PLD_LOGIC]` or `[LOGIC]` connects the hardware config to parsed WinCUPL PLD

@@ -11,6 +11,7 @@
 #include "microlind/app/logic_validation.hpp"
 
 #include "microlind/devices/compact_flash.hpp"
+#include "microlind/devices/interrupt_controller.hpp"
 #include "microlind/devices/memory.hpp"
 #include "microlind/devices/memory_mapper.hpp"
 #include "microlind/devices/serial.hpp"
@@ -92,6 +93,7 @@ uint8_t mapper_bits_for_address(
 
 BusDeviceSelect select_from_decode(const microlind::logic::BoardDecodeResult& decoded) {
     if (decoded.mapper_register_en) return BusDeviceSelect::MemoryMapper;
+    if (decoded.irq_en) return BusDeviceSelect::InterruptController;
     if (decoded.cf_en) return BusDeviceSelect::CompactFlash;
     if (decoded.ser_en) return BusDeviceSelect::Serial;
     if (decoded.ps2_en) return BusDeviceSelect::Ps2;
@@ -127,6 +129,7 @@ Simulator build_sim(
     Simulator sim(mode, 1000000);
     using microlind::devices::BankedMemory;
     using microlind::devices::CompactFlash;
+    using microlind::devices::InterruptController;
     using microlind::devices::MapperState;
     using microlind::devices::Memory;
     using microlind::devices::MemoryMapper;
@@ -341,6 +344,17 @@ Simulator build_sim(
                 BusDeviceSelect::MemoryMapper,
                 std::make_unique<MemoryMapper>(mapper_state, std::move(offset_map)));
         }
+    }
+
+    if (cfg) {
+        const auto irq_line = sim.cpu().irq_line_state();
+        sim.map_device(
+            0xF404,
+            0xF404,
+            BusDeviceSelect::InterruptController,
+            std::make_unique<InterruptController>([irq_line](bool asserted) {
+                *irq_line = asserted;
+            }));
     }
 
     if (cfg && cfg->logic.present && logic_devices && cfg->logic.bus_mode != BusDecodeMode::RangeMap) {

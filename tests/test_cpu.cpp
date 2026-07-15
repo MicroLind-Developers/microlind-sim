@@ -2,12 +2,16 @@
 
 #include <cstdint>
 #include <initializer_list>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "microlind/bus.hpp"
 #include "microlind/cpu.hpp"
+#include "microlind/devices/interrupt_controller.hpp"
+#include "microlind/devices/memory.hpp"
+#include "microlind/simulator.hpp"
 
 #include "test_harness.hpp"
 
@@ -53,6 +57,49 @@ void prime_hd6309_test_state(microlind::Bus& bus, microlind::Cpu& cpu) {
     regs.s = 0x9002;
 }
 
+void map_memory_around_irq_register(microlind::Bus& bus) {
+    ASSERT_FALSE(bus.map_device(0x0000, 0xF403, std::make_unique<microlind::devices::Memory>(0xF404, true)));
+    ASSERT_FALSE(bus.map_device(0xF405, 0xFFFF, std::make_unique<microlind::devices::Memory>(0x0BFB, true)));
+}
+
+TEST(InterruptControllerTest, ReportsPendingLevelAndMaskAndAssertsAboveMask) {
+    bool irq_line = false;
+    microlind::devices::InterruptController irq([&](bool asserted) {
+        irq_line = asserted;
+    });
+
+    EXPECT_EQ(irq.peek8(0), 0xF0);
+    EXPECT_FALSE(irq.irq_asserted());
+    EXPECT_FALSE(irq_line);
+
+    irq.write8(0, 0x20);
+    EXPECT_EQ(irq.mask(), 0x02);
+    EXPECT_EQ(irq.peek8(0), 0x20);
+
+    irq.request(2);
+    EXPECT_EQ(irq.pending_level(), 0x02);
+    EXPECT_FALSE(irq.irq_asserted());
+    EXPECT_FALSE(irq_line);
+
+    irq.request(3);
+    EXPECT_EQ(irq.pending_level(), 0x03);
+    EXPECT_EQ(irq.read8(0), 0x23);
+    EXPECT_TRUE(irq.irq_asserted());
+    EXPECT_TRUE(irq_line);
+
+    irq.write8(0, 0x40);
+    EXPECT_EQ(irq.peek8(0), 0x43);
+    EXPECT_FALSE(irq.irq_asserted());
+    EXPECT_FALSE(irq_line);
+
+    irq.write8(0, 0x10);
+    EXPECT_TRUE(irq.irq_asserted());
+    irq.clear(3);
+    EXPECT_EQ(irq.peek8(0), 0x10);
+    EXPECT_FALSE(irq.irq_asserted());
+    EXPECT_FALSE(irq_line);
+}
+
 TEST(CpuExecutionTest, HD6309InvalidOpcodeTrapsThroughFFF0Vector) {
     microlind::Bus bus;
     microlind::test::map_flat_ram(bus);
@@ -67,6 +114,92 @@ TEST(CpuExecutionTest, HD6309InvalidOpcodeTrapsThroughFFF0Vector) {
     EXPECT_EQ(result.cycles, 1u);
     EXPECT_EQ(cpu.regs().pc, 0x1234);
     EXPECT_NE(cpu.regs().md & 0x40, 0);
+}
+
+TEST(CpuExecutionTest, ServicesIrqBeforeNextInstructionWhenUnmasked) {
+    microlind::Bus bus;
+    map_memory_around_irq_register(bus);
+    bus.write8(0x0100, 0x12); // NOP must not execute before IRQ service.
+    bus.write8(0xFFF8, 0x12);
+    bus.write8(0xFFF9, 0x34);
+
+    microlind::Cpu cpu(microlind::CpuMode::HD6309);
+    cpu.set_pc(0x0100);
+    cpu.regs().s = 0x9000;
+    cpu.regs().u = 0xCAFE;
+    cpu.regs().y = 0x5678;
+    cpu.regs().x = 0x1234;
+    cpu.regs().dp = 0xAB;
+    cpu.regs().b = 0x22;
+    cpu.regs().a = 0x11;
+    cpu.regs().cc = microlind::CC_C;
+    cpu.set_irq_line(true);
+
+    const auto result = cpu.tick(bus);
+    EXPECT_EQ(result.cycles, 19u);
+    EXPECT_EQ(cpu.regs().pc, 0x1234);
+    EXPECT_EQ(cpu.regs().s, 0x8FF4);
+    EXPECT_NE(cpu.regs().cc & microlind::CC_I, 0);
+    EXPECT_NE(cpu.regs().cc & microlind::CC_E, 0);
+
+    EXPECT_EQ(bus.peek8(0x8FFF), 0x00);
+    EXPECT_EQ(bus.peek8(0x8FFE), 0x01);
+    EXPECT_EQ(bus.peek8(0x8FFD), 0xFE);
+    EXPECT_EQ(bus.peek8(0x8FFC), 0xCA);
+    EXPECT_EQ(bus.peek8(0x8FFB), 0x78);
+    EXPECT_EQ(bus.peek8(0x8FFA), 0x56);
+    EXPECT_EQ(bus.peek8(0x8FF9), 0x34);
+    EXPECT_EQ(bus.peek8(0x8FF8), 0x12);
+    EXPECT_EQ(bus.peek8(0x8FF7), 0xAB);
+    EXPECT_EQ(bus.peek8(0x8FF6), 0x22);
+    EXPECT_EQ(bus.peek8(0x8FF5), 0x11);
+    EXPECT_EQ(bus.peek8(0x8FF4), microlind::CC_E | microlind::CC_C);
+}
+
+TEST(CpuExecutionTest, MaskedIrqDoesNotInterruptInstructionExecution) {
+    microlind::Bus bus;
+    map_memory_around_irq_register(bus);
+    bus.write8(0x0100, 0x12); // NOP
+    bus.write8(0xFFF8, 0x12);
+    bus.write8(0xFFF9, 0x34);
+
+    microlind::Cpu cpu(microlind::CpuMode::HD6309);
+    cpu.set_pc(0x0100);
+    cpu.regs().s = 0x9000;
+    cpu.regs().cc = microlind::CC_I;
+    cpu.set_irq_line(true);
+
+    const auto result = cpu.tick(bus);
+    EXPECT_EQ(result.cycles, 2u);
+    EXPECT_EQ(cpu.regs().pc, 0x0101);
+    EXPECT_EQ(cpu.regs().s, 0x9000);
+}
+
+TEST(CpuExecutionTest, SimulatorIrqRegisterDrivesCpuIrqLine) {
+    microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+    map_memory_around_irq_register(sim.bus());
+    const auto irq_line = sim.cpu().irq_line_state();
+    auto irq = std::make_unique<microlind::devices::InterruptController>([irq_line](bool asserted) {
+        *irq_line = asserted;
+    });
+    auto* irq_raw = irq.get();
+    ASSERT_FALSE(sim.map_device(0xF404, 0xF404, microlind::BusDeviceSelect::InterruptController, std::move(irq)));
+
+    sim.bus().write8(0x0100, 0x12);
+    sim.bus().write8(0xFFF8, 0x45);
+    sim.bus().write8(0xFFF9, 0x67);
+    sim.bus().write8(0xF404, 0x20);
+    irq_raw->request(3);
+
+    sim.cpu().set_pc(0x0100);
+    sim.cpu().regs().s = 0x9000;
+    sim.cpu().regs().cc = 0x00;
+
+    const auto result = sim.tick();
+    EXPECT_EQ(result.cycles, 19u);
+    EXPECT_TRUE(sim.cpu().irq_line_asserted());
+    EXPECT_EQ(sim.cpu().regs().pc, 0x4567);
+    EXPECT_EQ(sim.bus().peek8(0xF404), 0x23);
 }
 
 TEST(CpuExecutionTest, MC6809DoesNotExecuteHD6309SingleByteOpcode) {

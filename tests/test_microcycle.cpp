@@ -1,6 +1,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <algorithm>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -1182,6 +1183,377 @@ TEST(BusPhaseTest, ResumableMicrocycleJmpUpdatesPcAfterAddressOperand) {
     }
 }
 
+TEST(BusPhaseTest, ResumableMicrocycleIndexedJmpAndJsrResolveAddressThenJump) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name;
+        std::vector<uint8_t> program;
+        uint16_t x{};
+        uint16_t y{};
+        uint16_t u{};
+        uint16_t s{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint16_t expected_x{};
+        uint16_t expected_y{};
+        uint16_t expected_u{};
+        uint16_t expected_s{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "JMP ,X",
+            {0x6E, 0x84},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x9000,
+            {},
+            3,
+            0x2000,
+            0x2000,
+            0x2100,
+            0x4000,
+            0x9000,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x6E, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x84, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "JMP [8-bit offset,Y]",
+            {0x6E, 0xB8, 0x02},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x9000,
+            {{0x2102, 0x30}, {0x2103, 0x00}},
+            7,
+            0x3000,
+            0x2000,
+            0x2100,
+            0x4000,
+            0x9000,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x6E, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xB8, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x02, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2102, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2103, 0x00, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "JSR ,X",
+            {0xAD, 0x84},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x9000,
+            {},
+            7,
+            0x2000,
+            0x2000,
+            0x2100,
+            0x4000,
+            0x8FFE,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xAD, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x8FFF, 0x02, microlind::BusCycleKind::StackWrite},
+                {microlind::BusAccessType::Write, 0x8FFE, 0x01, microlind::BusCycleKind::StackWrite},
+            },
+        },
+        {
+            "JSR [16-bit offset,U]",
+            {0xAD, 0xD9, 0x00, 0x10},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x9000,
+            {{0x4010, 0x30}, {0x4011, 0x00}},
+            14,
+            0x3000,
+            0x2000,
+            0x2100,
+            0x4000,
+            0x8FFE,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xAD, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xD9, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x10, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x4010, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x4011, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x8FFF, 0x04, microlind::BusCycleKind::StackWrite},
+                {microlind::BusAccessType::Write, 0x8FFE, 0x01, microlind::BusCycleKind::StackWrite},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().y = test.y;
+        sim.cpu().regs().u = test.u;
+        sim.cpu().regs().s = test.s;
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().x, test.expected_x);
+        EXPECT_EQ(sim.cpu().regs().y, test.expected_y);
+        EXPECT_EQ(sim.cpu().regs().u, test.expected_u);
+        EXPECT_EQ(sim.cpu().regs().s, test.expected_s);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+        if (test.program[0] == 0xAD) {
+            const uint16_t return_pc = static_cast<uint16_t>(0x0100 + test.program.size());
+            EXPECT_EQ(probe->data[0x8FFF], low_byte(return_pc));
+            EXPECT_EQ(probe->data[0x8FFE], high_byte(return_pc));
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleIndexedLeaWritesEffectiveAddress) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name;
+        std::vector<uint8_t> program;
+        uint16_t x{};
+        uint16_t y{};
+        uint16_t u{};
+        uint16_t s{};
+        uint8_t cc{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint16_t expected_x{};
+        uint16_t expected_y{};
+        uint16_t expected_u{};
+        uint16_t expected_s{};
+        bool expect_z{};
+        bool expect_n{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "LEAX 5-bit offset,X",
+            {0x30, 0x05},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x9000,
+            0x00,
+            {},
+            5,
+            0x0102,
+            0x2005,
+            0x2100,
+            0x4000,
+            0x9000,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x30, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x05, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "LEAY 8-bit offset,X",
+            {0x31, 0x88, 0xFE},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x9000,
+            0x00,
+            {},
+            5,
+            0x0103,
+            0x2000,
+            0x1FFE,
+            0x4000,
+            0x9000,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x31, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x88, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0xFE, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "LEAS ,--S leaves flags unchanged",
+            {0x32, 0xE3},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x9000,
+            microlind::CC_N,
+            {},
+            7,
+            0x0102,
+            0x2000,
+            0x2100,
+            0x4000,
+            0x8FFE,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x32, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xE3, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "LEAU [,X]",
+            {0x33, 0x94},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x9000,
+            0x00,
+            {{0x2000, 0x00}, {0x2001, 0x00}},
+            7,
+            0x0102,
+            0x2000,
+            0x2100,
+            0x0000,
+            0x9000,
+            true,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x33, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x94, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x00, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "LEAX [16-bit offset,Y]",
+            {0x30, 0xB9, 0x00, 0x10},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x9000,
+            0x00,
+            {{0x2110, 0x80}, {0x2111, 0x00}},
+            11,
+            0x0104,
+            0x8000,
+            0x2100,
+            0x4000,
+            0x9000,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x30, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xB9, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x10, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2110, 0x80, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2111, 0x00, microlind::BusCycleKind::OperandRead},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().y = test.y;
+        sim.cpu().regs().u = test.u;
+        sim.cpu().regs().s = test.s;
+        sim.cpu().regs().cc = test.cc;
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().x, test.expected_x);
+        EXPECT_EQ(sim.cpu().regs().y, test.expected_y);
+        EXPECT_EQ(sim.cpu().regs().u, test.expected_u);
+        EXPECT_EQ(sim.cpu().regs().s, test.expected_s);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
 TEST(BusPhaseTest, ResumableMicrocycleRegisterUnaryUpdatesAfterOpcodeFetch) {
     const MicroClearCase cases[] = {
         {"CLRA emulation", 0x4F, MicroTargetRegister::A, 0x00, 2, 0x80, 0x40, 0x00, true, false, false, true},
@@ -1233,6 +1605,292 @@ TEST(BusPhaseTest, ResumableMicrocycleRegisterUnaryUpdatesAfterOpcodeFetch) {
     for (const auto& test : cases) {
         SCOPED_TRACE(test.name);
         run_clear_microcycle_case(test);
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocyclePrefixedRegisterUnaryUpdatesAfterOpcodeFetch) {
+    struct Case {
+        const char* name;
+        std::vector<uint8_t> program;
+        uint8_t initial_a{};
+        uint8_t initial_b{};
+        uint8_t initial_e{};
+        uint8_t initial_f{};
+        uint8_t initial_cc{};
+        uint8_t expected_a{};
+        uint8_t expected_b{};
+        uint8_t expected_e{};
+        uint8_t expected_f{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_c{};
+    };
+
+    const Case cases[] = {
+        {"NEGD", {0x10, 0x40}, 0x80, 0x00, 0x12, 0x34, 0x00, 0x80, 0x00, 0x12, 0x34, false, true, true, true},
+        {"ROLD", {0x10, 0x49}, 0x80, 0x00, 0x12, 0x34, microlind::CC_C, 0x00, 0x01, 0x12, 0x34, false, false, true, true},
+        {"CLRD", {0x10, 0x4F}, 0x12, 0x34, 0x56, 0x78, microlind::CC_N | microlind::CC_C, 0x00, 0x00, 0x56, 0x78, true, false, false, false},
+        {"COMW", {0x10, 0x53}, 0x12, 0x34, 0x00, 0x00, 0x00, 0x12, 0x34, 0xFF, 0xFF, false, true, false, true},
+        {"RORW", {0x10, 0x56}, 0x12, 0x34, 0x00, 0x01, microlind::CC_C, 0x12, 0x34, 0x80, 0x00, false, true, false, true},
+        {"TSTW", {0x10, 0x5D}, 0x12, 0x34, 0x00, 0x00, microlind::CC_C | microlind::CC_V, 0x12, 0x34, 0x00, 0x00, true, false, false, false},
+        {"COME", {0x11, 0x43}, 0x12, 0x34, 0x00, 0x56, 0x00, 0x12, 0x34, 0xFF, 0x56, false, true, false, true},
+        {"DECF", {0x11, 0x5A}, 0x12, 0x34, 0x56, 0x80, microlind::CC_C, 0x12, 0x34, 0x56, 0x7F, false, false, true, true},
+        {"INCE", {0x11, 0x4C}, 0x12, 0x34, 0x7F, 0x56, microlind::CC_C, 0x12, 0x34, 0x80, 0x56, false, true, true, true},
+        {"CLRF", {0x11, 0x5F}, 0x12, 0x34, 0x56, 0x78, microlind::CC_N | microlind::CC_C, 0x12, 0x34, 0x56, 0x00, true, false, false, false},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        probe->data[0x0100] = test.program[0];
+        probe->data[0x0101] = test.program[1];
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().a = test.initial_a;
+        sim.cpu().regs().b = test.initial_b;
+        sim.cpu().regs().e = test.initial_e;
+        sim.cpu().regs().f = test.initial_f;
+        sim.cpu().regs().cc = test.initial_cc;
+
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_FALSE(result.instruction_complete);
+            EXPECT_EQ(result.instruction_result.cycles, 3);
+        }
+
+        expect_internal_cycles(sim, 1);
+
+        EXPECT_EQ(sim.cpu().regs().pc, 0x0102);
+        EXPECT_EQ(sim.cpu().regs().a, test.expected_a);
+        EXPECT_EQ(sim.cpu().regs().b, test.expected_b);
+        EXPECT_EQ(sim.cpu().regs().e, test.expected_e);
+        EXPECT_EQ(sim.cpu().regs().f, test.expected_f);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_C) != 0, test.expect_c);
+        EXPECT_EQ(probe->write_count, 0u);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(2));
+        EXPECT_EQ(sim.bus().access_log()[0].type, microlind::BusAccessType::Read);
+        EXPECT_EQ(sim.bus().access_log()[0].address, 0x0100);
+        EXPECT_EQ(sim.bus().access_log()[0].value, test.program[0]);
+        EXPECT_EQ(sim.bus().access_log()[0].cycle_kind, microlind::BusCycleKind::OpcodeFetch);
+        EXPECT_EQ(sim.bus().access_log()[1].type, microlind::BusAccessType::Read);
+        EXPECT_EQ(sim.bus().access_log()[1].address, 0x0101);
+        EXPECT_EQ(sim.bus().access_log()[1].value, test.program[1]);
+        EXPECT_EQ(sim.bus().access_log()[1].cycle_kind, microlind::BusCycleKind::OpcodeFetch);
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleEFAluModes) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name;
+        std::vector<uint8_t> program;
+        uint8_t dp{};
+        uint16_t x{};
+        uint8_t initial_e{};
+        uint8_t initial_f{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint16_t expected_x{};
+        uint8_t expected_e{};
+        uint8_t expected_f{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_c{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "ADDE immediate",
+            {0x11, 0x8B, 0x01},
+            0x12,
+            0x2000,
+            0x7F,
+            0x40,
+            {},
+            3,
+            0x0103,
+            0x2000,
+            0x80,
+            0x40,
+            false,
+            true,
+            true,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x8B, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "SUBF direct",
+            {0x11, 0xD0, 0x20},
+            0x12,
+            0x2000,
+            0x40,
+            0x00,
+            {{0x1220, 0x01}},
+            5,
+            0x0103,
+            0x2000,
+            0x40,
+            0xFF,
+            false,
+            true,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xD0, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1220, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "CMPE extended",
+            {0x11, 0xB1, 0x20, 0x00},
+            0x12,
+            0x2000,
+            0x42,
+            0x40,
+            {{0x2000, 0x42}},
+            6,
+            0x0104,
+            0x2000,
+            0x42,
+            0x40,
+            true,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xB1, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x42, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "ADDF ,X",
+            {0x11, 0xEB, 0x84},
+            0x12,
+            0x2000,
+            0x40,
+            0x01,
+            {{0x2000, 0x01}},
+            5,
+            0x0103,
+            0x2000,
+            0x40,
+            0x02,
+            false,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xEB, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "CMPF [,X]",
+            {0x11, 0xE1, 0x94},
+            0x12,
+            0x2000,
+            0x40,
+            0x10,
+            {{0x2000, 0x30}, {0x2001, 0x00}, {0x3000, 0x20}},
+            8,
+            0x0103,
+            0x2000,
+            0x40,
+            0x10,
+            false,
+            true,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xE1, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x94, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3000, 0x20, microlind::BusCycleKind::OperandRead},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().dp = test.dp;
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().e = test.initial_e;
+        sim.cpu().regs().f = test.initial_f;
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().x, test.expected_x);
+        EXPECT_EQ(sim.cpu().regs().e, test.expected_e);
+        EXPECT_EQ(sim.cpu().regs().f, test.expected_f);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_C) != 0, test.expect_c);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
     }
 }
 
@@ -2383,6 +3041,145 @@ TEST(BusPhaseTest, ResumableMicrocycleStackPushPullUsesMaskOrder) {
     }
 }
 
+TEST(BusPhaseTest, ResumableMicrocycleHD6309WStackShortcuts) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name{};
+        std::vector<uint8_t> program;
+        uint16_t s{};
+        uint16_t u{};
+        uint16_t initial_w{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        uint16_t expected_s{};
+        uint16_t expected_u{};
+        uint16_t expected_w{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "PSHSW",
+            {0x10, 0x38},
+            0x9000,
+            0xA000,
+            0xBEEF,
+            {},
+            0x8FFE,
+            0xA000,
+            0xBEEF,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x38, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Write, 0x8FFF, 0xEF, microlind::BusCycleKind::StackWrite},
+                {microlind::BusAccessType::Write, 0x8FFE, 0xBE, microlind::BusCycleKind::StackWrite},
+            },
+        },
+        {
+            "PULSW",
+            {0x10, 0x39},
+            0x9000,
+            0xA000,
+            0x0000,
+            {{0x9000, 0xBE}, {0x9001, 0xEF}},
+            0x9002,
+            0xA000,
+            0xBEEF,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x39, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x9000, 0xBE, microlind::BusCycleKind::StackRead},
+                {microlind::BusAccessType::Read, 0x9001, 0xEF, microlind::BusCycleKind::StackRead},
+            },
+        },
+        {
+            "PSHUW",
+            {0x10, 0x3A},
+            0x9000,
+            0xA000,
+            0xBEEF,
+            {},
+            0x9000,
+            0x9FFE,
+            0xBEEF,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x3A, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Write, 0x9FFE, 0xBE, microlind::BusCycleKind::StackWrite},
+                {microlind::BusAccessType::Write, 0x9FFF, 0xEF, microlind::BusCycleKind::StackWrite},
+            },
+        },
+        {
+            "PULUW",
+            {0x10, 0x3B},
+            0x9000,
+            0xA000,
+            0x0000,
+            {{0xA000, 0xBE}, {0xA001, 0xEF}},
+            0x9000,
+            0xA002,
+            0xBEEF,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x3B, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0xA000, 0xBE, microlind::BusCycleKind::StackRead},
+                {microlind::BusAccessType::Read, 0xA001, 0xEF, microlind::BusCycleKind::StackRead},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().s = test.s;
+        sim.cpu().regs().u = test.u;
+        sim.cpu().regs().e = high_byte(test.initial_w);
+        sim.cpu().regs().f = low_byte(test.initial_w);
+
+        constexpr uint8_t expected_cycles = 6;
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, expected_cycles);
+        }
+
+        expect_internal_cycles(sim, static_cast<uint8_t>(expected_cycles - test.expected_accesses.size()));
+
+        const uint16_t actual_w =
+            static_cast<uint16_t>((static_cast<uint16_t>(sim.cpu().regs().e) << 8) | sim.cpu().regs().f);
+        EXPECT_EQ(sim.cpu().regs().pc, 0x0102);
+        EXPECT_EQ(sim.cpu().regs().s, test.expected_s);
+        EXPECT_EQ(sim.cpu().regs().u, test.expected_u);
+        EXPECT_EQ(actual_w, test.expected_w);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
 TEST(BusPhaseTest, ResumableMicrocycleMemoryUnaryDirectAndExtendedReadWriteShape) {
     struct ExpectedAccess {
         microlind::BusAccessType type{};
@@ -2545,6 +3342,3609 @@ TEST(BusPhaseTest, ResumableMicrocycleMemoryUnaryDirectAndExtendedReadWriteShape
             EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
             EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
         }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleIndexedLoadStoreConventionalModes) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name;
+        std::vector<uint8_t> program;
+        uint8_t md{};
+        uint16_t x{};
+        uint16_t y{};
+        uint16_t u{};
+        uint16_t s{};
+        uint8_t a{};
+        uint8_t b{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint16_t expected_x{};
+        uint16_t expected_y{};
+        uint16_t expected_u{};
+        uint16_t expected_s{};
+        uint8_t expected_a{};
+        uint8_t expected_b{};
+        bool expect_z{};
+        bool expect_n{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "LDA ,X",
+            {0xA6, 0x84},
+            0x00,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x00,
+            {{0x2000, 0x5A}},
+            4,
+            0x0102,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x5A,
+            0x00,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xA6, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x5A, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "LDB 5-bit offset,X",
+            {0xE6, 0x05},
+            0x00,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x00,
+            {{0x2005, 0x80}},
+            5,
+            0x0102,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x80,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xE6, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x05, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2005, 0x80, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "LDD 8-bit offset,Y",
+            {0xEC, 0xA8, 0xFE},
+            0x00,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x00,
+            {{0x20FE, 0x12}, {0x20FF, 0x34}},
+            6,
+            0x0103,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x12,
+            0x34,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xEC, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xA8, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0xFE, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x20FE, 0x12, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x20FF, 0x34, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "STA ,X+ native",
+            {0xA7, 0x80},
+            0x01,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x44,
+            0x00,
+            {},
+            5,
+            0x0102,
+            0x2001,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x44,
+            0x00,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xA7, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x80, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x2000, 0x44, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "STD ,--U",
+            {0xED, 0xC3},
+            0x00,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x12,
+            0x34,
+            {},
+            8,
+            0x0102,
+            0x2000,
+            0x2100,
+            0x2FFE,
+            0x4000,
+            0x12,
+            0x34,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xED, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xC3, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x2FFE, 0x12, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x2FFF, 0x34, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "STB 16-bit offset,S",
+            {0xE7, 0xE9, 0x00, 0x10},
+            0x00,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x7F,
+            {},
+            8,
+            0x0104,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x7F,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xE7, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xE9, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x10, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x4010, 0x7F, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "LDA 8-bit PC-relative",
+            {0xA6, 0x8C, 0x02},
+            0x00,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x00,
+            {{0x0105, 0x66}},
+            5,
+            0x0103,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x66,
+            0x00,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xA6, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x8C, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x02, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0105, 0x66, microlind::BusCycleKind::OperandRead},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().md = test.md;
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().y = test.y;
+        sim.cpu().regs().u = test.u;
+        sim.cpu().regs().s = test.s;
+        sim.cpu().regs().a = test.a;
+        sim.cpu().regs().b = test.b;
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().x, test.expected_x);
+        EXPECT_EQ(sim.cpu().regs().y, test.expected_y);
+        EXPECT_EQ(sim.cpu().regs().u, test.expected_u);
+        EXPECT_EQ(sim.cpu().regs().s, test.expected_s);
+        EXPECT_EQ(sim.cpu().regs().a, test.expected_a);
+        EXPECT_EQ(sim.cpu().regs().b, test.expected_b);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleIndexedIndirectLoadStoreConventionalModes) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name;
+        std::vector<uint8_t> program;
+        uint16_t x{};
+        uint16_t y{};
+        uint16_t u{};
+        uint16_t s{};
+        uint8_t a{};
+        uint8_t b{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint16_t expected_x{};
+        uint16_t expected_y{};
+        uint16_t expected_u{};
+        uint16_t expected_s{};
+        uint8_t expected_a{};
+        uint8_t expected_b{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "LDA [,X]",
+            {0xA6, 0x94},
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x00,
+            {{0x2000, 0x30}, {0x2001, 0x00}, {0x3000, 0x5A}},
+            7,
+            0x0102,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x5A,
+            0x00,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xA6, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x94, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3000, 0x5A, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "LDD [8-bit offset,Y]",
+            {0xEC, 0xB8, 0x02},
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x00,
+            {{0x2102, 0x30}, {0x2103, 0x00}, {0x3000, 0x12}, {0x3001, 0x34}},
+            9,
+            0x0103,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x12,
+            0x34,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xEC, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xB8, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x02, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2102, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2103, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3000, 0x12, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3001, 0x34, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "STA [,X++]",
+            {0xA7, 0x91},
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x44,
+            0x00,
+            {{0x2000, 0x30}, {0x2001, 0x00}},
+            10,
+            0x0102,
+            0x2002,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x44,
+            0x00,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xA7, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x91, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x3000, 0x44, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "STD [,--U]",
+            {0xED, 0xD3},
+            0x2000,
+            0x2100,
+            0x2002,
+            0x4000,
+            0x12,
+            0x34,
+            {{0x2000, 0x30}, {0x2001, 0x00}},
+            11,
+            0x0102,
+            0x2000,
+            0x2100,
+            0x2000,
+            0x4000,
+            0x12,
+            0x34,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xED, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xD3, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x3000, 0x12, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x3001, 0x34, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "STB [16-bit offset,S]",
+            {0xE7, 0xF9, 0x00, 0x10},
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x7F,
+            {{0x4010, 0x30}, {0x4011, 0x00}},
+            11,
+            0x0104,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x7F,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xE7, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xF9, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x10, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x4010, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x4011, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x3000, 0x7F, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().y = test.y;
+        sim.cpu().regs().u = test.u;
+        sim.cpu().regs().s = test.s;
+        sim.cpu().regs().a = test.a;
+        sim.cpu().regs().b = test.b;
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().x, test.expected_x);
+        EXPECT_EQ(sim.cpu().regs().y, test.expected_y);
+        EXPECT_EQ(sim.cpu().regs().u, test.expected_u);
+        EXPECT_EQ(sim.cpu().regs().s, test.expected_s);
+        EXPECT_EQ(sim.cpu().regs().a, test.expected_a);
+        EXPECT_EQ(sim.cpu().regs().b, test.expected_b);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleIndexedAlu8ConventionalModes) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name;
+        std::vector<uint8_t> program;
+        uint16_t x{};
+        uint16_t y{};
+        uint8_t a{};
+        uint8_t b{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint16_t expected_x{};
+        uint16_t expected_y{};
+        uint8_t expected_a{};
+        uint8_t expected_b{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_c{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "SUBA ,X",
+            {0xA0, 0x84},
+            0x2000,
+            0x2100,
+            0x10,
+            0x00,
+            {{0x2000, 0x01}},
+            4,
+            0x0102,
+            0x2000,
+            0x2100,
+            0x0F,
+            0x00,
+            false,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xA0, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "CMPA 5-bit offset,X",
+            {0xA1, 0x05},
+            0x2000,
+            0x2100,
+            0x20,
+            0x00,
+            {{0x2005, 0x20}},
+            5,
+            0x0102,
+            0x2000,
+            0x2100,
+            0x20,
+            0x00,
+            true,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xA1, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x05, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2005, 0x20, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "ADDB 8-bit offset,Y",
+            {0xEB, 0xA8, 0x02},
+            0x2000,
+            0x2100,
+            0x00,
+            0x7F,
+            {{0x2102, 0x01}},
+            5,
+            0x0103,
+            0x2000,
+            0x2100,
+            0x00,
+            0x80,
+            false,
+            true,
+            true,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xEB, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xA8, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x02, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2102, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "BITB [,X]",
+            {0xE5, 0x94},
+            0x2000,
+            0x2100,
+            0x00,
+            0x0F,
+            {{0x2000, 0x30}, {0x2001, 0x00}, {0x3000, 0xF0}},
+            7,
+            0x0102,
+            0x2000,
+            0x2100,
+            0x00,
+            0x0F,
+            true,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xE5, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x94, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3000, 0xF0, microlind::BusCycleKind::OperandRead},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().y = test.y;
+        sim.cpu().regs().a = test.a;
+        sim.cpu().regs().b = test.b;
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().x, test.expected_x);
+        EXPECT_EQ(sim.cpu().regs().y, test.expected_y);
+        EXPECT_EQ(sim.cpu().regs().a, test.expected_a);
+        EXPECT_EQ(sim.cpu().regs().b, test.expected_b);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_C) != 0, test.expect_c);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleIndexedWordAluAndCompareModes) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name;
+        std::vector<uint8_t> program;
+        uint16_t x{};
+        uint16_t y{};
+        uint16_t u{};
+        uint16_t s{};
+        uint8_t a{};
+        uint8_t b{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint16_t expected_x{};
+        uint16_t expected_y{};
+        uint16_t expected_u{};
+        uint16_t expected_s{};
+        uint8_t expected_a{};
+        uint8_t expected_b{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_c{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "ADDD ,X",
+            {0xE3, 0x84},
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x01,
+            {{0x2000, 0x00}, {0x2001, 0x01}},
+            6,
+            0x0102,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x02,
+            false,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xE3, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "SUBD 8-bit offset,Y",
+            {0xA3, 0xA8, 0x02},
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x01,
+            0x00,
+            {{0x2102, 0x00}, {0x2103, 0x01}},
+            7,
+            0x0103,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0xFF,
+            false,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xA3, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xA8, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x02, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2102, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2103, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "CMPX ,X",
+            {0xAC, 0x84},
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x00,
+            {{0x2000, 0x20}, {0x2001, 0x00}},
+            6,
+            0x0102,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x00,
+            0x00,
+            true,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xAC, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x00, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "CMPD [,X]",
+            {0x10, 0xA3, 0x94},
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x12,
+            0x35,
+            {{0x2000, 0x30}, {0x2001, 0x00}, {0x3000, 0x12}, {0x3001, 0x34}},
+            10,
+            0x0103,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            0x12,
+            0x35,
+            false,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xA3, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x94, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3000, 0x12, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3001, 0x34, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "CMPU 5-bit offset,X",
+            {0x11, 0xA3, 0x05},
+            0x2000,
+            0x2100,
+            0x1234,
+            0x4000,
+            0x00,
+            0x00,
+            {{0x2005, 0x12}, {0x2006, 0x35}},
+            8,
+            0x0103,
+            0x2000,
+            0x2100,
+            0x1234,
+            0x4000,
+            0x00,
+            0x00,
+            false,
+            true,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xA3, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x05, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2005, 0x12, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2006, 0x35, microlind::BusCycleKind::OperandRead},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().y = test.y;
+        sim.cpu().regs().u = test.u;
+        sim.cpu().regs().s = test.s;
+        sim.cpu().regs().a = test.a;
+        sim.cpu().regs().b = test.b;
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().x, test.expected_x);
+        EXPECT_EQ(sim.cpu().regs().y, test.expected_y);
+        EXPECT_EQ(sim.cpu().regs().u, test.expected_u);
+        EXPECT_EQ(sim.cpu().regs().s, test.expected_s);
+        EXPECT_EQ(sim.cpu().regs().a, test.expected_a);
+        EXPECT_EQ(sim.cpu().regs().b, test.expected_b);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_C) != 0, test.expect_c);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleIndexedWordLoadStoreModes) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name;
+        std::vector<uint8_t> program;
+        uint16_t x{};
+        uint16_t y{};
+        uint16_t u{};
+        uint16_t s{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        std::vector<std::pair<uint16_t, uint8_t>> expected_memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint16_t expected_x{};
+        uint16_t expected_y{};
+        uint16_t expected_u{};
+        uint16_t expected_s{};
+        bool expect_z{};
+        bool expect_n{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "LDX ,X",
+            {0xAE, 0x84},
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            {{0x2000, 0x12}, {0x2001, 0x34}},
+            {},
+            5,
+            0x0102,
+            0x1234,
+            0x2100,
+            0x3000,
+            0x4000,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xAE, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x12, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x34, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "LDU 8-bit offset,Y",
+            {0xEE, 0xA8, 0x02},
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            {{0x2102, 0xAB}, {0x2103, 0xCD}},
+            {},
+            6,
+            0x0103,
+            0x2000,
+            0x2100,
+            0xABCD,
+            0x4000,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xEE, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xA8, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x02, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2102, 0xAB, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2103, 0xCD, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "LDY [,X]",
+            {0x10, 0xAE, 0x94},
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            {{0x2000, 0x30}, {0x2001, 0x00}, {0x3000, 0x80}, {0x3001, 0x00}},
+            {},
+            9,
+            0x0103,
+            0x2000,
+            0x8000,
+            0x3000,
+            0x4000,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xAE, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x94, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3000, 0x80, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3001, 0x00, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "STX ,X",
+            {0xAF, 0x84},
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            {},
+            {{0x2000, 0x20}, {0x2001, 0x00}},
+            5,
+            0x0102,
+            0x2000,
+            0x2100,
+            0x3000,
+            0x4000,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xAF, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x2000, 0x20, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x2001, 0x00, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "STY [16-bit offset,S]",
+            {0x10, 0xAF, 0xF9, 0x00, 0x10},
+            0x2000,
+            0xBEEF,
+            0x3000,
+            0x4000,
+            {{0x4010, 0x30}, {0x4011, 0x00}},
+            {{0x3000, 0xBE}, {0x3001, 0xEF}},
+            13,
+            0x0105,
+            0x2000,
+            0xBEEF,
+            0x3000,
+            0x4000,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xAF, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0xF9, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0104, 0x10, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x4010, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x4011, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x3000, 0xBE, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x3001, 0xEF, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().y = test.y;
+        sim.cpu().regs().u = test.u;
+        sim.cpu().regs().s = test.s;
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().x, test.expected_x);
+        EXPECT_EQ(sim.cpu().regs().y, test.expected_y);
+        EXPECT_EQ(sim.cpu().regs().u, test.expected_u);
+        EXPECT_EQ(sim.cpu().regs().s, test.expected_s);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        for (const auto& [address, value] : test.expected_memory) {
+            EXPECT_EQ(probe->data[address], value);
+        }
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleWLoadStoreArithmeticModes) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name;
+        std::vector<uint8_t> program;
+        uint8_t dp{};
+        uint16_t initial_w{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        std::vector<std::pair<uint16_t, uint8_t>> expected_memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint16_t expected_w{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_c{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "LDW immediate",
+            {0x10, 0x86, 0x80, 0x01},
+            0x12,
+            0x0000,
+            {},
+            {},
+            4,
+            0x0104,
+            0x8001,
+            false,
+            true,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x86, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x80, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "STW direct",
+            {0x10, 0x97, 0x20},
+            0x12,
+            0xBEEF,
+            {},
+            {{0x1220, 0xBE}, {0x1221, 0xEF}},
+            6,
+            0x0103,
+            0xBEEF,
+            false,
+            true,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x97, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x1220, 0xBE, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x1221, 0xEF, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "ADDW immediate",
+            {0x10, 0x8B, 0x00, 0x01},
+            0x12,
+            0x7FFF,
+            {},
+            {},
+            5,
+            0x0104,
+            0x8000,
+            false,
+            true,
+            true,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x8B, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "SUBW direct",
+            {0x10, 0x90, 0x20},
+            0x12,
+            0x0100,
+            {{0x1220, 0x00}, {0x1221, 0x01}},
+            {},
+            7,
+            0x0103,
+            0x00FF,
+            false,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x90, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1220, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1221, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "CMPW extended",
+            {0x10, 0xB1, 0x20, 0x00},
+            0x12,
+            0x1234,
+            {{0x2000, 0x12}, {0x2001, 0x34}},
+            {},
+            8,
+            0x0104,
+            0x1234,
+            true,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xB1, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x12, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x34, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "LDW extended",
+            {0x10, 0xB6, 0x20, 0x00},
+            0x12,
+            0x0000,
+            {{0x2000, 0x00}, {0x2001, 0x00}},
+            {},
+            7,
+            0x0104,
+            0x0000,
+            true,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xB6, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x00, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "STW extended",
+            {0x10, 0xB7, 0x20, 0x00},
+            0x12,
+            0x1234,
+            {},
+            {{0x2000, 0x12}, {0x2001, 0x34}},
+            7,
+            0x0104,
+            0x1234,
+            false,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xB7, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x2000, 0x12, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x2001, 0x34, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().dp = test.dp;
+        sim.cpu().regs().e = static_cast<uint8_t>(test.initial_w >> 8);
+        sim.cpu().regs().f = static_cast<uint8_t>(test.initial_w & 0xFF);
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        const uint16_t actual_w = static_cast<uint16_t>((static_cast<uint16_t>(sim.cpu().regs().e) << 8) | sim.cpu().regs().f);
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(actual_w, test.expected_w);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_C) != 0, test.expect_c);
+        for (const auto& [address, value] : test.expected_memory) {
+            EXPECT_EQ(probe->data[address], value);
+        }
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleQLoadStoreModes) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name;
+        std::vector<uint8_t> program;
+        uint8_t dp{};
+        uint32_t initial_q{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        std::vector<std::pair<uint16_t, uint8_t>> expected_memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint32_t expected_q{};
+        bool expect_z{};
+        bool expect_n{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "LDQ immediate",
+            {0xCD, 0x12, 0x34, 0x56, 0x78},
+            0x12,
+            0x00000000u,
+            {},
+            {},
+            5,
+            0x0105,
+            0x12345678u,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0xCD, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x12, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x34, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x56, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0104, 0x78, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "LDQ direct zero",
+            {0x10, 0xDC, 0x20},
+            0x12,
+            0xFFFFFFFFu,
+            {{0x1220, 0x00}, {0x1221, 0x00}, {0x1222, 0x00}, {0x1223, 0x00}},
+            {},
+            8,
+            0x0103,
+            0x00000000u,
+            true,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xDC, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1220, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1221, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1222, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1223, 0x00, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "STQ direct negative",
+            {0x10, 0xDD, 0x20},
+            0x12,
+            0x80000001u,
+            {},
+            {{0x1220, 0x80}, {0x1221, 0x00}, {0x1222, 0x00}, {0x1223, 0x01}},
+            8,
+            0x0103,
+            0x80000001u,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xDD, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x1220, 0x80, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x1221, 0x00, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x1222, 0x00, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x1223, 0x01, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "LDQ extended negative",
+            {0x10, 0xFC, 0x20, 0x00},
+            0x12,
+            0x00000000u,
+            {{0x2000, 0x80}, {0x2001, 0x00}, {0x2002, 0x00}, {0x2003, 0x00}},
+            {},
+            9,
+            0x0104,
+            0x80000000u,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xFC, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x80, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2002, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2003, 0x00, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "STQ extended zero",
+            {0x10, 0xFD, 0x20, 0x00},
+            0x12,
+            0x00000000u,
+            {},
+            {{0x2000, 0x00}, {0x2001, 0x00}, {0x2002, 0x00}, {0x2003, 0x00}},
+            9,
+            0x0104,
+            0x00000000u,
+            true,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xFD, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x2000, 0x00, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x2001, 0x00, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x2002, 0x00, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x2003, 0x00, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().dp = test.dp;
+        sim.cpu().regs().a = static_cast<uint8_t>((test.initial_q >> 24) & 0xFF);
+        sim.cpu().regs().b = static_cast<uint8_t>((test.initial_q >> 16) & 0xFF);
+        sim.cpu().regs().e = static_cast<uint8_t>((test.initial_q >> 8) & 0xFF);
+        sim.cpu().regs().f = static_cast<uint8_t>(test.initial_q & 0xFF);
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        const uint32_t actual_q =
+            (static_cast<uint32_t>(sim.cpu().regs().a) << 24) |
+            (static_cast<uint32_t>(sim.cpu().regs().b) << 16) |
+            (static_cast<uint32_t>(sim.cpu().regs().e) << 8) |
+            sim.cpu().regs().f;
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(actual_q, test.expected_q);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        for (const auto& [address, value] : test.expected_memory) {
+            EXPECT_EQ(probe->data[address], value);
+        }
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleIndexedWAndQLoadStoreModes) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name;
+        std::vector<uint8_t> program;
+        uint16_t x{};
+        uint16_t y{};
+        uint16_t s{};
+        uint8_t a{};
+        uint8_t b{};
+        uint8_t e{};
+        uint8_t f{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        std::vector<std::pair<uint16_t, uint8_t>> expected_memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint16_t expected_x{};
+        uint16_t expected_y{};
+        uint16_t expected_s{};
+        uint8_t expected_a{};
+        uint8_t expected_b{};
+        uint8_t expected_e{};
+        uint8_t expected_f{};
+        bool expect_z{};
+        bool expect_n{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "LDW ,X",
+            {0x10, 0xA6, 0x84},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            {{0x2000, 0x12}, {0x2001, 0x34}},
+            {},
+            6,
+            0x0103,
+            0x2000,
+            0x2100,
+            0x4000,
+            0x00,
+            0x00,
+            0x12,
+            0x34,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xA6, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x12, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x34, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "STW 8-bit offset,Y",
+            {0x10, 0xA7, 0xA8, 0x02},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x00,
+            0x00,
+            0xBE,
+            0xEF,
+            {},
+            {{0x2102, 0xBE}, {0x2103, 0xEF}},
+            7,
+            0x0104,
+            0x2000,
+            0x2100,
+            0x4000,
+            0x00,
+            0x00,
+            0xBE,
+            0xEF,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xA7, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0xA8, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x02, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x2102, 0xBE, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x2103, 0xEF, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "LDQ [,X]",
+            {0x10, 0xEC, 0x94},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            {{0x2000, 0x30}, {0x2001, 0x00}, {0x3000, 0x80}, {0x3001, 0x00}, {0x3002, 0x00}, {0x3003, 0x01}},
+            {},
+            11,
+            0x0103,
+            0x2000,
+            0x2100,
+            0x4000,
+            0x80,
+            0x00,
+            0x00,
+            0x01,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xEC, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x94, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3000, 0x80, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3001, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3002, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3003, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "STQ [16-bit offset,S]",
+            {0x10, 0xED, 0xF9, 0x00, 0x10},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x12,
+            0x34,
+            0x56,
+            0x78,
+            {{0x4010, 0x30}, {0x4011, 0x00}},
+            {{0x3000, 0x12}, {0x3001, 0x34}, {0x3002, 0x56}, {0x3003, 0x78}},
+            15,
+            0x0105,
+            0x2000,
+            0x2100,
+            0x4000,
+            0x12,
+            0x34,
+            0x56,
+            0x78,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xED, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0xF9, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0104, 0x10, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x4010, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x4011, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x3000, 0x12, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x3001, 0x34, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x3002, 0x56, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Write, 0x3003, 0x78, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().y = test.y;
+        sim.cpu().regs().s = test.s;
+        sim.cpu().regs().a = test.a;
+        sim.cpu().regs().b = test.b;
+        sim.cpu().regs().e = test.e;
+        sim.cpu().regs().f = test.f;
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().x, test.expected_x);
+        EXPECT_EQ(sim.cpu().regs().y, test.expected_y);
+        EXPECT_EQ(sim.cpu().regs().s, test.expected_s);
+        EXPECT_EQ(sim.cpu().regs().a, test.expected_a);
+        EXPECT_EQ(sim.cpu().regs().b, test.expected_b);
+        EXPECT_EQ(sim.cpu().regs().e, test.expected_e);
+        EXPECT_EQ(sim.cpu().regs().f, test.expected_f);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        for (const auto& [address, value] : test.expected_memory) {
+            EXPECT_EQ(probe->data[address], value);
+        }
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleIndexedWArithmeticModes) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name;
+        std::vector<uint8_t> program;
+        uint16_t x{};
+        uint16_t y{};
+        uint16_t s{};
+        uint16_t initial_w{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint16_t expected_w{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_c{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "ADDW ,X",
+            {0x10, 0xAB, 0x84},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x0001,
+            {{0x2000, 0x00}, {0x2001, 0x01}},
+            7,
+            0x0103,
+            0x0002,
+            false,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xAB, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "SUBW 8-bit offset,Y",
+            {0x10, 0xA0, 0xA8, 0x02},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x0100,
+            {{0x2102, 0x00}, {0x2103, 0x01}},
+            8,
+            0x0104,
+            0x00FF,
+            false,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xA0, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0xA8, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x02, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2102, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2103, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "CMPW [,X]",
+            {0x10, 0xA1, 0x94},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x1234,
+            {{0x2000, 0x30}, {0x2001, 0x00}, {0x3000, 0x12}, {0x3001, 0x34}},
+            10,
+            0x0103,
+            0x1234,
+            true,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xA1, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x94, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3000, 0x12, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3001, 0x34, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "ADDW [16-bit offset,S]",
+            {0x10, 0xAB, 0xF9, 0x00, 0x10},
+            0x2000,
+            0x2100,
+            0x4000,
+            0x7FFF,
+            {{0x4010, 0x30}, {0x4011, 0x00}, {0x3000, 0x00}, {0x3001, 0x01}},
+            14,
+            0x0105,
+            0x8000,
+            false,
+            true,
+            true,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xAB, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0xF9, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0104, 0x10, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x4010, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x4011, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3000, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3001, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().y = test.y;
+        sim.cpu().regs().s = test.s;
+        sim.cpu().regs().e = static_cast<uint8_t>(test.initial_w >> 8);
+        sim.cpu().regs().f = static_cast<uint8_t>(test.initial_w & 0xFF);
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        const uint16_t actual_w = static_cast<uint16_t>((static_cast<uint16_t>(sim.cpu().regs().e) << 8) | sim.cpu().regs().f);
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().x, test.x);
+        EXPECT_EQ(sim.cpu().regs().y, test.y);
+        EXPECT_EQ(sim.cpu().regs().s, test.s);
+        EXPECT_EQ(actual_w, test.expected_w);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_C) != 0, test.expect_c);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleHD6309ModeAndSignExtendInstructions) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name{};
+        std::vector<uint8_t> program;
+        uint8_t initial_a{};
+        uint8_t initial_b{};
+        uint8_t initial_e{};
+        uint8_t initial_f{};
+        uint8_t initial_md{};
+        uint8_t initial_cc{};
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint8_t expected_a{};
+        uint8_t expected_b{};
+        uint8_t expected_e{};
+        uint8_t expected_f{};
+        uint8_t expected_md{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_c{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "SEXW",
+            {0x14},
+            0x00,
+            0x00,
+            0x80,
+            0x01,
+            0x00,
+            microlind::CC_Z,
+            4,
+            0x0101,
+            0xFF,
+            0xFF,
+            0x80,
+            0x01,
+            0x00,
+            false,
+            true,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x14, microlind::BusCycleKind::OpcodeFetch},
+            },
+        },
+        {
+            "BITMD",
+            {0x11, 0x3C, 0x80},
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x80,
+            microlind::CC_C,
+            4,
+            0x0103,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x80,
+            false,
+            true,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x3C, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x80, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "LDMD",
+            {0x11, 0x3D, 0x01},
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            5,
+            0x0103,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            false,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x3D, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x01, microlind::BusCycleKind::OperandRead},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().a = test.initial_a;
+        sim.cpu().regs().b = test.initial_b;
+        sim.cpu().regs().e = test.initial_e;
+        sim.cpu().regs().f = test.initial_f;
+        sim.cpu().regs().md = test.initial_md;
+        sim.cpu().regs().cc = test.initial_cc;
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().a, test.expected_a);
+        EXPECT_EQ(sim.cpu().regs().b, test.expected_b);
+        EXPECT_EQ(sim.cpu().regs().e, test.expected_e);
+        EXPECT_EQ(sim.cpu().regs().f, test.expected_f);
+        EXPECT_EQ(sim.cpu().regs().md, test.expected_md);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_C) != 0, test.expect_c);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleHD6309BitTransferInstructions) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name{};
+        std::vector<uint8_t> program;
+        uint8_t dp{};
+        uint8_t initial_a{};
+        uint8_t initial_b{};
+        uint8_t initial_cc{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        std::vector<std::pair<uint16_t, uint8_t>> expected_memory;
+        uint8_t expected_cycles{};
+        uint8_t expected_a{};
+        uint8_t expected_b{};
+        uint8_t expected_cc{};
+        uint32_t expected_writes{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "BOR A bit1 into memory bit0",
+            {0x11, 0x32, 0x48, 0x20},
+            0x12,
+            0x02,
+            0x00,
+            microlind::CC_C,
+            {{0x1220, 0x00}},
+            {{0x1220, 0x01}},
+            7,
+            0x02,
+            0x00,
+            microlind::CC_C,
+            1,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x32, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x48, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1220, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x1220, 0x01, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "LDBT memory bit7 into B bit0",
+            {0x11, 0x36, 0xB8, 0x20},
+            0x12,
+            0x00,
+            0x00,
+            microlind::CC_C,
+            {{0x1220, 0x80}},
+            {},
+            7,
+            0x00,
+            0x01,
+            microlind::CC_C,
+            0,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x36, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0xB8, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1220, 0x80, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "STBT CC carry into memory bit7",
+            {0x11, 0x37, 0x07, 0x20},
+            0x12,
+            0x00,
+            0x00,
+            microlind::CC_C,
+            {{0x1220, 0x00}},
+            {{0x1220, 0x80}},
+            8,
+            0x00,
+            0x00,
+            microlind::CC_C,
+            1,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x37, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x07, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1220, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x1220, 0x80, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().dp = test.dp;
+        sim.cpu().regs().a = test.initial_a;
+        sim.cpu().regs().b = test.initial_b;
+        sim.cpu().regs().cc = test.initial_cc;
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        EXPECT_EQ(sim.cpu().regs().pc, 0x0104);
+        EXPECT_EQ(sim.cpu().regs().a, test.expected_a);
+        EXPECT_EQ(sim.cpu().regs().b, test.expected_b);
+        EXPECT_EQ(sim.cpu().regs().cc, test.expected_cc);
+        EXPECT_EQ(probe->write_count, test.expected_writes);
+        for (const auto& [address, value] : test.expected_memory) {
+            EXPECT_EQ(probe->data[address], value);
+        }
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleHD6309DivideInstructions) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name{};
+        std::vector<uint8_t> program;
+        uint8_t dp{};
+        uint16_t x{};
+        uint32_t initial_q{};
+        uint8_t initial_md{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        uint32_t expected_q{};
+        uint8_t expected_md{};
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_c{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "DIVD immediate",
+            {0x11, 0x8D, 0x05},
+            0x12,
+            0x2000,
+            0x00140000,
+            0x00,
+            {},
+            0x00000004,
+            0x00,
+            25,
+            0x0103,
+            false,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x8D, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x05, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "DIVQ direct",
+            {0x11, 0x9E, 0x20},
+            0x12,
+            0x2000,
+            0x00000014,
+            0x00,
+            {{0x1220, 0x00}, {0x1221, 0x05}},
+            0x00000004,
+            0x00,
+            36,
+            0x0103,
+            false,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x9E, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1220, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1221, 0x05, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "DIVD indexed zero divisor trap",
+            {0x11, 0xAD, 0x84},
+            0x12,
+            0x2000,
+            0x00140000,
+            0x00,
+            {{0x2000, 0x00}, {0xFFF0, 0x12}, {0xFFF1, 0x34}},
+            0x00140000,
+            0x80,
+            27,
+            0x1234,
+            false,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xAD, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0xFFF0, 0x12, microlind::BusCycleKind::VectorRead},
+                {microlind::BusAccessType::Read, 0xFFF1, 0x34, microlind::BusCycleKind::VectorRead},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().dp = test.dp;
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().a = static_cast<uint8_t>((test.initial_q >> 24) & 0xFF);
+        sim.cpu().regs().b = static_cast<uint8_t>((test.initial_q >> 16) & 0xFF);
+        sim.cpu().regs().e = static_cast<uint8_t>((test.initial_q >> 8) & 0xFF);
+        sim.cpu().regs().f = static_cast<uint8_t>(test.initial_q & 0xFF);
+        sim.cpu().regs().md = test.initial_md;
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const auto internal_cycles = static_cast<uint32_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, static_cast<uint8_t>(internal_cycles));
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        const uint32_t actual_q =
+            (static_cast<uint32_t>((static_cast<uint16_t>(sim.cpu().regs().a) << 8) | sim.cpu().regs().b) << 16) |
+            static_cast<uint32_t>((static_cast<uint16_t>(sim.cpu().regs().e) << 8) | sim.cpu().regs().f);
+        EXPECT_EQ(actual_q, test.expected_q);
+        EXPECT_EQ(sim.cpu().regs().md, test.expected_md);
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_C) != 0, test.expect_c);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleHD6309TfmInstructions) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name{};
+        uint8_t opcode{};
+        uint16_t x{};
+        uint16_t y{};
+        uint16_t w{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        std::vector<std::pair<uint16_t, uint8_t>> expected_memory;
+        uint16_t expected_x{};
+        uint16_t expected_y{};
+        uint16_t expected_w{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "TFM X+,Y+",
+            0x38,
+            0x2000,
+            0x3000,
+            0x0002,
+            {{0x2000, 0xAA}, {0x2001, 0xBB}},
+            {{0x2000, 0x00}, {0x2001, 0x00}, {0x3000, 0xAA}, {0x3001, 0xBB}},
+            0x2002,
+            0x3002,
+            0x0000,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x38, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x12, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0xAA, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x3000, 0xAA, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Read, 0x2001, 0xBB, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x3001, 0xBB, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "TFM X+,Y",
+            0x3A,
+            0x2000,
+            0x3000,
+            0x0002,
+            {{0x2000, 0xAA}, {0x2001, 0xBB}},
+            {{0x2000, 0x00}, {0x2001, 0x00}, {0x3000, 0xBB}},
+            0x2002,
+            0x3000,
+            0x0000,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x11, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x3A, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x12, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0xAA, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x3000, 0xAA, microlind::BusCycleKind::OperandWrite},
+                {microlind::BusAccessType::Read, 0x2001, 0xBB, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x3000, 0xBB, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        probe->data[0x0100] = 0x11;
+        probe->data[0x0101] = test.opcode;
+        probe->data[0x0102] = 0x12;
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().y = test.y;
+        sim.cpu().regs().e = high_byte(test.w);
+        sim.cpu().regs().f = low_byte(test.w);
+
+        const uint32_t expected_cycles = static_cast<uint32_t>(6 + 3 * test.w);
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, expected_cycles);
+        }
+
+        const auto internal_cycles = static_cast<uint32_t>(expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, static_cast<uint8_t>(internal_cycles));
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        const uint16_t actual_w =
+            static_cast<uint16_t>((static_cast<uint16_t>(sim.cpu().regs().e) << 8) | sim.cpu().regs().f);
+        EXPECT_EQ(sim.cpu().regs().pc, 0x0103);
+        EXPECT_EQ(sim.cpu().regs().x, test.expected_x);
+        EXPECT_EQ(sim.cpu().regs().y, test.expected_y);
+        EXPECT_EQ(actual_w, test.expected_w);
+        for (const auto& [address, value] : test.expected_memory) {
+            EXPECT_EQ(probe->data[address], value);
+        }
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleHD6309RegisterAluInstructions) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name{};
+        uint8_t opcode{};
+        uint16_t initial_d{};
+        uint16_t initial_x{};
+        uint8_t initial_cc{};
+        uint16_t expected_x{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_c{};
+    };
+
+    const Case cases[] = {
+        {"ADDR", 0x30, 0x0001, 0x7FFF, 0x00, 0x8000, false, true, true, false},
+        {"ADCR", 0x31, 0x0001, 0x0001, microlind::CC_C, 0x0003, false, false, false, false},
+        {"SUBR", 0x32, 0x0001, 0x0000, 0x00, 0xFFFF, false, true, false, true},
+        {"SBCR", 0x33, 0x0001, 0x0001, microlind::CC_C, 0xFFFF, false, true, false, true},
+        {"ANDR", 0x34, 0x0F0F, 0xFF00, microlind::CC_C, 0x0F00, false, false, false, true},
+        {"ORR", 0x35, 0x8001, 0x0000, 0x00, 0x8001, false, true, false, false},
+        {"EORR", 0x36, 0xFFFF, 0xFFFF, 0x00, 0x0000, true, false, false, false},
+        {"CMPR", 0x37, 0x0001, 0x0001, 0x00, 0x0001, true, false, false, false},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        probe->data[0x0100] = 0x10;
+        probe->data[0x0101] = test.opcode;
+        probe->data[0x0102] = 0x01; // source D, destination X
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().a = high_byte(test.initial_d);
+        sim.cpu().regs().b = low_byte(test.initial_d);
+        sim.cpu().regs().x = test.initial_x;
+        sim.cpu().regs().cc = test.initial_cc;
+
+        constexpr uint8_t expected_cycles = 4;
+        const ExpectedAccess expected_accesses[] = {
+            {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+            {microlind::BusAccessType::Read, 0x0101, test.opcode, microlind::BusCycleKind::OpcodeFetch},
+            {microlind::BusAccessType::Read, 0x0102, 0x01, microlind::BusCycleKind::OperandRead},
+        };
+
+        for (std::size_t i = 0; i < std::size(expected_accesses); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, expected_cycles);
+        }
+
+        expect_internal_cycles(sim, 1);
+
+        EXPECT_EQ(sim.cpu().regs().pc, 0x0103);
+        EXPECT_EQ(sim.cpu().regs().x, test.expected_x);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_C) != 0, test.expect_c);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(std::size(expected_accesses)));
+        for (std::size_t i = 0; i < std::size(expected_accesses); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleHD6309DAluInstructions) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name{};
+        std::vector<uint8_t> program;
+        uint8_t dp{};
+        uint16_t x{};
+        uint16_t initial_d{};
+        uint8_t initial_cc{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint16_t expected_d{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_c{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "ANDD immediate",
+            {0x10, 0x84, 0x0F, 0x0F},
+            0x12,
+            0x2000,
+            0xF0F0,
+            microlind::CC_C,
+            {},
+            5,
+            0x0104,
+            0x0000,
+            true,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x84, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x0F, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x0F, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "BITD direct",
+            {0x10, 0x95, 0x20},
+            0x12,
+            0x2000,
+            0x8001,
+            microlind::CC_C,
+            {{0x1220, 0x80}, {0x1221, 0x00}},
+            7,
+            0x0103,
+            0x8001,
+            false,
+            true,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x95, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1220, 0x80, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1221, 0x00, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "ADCD extended",
+            {0x10, 0xB9, 0x20, 0x00},
+            0x12,
+            0x2000,
+            0x7FFF,
+            microlind::CC_C,
+            {{0x2000, 0x00}, {0x2001, 0x00}},
+            8,
+            0x0104,
+            0x8000,
+            false,
+            true,
+            true,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xB9, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0x00, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "ORD indexed",
+            {0x10, 0xAA, 0x84},
+            0x12,
+            0x2000,
+            0x1200,
+            microlind::CC_C,
+            {{0x2000, 0x00}, {0x2001, 0xFF}},
+            7,
+            0x0103,
+            0x12FF,
+            false,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x10, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xAA, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0102, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2001, 0xFF, microlind::BusCycleKind::OperandRead},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().dp = test.dp;
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().a = high_byte(test.initial_d);
+        sim.cpu().regs().b = low_byte(test.initial_d);
+        sim.cpu().regs().cc = test.initial_cc;
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        const uint16_t actual_d =
+            static_cast<uint16_t>((static_cast<uint16_t>(sim.cpu().regs().a) << 8) | sim.cpu().regs().b);
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().x, test.x);
+        EXPECT_EQ(actual_d, test.expected_d);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_C) != 0, test.expect_c);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleHD6309ImmediateMemoryInstructions) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name{};
+        std::vector<uint8_t> program;
+        uint8_t dp{};
+        uint16_t x{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        std::vector<std::pair<uint16_t, uint8_t>> expected_memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint32_t expected_writes{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_c{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "OIM direct",
+            {0x01, 0x0F, 0x20},
+            0x12,
+            0x2000,
+            {{0x1220, 0xF0}},
+            {{0x1220, 0xFF}},
+            6,
+            0x0103,
+            1,
+            false,
+            true,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x01, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x0F, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x1220, 0xF0, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x1220, 0xFF, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "AIM extended",
+            {0x72, 0x0F, 0x20, 0x00},
+            0x12,
+            0x2000,
+            {{0x2000, 0xF0}},
+            {{0x2000, 0x00}},
+            7,
+            0x0104,
+            1,
+            true,
+            false,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x72, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x0F, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0xF0, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x2000, 0x00, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "EIM indexed",
+            {0x65, 0xFF, 0x84},
+            0x12,
+            0x2000,
+            {{0x2000, 0x0F}},
+            {{0x2000, 0xF0}},
+            7,
+            0x0103,
+            1,
+            false,
+            true,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x65, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xFF, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x0F, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x2000, 0xF0, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "TIM extended",
+            {0x7B, 0xF0, 0x20, 0x00},
+            0x12,
+            0x2000,
+            {{0x2000, 0x0F}},
+            {},
+            7,
+            0x0104,
+            0,
+            true,
+            false,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x7B, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xF0, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x20, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0103, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x0F, microlind::BusCycleKind::OperandRead},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().dp = test.dp;
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().cc = static_cast<uint8_t>(microlind::CC_C | microlind::CC_V);
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(probe->write_count, test.expected_writes);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_C) != 0, test.expect_c);
+        for (const auto& [address, value] : test.expected_memory) {
+            EXPECT_EQ(probe->data[address], value);
+        }
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleIndexedMemoryUnaryConventionalModes) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    struct Case {
+        const char* name;
+        std::vector<uint8_t> program;
+        uint16_t x{};
+        uint16_t y{};
+        std::vector<std::pair<uint16_t, uint8_t>> memory;
+        std::vector<std::pair<uint16_t, uint8_t>> expected_memory;
+        uint8_t expected_cycles{};
+        uint16_t expected_pc{};
+        uint16_t expected_x{};
+        uint16_t expected_y{};
+        bool expect_z{};
+        bool expect_n{};
+        bool expect_v{};
+        bool expect_c{};
+        std::vector<ExpectedAccess> expected_accesses;
+    };
+
+    const Case cases[] = {
+        {
+            "NEG ,X",
+            {0x60, 0x84},
+            0x2000,
+            0x2100,
+            {{0x2000, 0x01}},
+            {{0x2000, 0xFF}},
+            6,
+            0x0102,
+            0x2000,
+            0x2100,
+            false,
+            true,
+            false,
+            true,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x60, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2000, 0x01, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x2000, 0xFF, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "TST 5-bit offset,X",
+            {0x6D, 0x05},
+            0x2000,
+            0x2100,
+            {{0x2005, 0x80}},
+            {{0x2005, 0x00}},
+            7,
+            0x0102,
+            0x2000,
+            0x2100,
+            false,
+            true,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x6D, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x05, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2005, 0x80, microlind::BusCycleKind::OperandRead},
+            },
+        },
+        {
+            "CLR ,X",
+            {0x6F, 0x84},
+            0x2000,
+            0x2100,
+            {{0x2000, 0x5A}},
+            {{0x2000, 0x00}},
+            6,
+            0x0102,
+            0x2000,
+            0x2100,
+            true,
+            false,
+            false,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x6F, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0x84, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x2000, 0x00, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+        {
+            "INC [8-bit offset,Y]",
+            {0x6C, 0xB8, 0x02},
+            0x2000,
+            0x2100,
+            {{0x2102, 0x30}, {0x2103, 0x00}, {0x3000, 0x7F}},
+            {{0x3000, 0x80}},
+            10,
+            0x0103,
+            0x2000,
+            0x2100,
+            false,
+            true,
+            true,
+            false,
+            {
+                {microlind::BusAccessType::Read, 0x0100, 0x6C, microlind::BusCycleKind::OpcodeFetch},
+                {microlind::BusAccessType::Read, 0x0101, 0xB8, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x0102, 0x02, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2102, 0x30, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x2103, 0x00, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Read, 0x3000, 0x7F, microlind::BusCycleKind::OperandRead},
+                {microlind::BusAccessType::Write, 0x3000, 0x80, microlind::BusCycleKind::OperandWrite},
+            },
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        for (const auto& [address, value] : test.memory) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().x = test.x;
+        sim.cpu().regs().y = test.y;
+
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+
+        const uint8_t internal_cycles = static_cast<uint8_t>(test.expected_cycles - test.expected_accesses.size());
+        if (internal_cycles > 0) {
+            expect_internal_cycles(sim, internal_cycles);
+        } else {
+            EXPECT_FALSE(sim.has_pending_microcycles());
+        }
+
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().x, test.expected_x);
+        EXPECT_EQ(sim.cpu().regs().y, test.expected_y);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_Z) != 0, test.expect_z);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_N) != 0, test.expect_n);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_V) != 0, test.expect_v);
+        EXPECT_EQ((sim.cpu().regs().cc & microlind::CC_C) != 0, test.expect_c);
+        for (const auto& [address, value] : test.expected_memory) {
+            EXPECT_EQ(probe->data[address], value);
+        }
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(test.expected_accesses.size()));
+        for (std::size_t i = 0; i < test.expected_accesses.size(); ++i) {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(sim.bus().access_log()[i].type, test.expected_accesses[i].type);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_accesses[i].address);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_accesses[i].value);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, test.expected_accesses[i].cycle_kind);
+        }
+    }
+}
+
+TEST(BusPhaseTest, MicrocycleFallsBackForHD6309OnlyOpcodesInMC6809) {
+    struct Case {
+        const char* name{};
+        std::vector<uint8_t> program;
+        uint16_t expected_pc{};
+        uint16_t expected_x{};
+        uint8_t expected_a{};
+        uint8_t expected_b{};
+        uint8_t expected_e{};
+        uint8_t expected_f{};
+        std::size_t expected_emitted_cycles{};
+    };
+
+    const Case cases[] = {
+        {
+            "single-byte LDQ immediate",
+            {0xCD, 0x12, 0x34, 0x56, 0x78},
+            0x0101,
+            0x2000,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            1,
+        },
+        {
+            "prefixed register ALU",
+            {0x10, 0x30, 0x01},
+            0x0102,
+            0x2000,
+            0x00,
+            0x02,
+            0x00,
+            0x00,
+            2,
+        },
+        {
+            "prefixed DIVD immediate",
+            {0x11, 0x8D, 0x05},
+            0x0102,
+            0x2000,
+            0x00,
+            0x14,
+            0x00,
+            0x00,
+            2,
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::MC6809, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().x = 0x2000;
+        sim.cpu().regs().b = test.expected_b;
+
+        for (std::size_t i = 0; i < test.expected_emitted_cycles; ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_EQ(result.instruction_complete, i + 1 == test.expected_emitted_cycles);
+            EXPECT_EQ(result.instruction_result.cycles, 1u);
+        }
+
+        EXPECT_FALSE(sim.has_pending_microcycles());
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().x, test.expected_x);
+        EXPECT_EQ(sim.cpu().regs().a, test.expected_a);
+        EXPECT_EQ(sim.cpu().regs().b, test.expected_b);
+        EXPECT_EQ(sim.cpu().regs().e, test.expected_e);
+        EXPECT_EQ(sim.cpu().regs().f, test.expected_f);
+        EXPECT_EQ(sim.cpu().regs().md & 0x40, 0);
+        EXPECT_EQ(probe->write_count, 0u);
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleServicesExternalIrq) {
+    struct ExpectedAccess {
+        microlind::BusAccessType type{};
+        uint16_t address{};
+        uint8_t value{};
+        microlind::BusCycleKind cycle_kind{};
+    };
+
+    microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+    auto memory = std::make_unique<SideEffectMemory>();
+    auto* probe = memory.get();
+    probe->data[0xFFF8] = 0x45;
+    probe->data[0xFFF9] = 0x67;
+    ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+    sim.cpu().set_pc(0x0100);
+    sim.cpu().regs().s = 0x9000;
+    sim.cpu().regs().u = 0xCAFE;
+    sim.cpu().regs().y = 0x5678;
+    sim.cpu().regs().x = 0x1234;
+    sim.cpu().regs().dp = 0xAB;
+    sim.cpu().regs().b = 0x22;
+    sim.cpu().regs().a = 0x11;
+    sim.cpu().regs().cc = microlind::CC_C;
+    sim.cpu().set_irq_line(true);
+
+    const std::vector<ExpectedAccess> expected_accesses{
+        {microlind::BusAccessType::Write, 0x8FFF, 0x00, microlind::BusCycleKind::StackWrite},
+        {microlind::BusAccessType::Write, 0x8FFE, 0x01, microlind::BusCycleKind::StackWrite},
+        {microlind::BusAccessType::Write, 0x8FFD, 0xFE, microlind::BusCycleKind::StackWrite},
+        {microlind::BusAccessType::Write, 0x8FFC, 0xCA, microlind::BusCycleKind::StackWrite},
+        {microlind::BusAccessType::Write, 0x8FFB, 0x78, microlind::BusCycleKind::StackWrite},
+        {microlind::BusAccessType::Write, 0x8FFA, 0x56, microlind::BusCycleKind::StackWrite},
+        {microlind::BusAccessType::Write, 0x8FF9, 0x34, microlind::BusCycleKind::StackWrite},
+        {microlind::BusAccessType::Write, 0x8FF8, 0x12, microlind::BusCycleKind::StackWrite},
+        {microlind::BusAccessType::Write, 0x8FF7, 0xAB, microlind::BusCycleKind::StackWrite},
+        {microlind::BusAccessType::Write, 0x8FF6, 0x22, microlind::BusCycleKind::StackWrite},
+        {microlind::BusAccessType::Write, 0x8FF5, 0x11, microlind::BusCycleKind::StackWrite},
+        {microlind::BusAccessType::Write, 0x8FF4, static_cast<uint8_t>(microlind::CC_E | microlind::CC_C), microlind::BusCycleKind::StackWrite},
+        {microlind::BusAccessType::Read, 0xFFF8, 0x45, microlind::BusCycleKind::VectorRead},
+        {microlind::BusAccessType::Read, 0xFFF9, 0x67, microlind::BusCycleKind::VectorRead},
+    };
+
+    constexpr uint8_t expected_cycles = 19;
+    for (std::size_t i = 0; i < expected_accesses.size(); ++i) {
+        const auto result = sim.tick_microcycle();
+        EXPECT_TRUE(result.emitted);
+        EXPECT_EQ(result.instruction_started, i == 0);
+        EXPECT_FALSE(result.instruction_complete);
+        EXPECT_EQ(result.instruction_result.cycles, expected_cycles);
+    }
+    expect_internal_cycles(sim, static_cast<uint8_t>(expected_cycles - expected_accesses.size()));
+
+    EXPECT_EQ(sim.cpu().regs().pc, 0x4567);
+    EXPECT_EQ(sim.cpu().regs().s, 0x8FF4);
+    EXPECT_EQ(sim.cpu().regs().cc, microlind::CC_E | microlind::CC_I | microlind::CC_C);
+    ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(expected_accesses.size()));
+    for (std::size_t i = 0; i < expected_accesses.size(); ++i) {
+        SCOPED_TRACE(i);
+        EXPECT_EQ(sim.bus().access_log()[i].type, expected_accesses[i].type);
+        EXPECT_EQ(sim.bus().access_log()[i].address, expected_accesses[i].address);
+        EXPECT_EQ(sim.bus().access_log()[i].value, expected_accesses[i].value);
+        EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, expected_accesses[i].cycle_kind);
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleSoftwareInterruptsPushStateAndVector) {
+    struct Case {
+        const char* name{};
+        std::vector<uint8_t> program;
+        uint16_t vector{};
+        uint16_t target{};
+        uint16_t return_pc{};
+        uint8_t expected_cycles{};
+        uint8_t expected_cc{};
+        std::vector<std::pair<uint16_t, uint8_t>> expected_fetches;
+    };
+
+    const Case cases[] = {
+        {
+            "SWI",
+            {0x3F},
+            0xFFFA,
+            0x2222,
+            0x0101,
+            19,
+            static_cast<uint8_t>(microlind::CC_E | microlind::CC_I | microlind::CC_F | microlind::CC_C),
+            {{0x0100, 0x3F}},
+        },
+        {
+            "SWI2",
+            {0x10, 0x3F},
+            0xFFF4,
+            0x3333,
+            0x0102,
+            20,
+            static_cast<uint8_t>(microlind::CC_E | microlind::CC_I | microlind::CC_C),
+            {{0x0100, 0x10}, {0x0101, 0x3F}},
+        },
+        {
+            "SWI3",
+            {0x11, 0x3F},
+            0xFFF2,
+            0x4444,
+            0x0102,
+            20,
+            static_cast<uint8_t>(microlind::CC_E | microlind::CC_I | microlind::CC_C),
+            {{0x0100, 0x11}, {0x0101, 0x3F}},
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        for (std::size_t i = 0; i < test.program.size(); ++i) {
+            probe->data[static_cast<uint16_t>(0x0100 + i)] = test.program[i];
+        }
+        probe->data[test.vector] = static_cast<uint8_t>(test.target >> 8);
+        probe->data[static_cast<uint16_t>(test.vector + 1)] = static_cast<uint8_t>(test.target & 0xFF);
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().s = 0x9000;
+        sim.cpu().regs().u = 0xCAFE;
+        sim.cpu().regs().y = 0x5678;
+        sim.cpu().regs().x = 0x1234;
+        sim.cpu().regs().dp = 0xAB;
+        sim.cpu().regs().b = 0x22;
+        sim.cpu().regs().a = 0x11;
+        sim.cpu().regs().cc = microlind::CC_C;
+
+        const std::size_t bus_cycles = test.expected_fetches.size() + 14;
+        for (std::size_t i = 0; i < bus_cycles; ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_FALSE(result.instruction_complete);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+        expect_internal_cycles(sim, static_cast<uint8_t>(test.expected_cycles - bus_cycles));
+
+        EXPECT_EQ(sim.cpu().regs().pc, test.target);
+        EXPECT_EQ(sim.cpu().regs().s, 0x8FF4);
+        EXPECT_EQ(sim.cpu().regs().cc, test.expected_cc);
+        EXPECT_EQ(probe->data[0x8FFF], static_cast<uint8_t>(test.return_pc & 0xFF));
+        EXPECT_EQ(probe->data[0x8FFE], static_cast<uint8_t>(test.return_pc >> 8));
+        EXPECT_EQ(probe->data[0x8FF4], static_cast<uint8_t>(microlind::CC_E | microlind::CC_C));
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(bus_cycles));
+        for (std::size_t i = 0; i < test.expected_fetches.size(); ++i) {
+            EXPECT_EQ(sim.bus().access_log()[i].type, microlind::BusAccessType::Read);
+            EXPECT_EQ(sim.bus().access_log()[i].address, test.expected_fetches[i].first);
+            EXPECT_EQ(sim.bus().access_log()[i].value, test.expected_fetches[i].second);
+            EXPECT_EQ(sim.bus().access_log()[i].cycle_kind, microlind::BusCycleKind::OpcodeFetch);
+        }
+        EXPECT_EQ(sim.bus().access_log()[bus_cycles - 2].address, test.vector);
+        EXPECT_EQ(sim.bus().access_log()[bus_cycles - 2].cycle_kind, microlind::BusCycleKind::VectorRead);
+        EXPECT_EQ(sim.bus().access_log()[bus_cycles - 1].address, static_cast<uint16_t>(test.vector + 1));
+        EXPECT_EQ(sim.bus().access_log()[bus_cycles - 1].cycle_kind, microlind::BusCycleKind::VectorRead);
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleRtiPullsShortAndFullFrames) {
+    struct Case {
+        const char* name{};
+        std::vector<std::pair<uint16_t, uint8_t>> stack;
+        uint8_t expected_cycles{};
+        uint16_t expected_s{};
+        uint16_t expected_pc{};
+        uint8_t expected_cc{};
+        uint8_t expected_a{};
+        uint8_t expected_b{};
+        uint8_t expected_dp{};
+        uint16_t expected_x{};
+        uint16_t expected_y{};
+        uint16_t expected_u{};
+    };
+
+    const Case cases[] = {
+        {
+            "short RTI",
+            {{0x9000, microlind::CC_C}, {0x9001, 0x12}, {0x9002, 0x34}},
+            6,
+            0x9003,
+            0x1234,
+            microlind::CC_C,
+            0xAA,
+            0xBB,
+            0xCC,
+            0x1111,
+            0x2222,
+            0x3333,
+        },
+        {
+            "full RTI",
+            {
+                {0x9000, static_cast<uint8_t>(microlind::CC_E | microlind::CC_C)},
+                {0x9001, 0x11},
+                {0x9002, 0x22},
+                {0x9003, 0x33},
+                {0x9004, 0x44},
+                {0x9005, 0x55},
+                {0x9006, 0x66},
+                {0x9007, 0x77},
+                {0x9008, 0x88},
+                {0x9009, 0x99},
+                {0x900A, 0xAA},
+                {0x900B, 0xBB},
+            },
+            15,
+            0x900C,
+            0xAABB,
+            static_cast<uint8_t>(microlind::CC_E | microlind::CC_C),
+            0x11,
+            0x22,
+            0x33,
+            0x4455,
+            0x6677,
+            0x8899,
+        },
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        probe->data[0x0100] = 0x3B;
+        for (const auto& [address, value] : test.stack) {
+            probe->data[address] = value;
+        }
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().s = 0x9000;
+        sim.cpu().regs().a = 0xAA;
+        sim.cpu().regs().b = 0xBB;
+        sim.cpu().regs().dp = 0xCC;
+        sim.cpu().regs().x = 0x1111;
+        sim.cpu().regs().y = 0x2222;
+        sim.cpu().regs().u = 0x3333;
+
+        const std::size_t bus_cycles = 1 + test.stack.size();
+        for (std::size_t i = 0; i < bus_cycles; ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_FALSE(result.instruction_complete);
+            EXPECT_EQ(result.instruction_result.cycles, test.expected_cycles);
+        }
+        expect_internal_cycles(sim, static_cast<uint8_t>(test.expected_cycles - bus_cycles));
+
+        EXPECT_EQ(sim.cpu().regs().s, test.expected_s);
+        EXPECT_EQ(sim.cpu().regs().pc, test.expected_pc);
+        EXPECT_EQ(sim.cpu().regs().cc, test.expected_cc);
+        EXPECT_EQ(sim.cpu().regs().a, test.expected_a);
+        EXPECT_EQ(sim.cpu().regs().b, test.expected_b);
+        EXPECT_EQ(sim.cpu().regs().dp, test.expected_dp);
+        EXPECT_EQ(sim.cpu().regs().x, test.expected_x);
+        EXPECT_EQ(sim.cpu().regs().y, test.expected_y);
+        EXPECT_EQ(sim.cpu().regs().u, test.expected_u);
+        ASSERT_THAT(sim.bus().access_log(), testing::SizeIs(bus_cycles));
+        EXPECT_EQ(sim.bus().access_log()[0].cycle_kind, microlind::BusCycleKind::OpcodeFetch);
+        for (std::size_t i = 0; i < test.stack.size(); ++i) {
+            EXPECT_EQ(sim.bus().access_log()[i + 1].address, test.stack[i].first);
+            EXPECT_EQ(sim.bus().access_log()[i + 1].value, test.stack[i].second);
+            EXPECT_EQ(sim.bus().access_log()[i + 1].cycle_kind, microlind::BusCycleKind::StackRead);
+        }
+    }
+}
+
+TEST(BusPhaseTest, ResumableMicrocycleCwaiPushesMaskedStateAndSyncConsumesOpcode) {
+    {
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        auto* probe = memory.get();
+        probe->data[0x0100] = 0x3C;
+        probe->data[0x0101] = 0xFE;
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0100);
+        sim.cpu().regs().s = 0x9000;
+        sim.cpu().regs().u = 0xCAFE;
+        sim.cpu().regs().y = 0x5678;
+        sim.cpu().regs().x = 0x1234;
+        sim.cpu().regs().dp = 0xAB;
+        sim.cpu().regs().b = 0x22;
+        sim.cpu().regs().a = 0x11;
+        sim.cpu().regs().cc = static_cast<uint8_t>(microlind::CC_C | microlind::CC_V);
+
+        constexpr uint8_t expected_cycles = 19;
+        constexpr std::size_t bus_cycles = 14;
+        for (std::size_t i = 0; i < bus_cycles; ++i) {
+            const auto result = sim.tick_microcycle();
+            EXPECT_TRUE(result.emitted);
+            EXPECT_EQ(result.instruction_started, i == 0);
+            EXPECT_FALSE(result.instruction_complete);
+            EXPECT_EQ(result.instruction_result.cycles, expected_cycles);
+        }
+        expect_internal_cycles(sim, static_cast<uint8_t>(expected_cycles - bus_cycles));
+
+        EXPECT_EQ(sim.cpu().regs().pc, 0x0102);
+        EXPECT_EQ(sim.cpu().regs().s, 0x8FF4);
+        EXPECT_EQ(sim.cpu().regs().cc, microlind::CC_E | microlind::CC_I | microlind::CC_V);
+        EXPECT_EQ(probe->data[0x8FFF], 0x02);
+        EXPECT_EQ(probe->data[0x8FFE], 0x01);
+        EXPECT_EQ(probe->data[0x8FF4], microlind::CC_E | microlind::CC_V);
+    }
+
+    {
+        microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+        auto memory = std::make_unique<SideEffectMemory>();
+        memory->data[0x0200] = 0x13;
+        ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+        sim.cpu().set_pc(0x0200);
+        const auto opcode = sim.tick_microcycle();
+        EXPECT_TRUE(opcode.emitted);
+        EXPECT_TRUE(opcode.instruction_started);
+        EXPECT_FALSE(opcode.instruction_complete);
+        EXPECT_EQ(opcode.signals.cycle_kind, microlind::BusCycleKind::OpcodeFetch);
+        expect_internal_cycles(sim, 1);
+        EXPECT_EQ(sim.cpu().regs().pc, 0x0201);
     }
 }
 
