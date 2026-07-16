@@ -139,6 +139,21 @@ bool SimSession::attach_cf_image(const std::filesystem::path& path, uint32_t min
     return true;
 }
 
+bool SimSession::remove_cf_image() {
+    if (!hw_cfg_ || !hw_cfg_->cf.present) {
+        add_log("No CF device is configured.");
+        return false;
+    }
+
+    hw_cfg_->cf.image_path.clear();
+    hw_cfg_->cf.sectors = 0;
+    if (cf_dev_) {
+        cf_dev_->unload_disk_image();
+    }
+    add_log("Removed CF image.");
+    return true;
+}
+
 void SimSession::reset() {
     sim_.reset_from_vector();
     sim_.reset_clock();
@@ -214,6 +229,23 @@ RunResult SimSession::run_microcycles(uint32_t count) {
             return result;
         }
     }
+    return result;
+}
+
+RealtimeRunResult SimSession::run_realtime_cycles(uint64_t cycle_budget) {
+    RealtimeRunResult result;
+    if (cycle_budget == 0) return result;
+
+    sim_.bus().clear_access_log();
+    sim_.bus().clear_decode_log();
+    while (result.cycles < cycle_budget) {
+        const CpuTickResult tick = sim_.tick();
+        ++result.instructions;
+        if (tick.cycles == 0) break;
+        result.cycles += tick.cycles;
+    }
+    sim_.bus().clear_access_log();
+    sim_.bus().clear_decode_log();
     return result;
 }
 
@@ -547,6 +579,7 @@ CfSnapshot SimSession::cf_snapshot() const {
 
     const auto device = cf_dev_->snapshot();
     snapshot.present = true;
+    snapshot.image_loaded = device.image_loaded;
     snapshot.start = hw_cfg_->cf.start;
     snapshot.end = hw_cfg_->cf.end;
     snapshot.image_path = device.image_path;

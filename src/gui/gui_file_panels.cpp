@@ -99,6 +99,10 @@ void draw_file_panel(GuiState& state) {
     if (ImGui::Button("Attach CF")) {
         state.attach_cf();
     }
+    ImGui::SameLine();
+    if (ImGui::Button("Remove CF")) {
+        state.remove_cf();
+    }
 
     ImGui::Separator();
     const char* modes[] = {"MC6809", "HD6309"};
@@ -111,13 +115,14 @@ void draw_file_panel(GuiState& state) {
 }
 
 void draw_control_panel(GuiState& state) {
-    set_next_window_defaults(376.0f, 28.0f, 500.0f, 150.0f);
+    set_next_window_defaults(376.0f, 28.0f, 560.0f, 210.0f);
     ImGui::Begin("Control", &state.show_control_panel);
     if (ImGui::Button("Reset")) {
         state.stop_execution();
         state.session.reset();
     }
     ImGui::SameLine();
+    ImGui::BeginDisabled(state.true_running);
     if (ImGui::Button("Step")) {
         state.step_once();
     }
@@ -133,8 +138,10 @@ void draw_control_panel(GuiState& state) {
     if (ImGui::Button(state.running ? "Pause" : "Run")) {
         state.toggle_run();
     }
-    ImGui::SliderInt("Operations/min", &state.operations_per_minute, 10, 6000);
+    ImGui::EndDisabled();
+    ImGui::SliderInt("Operations/min", &state.operations_per_minute, 10, 60000);
     ImGui::Text("Frequency: %.2f operations/s", state.operations_per_second());
+    ImGui::BeginDisabled(state.true_running);
     ImGui::Checkbox("Micro-step run", &state.run_micro_steps);
     ImGui::InputInt("Run until", &state.run_until_address, 1, 256, ImGuiInputTextFlags_CharsHexadecimal);
     state.run_until_address = std::clamp(state.run_until_address, 0, 0xFFFF);
@@ -149,6 +156,18 @@ void draw_control_panel(GuiState& state) {
     if (ImGui::Button("Until Return")) {
         state.run_until_return();
     }
+    ImGui::EndDisabled();
+    ImGui::Separator();
+    const char* true_clocks[] = {"1 MHz", "2 MHz", "3 MHz"};
+    ImGui::Combo("True clock", &state.true_clock_index, true_clocks, static_cast<int>(std::size(true_clocks)));
+    ImGui::SameLine();
+    if (ImGui::Button(state.true_running ? "Pause True" : "True Run")) {
+        state.toggle_true_run();
+    }
+    ImGui::Text(
+        "True frequency: %.2f MHz target, %.2f MHz effective",
+        static_cast<double>(state.true_target_hz()) / 1000000.0,
+        state.true_effective_hz / 1000000.0);
     ImGui::Text("Serial mapped: %s", state.session.serial_mapped() ? "yes" : "no");
     ImGui::End();
 }
@@ -169,7 +188,11 @@ void draw_serial(GuiState& state) {
         state.serial_input.size(),
         ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
-    if ((submitted && !buffer_string(state.serial_input).empty()) || ImGui::Button("Send")) {
+    if (submitted && !buffer_string(state.serial_input).empty()) {
+        state.send_serial_text(true);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Send")) {
         state.send_serial_text();
     }
     ImGui::EndDisabled();
@@ -210,7 +233,7 @@ void draw_serial(GuiState& state) {
         }
     } else {
         const std::string text = serial_terminal_text(tx);
-        ImGui::TextUnformatted(text.c_str());
+        ImGui::TextUnformatted(text.data(), text.data() + text.size());
     }
     ImGui::EndChild();
     ImGui::End();

@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 
 #include <SDL.h>
 #include "imgui.h"
@@ -35,6 +36,41 @@ SDL_Color clear_color(microlind::app::GuiTheme theme) {
     case microlind::app::GuiTheme::Light: return SDL_Color{240, 240, 240, 255};
     }
     return SDL_Color{20, 22, 24, 255};
+}
+
+void load_gui_fonts(ImGuiIO& io) {
+    static constexpr ImWchar kGlyphRanges[] = {
+        0x0020, 0x00FF,
+        0x0192, 0x0192,
+        0x0390, 0x03C9,
+        0x207F, 0x20A7,
+        0x2200, 0x22FF,
+        0x2300, 0x23FF,
+        0x2500, 0x259F,
+        0,
+    };
+
+    static constexpr const char* kFontCandidates[] = {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf",
+        "C:/Windows/Fonts/consola.ttf",
+        "/System/Library/Fonts/Supplemental/Andale Mono.ttf",
+    };
+
+    for (const char* path : kFontCandidates) {
+        if (!std::filesystem::exists(path)) continue;
+        if (io.Fonts->AddFontFromFileTTF(path, 15.0f, nullptr, kGlyphRanges) != nullptr) {
+            return;
+        }
+    }
+
+    io.Fonts->AddFontDefault();
+}
+
+double elapsed_seconds_since(uint64_t start_counter, uint64_t frequency) {
+    return static_cast<double>(SDL_GetPerformanceCounter() - start_counter) / static_cast<double>(frequency);
 }
 
 int run_gui() {
@@ -76,7 +112,7 @@ int run_gui() {
 #ifdef IMGUI_HAS_DOCK
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 #endif
-    (void)io;
+    load_gui_fonts(io);
 
     ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer2_Init(renderer);
@@ -91,6 +127,12 @@ int run_gui() {
     bool done = false;
     uint64_t last_counter = SDL_GetPerformanceCounter();
     double operation_budget = 0.0;
+    double true_cycle_budget = 0.0;
+    double true_stats_elapsed = 0.0;
+    uint64_t true_stats_cycles = 0;
+    constexpr double kMaxTrueRunCatchupSeconds = 0.02;
+    constexpr double kMaxTrueRunWorkSeconds = 0.004;
+    constexpr uint64_t kMaxTrueRunBatchCycles = 2048;
 
     while (!done) {
         const uint64_t now_counter = SDL_GetPerformanceCounter();
@@ -113,34 +155,67 @@ int run_gui() {
             }
         }
 
-        const bool timed_run_active = state.run_until_active || state.running;
-        if (timed_run_active) {
-            operation_budget += elapsed_seconds * state.operations_per_second();
-            operation_budget = std::min(operation_budget, 1000.0);
-        } else {
+        if (state.true_running) {
             operation_budget = 0.0;
-        }
+            const double target_hz = static_cast<double>(state.true_target_hz());
+            true_cycle_budget += elapsed_seconds * target_hz;
+            true_cycle_budget = std::min(true_cycle_budget, target_hz * kMaxTrueRunCatchupSeconds);
 
-        const auto operations_to_run = static_cast<uint32_t>(std::min(operation_budget, 1000.0));
-        if (operations_to_run > 0) {
-            operation_budget -= static_cast<double>(operations_to_run);
-        }
+            const uint64_t true_run_start = SDL_GetPerformanceCounter();
+            while (true_cycle_budget >= 1.0 &&
+                   elapsed_seconds_since(true_run_start, SDL_GetPerformanceFrequency()) < kMaxTrueRunWorkSeconds) {
+                const auto cycles_to_run = static_cast<uint64_t>(
+                    std::min<double>(true_cycle_budget, static_cast<double>(kMaxTrueRunBatchCycles)));
+                const auto result = state.session.run_realtime_cycles(cycles_to_run);
+                if (result.cycles == 0) break;
 
-        if (state.run_until_active && operations_to_run > 0) {
-            const auto result = state.session.run_until_address(
-                static_cast<uint16_t>(state.run_until_address),
-                operations_to_run);
-            if (result.hit_target || result.hit_breakpoint || result.hit_watchpoint) {
-                state.run_until_active = false;
+                true_stats_cycles += result.cycles;
+                true_cycle_budget = static_cast<double>(result.cycles) >= true_cycle_budget
+                    ? 0.0
+                    : true_cycle_budget - static_cast<double>(result.cycles);
+            }
+
+            true_stats_elapsed += elapsed_seconds;
+            if (true_stats_elapsed >= 0.25) {
+                state.true_effective_hz = static_cast<double>(true_stats_cycles) / true_stats_elapsed;
+                true_stats_cycles = 0;
+                true_stats_elapsed = 0.0;
+            }
+        } else {
+            true_cycle_budget = 0.0;
+            true_stats_elapsed = 0.0;
+            true_stats_cycles = 0;
+            state.true_effective_hz = 0.0;
+
+            const bool timed_run_active = state.run_until_active || state.running;
+            if (timed_run_active) {
+                operation_budget += elapsed_seconds * state.operations_per_second();
+                operation_budget = std::min(operation_budget, 1000.0);
+            } else {
                 operation_budget = 0.0;
             }
-        } else if (state.running && operations_to_run > 0) {
-            const auto result = state.run_micro_steps
-                ? state.session.run_microcycles(operations_to_run)
-                : state.session.run_instructions(operations_to_run);
-            if (result.hit_breakpoint || result.hit_watchpoint) {
-                state.running = false;
-                operation_budget = 0.0;
+
+            const auto operations_to_run = static_cast<uint32_t>(std::min(operation_budget, 1000.0));
+            if (operations_to_run > 0) {
+                operation_budget -= static_cast<double>(operations_to_run);
+            }
+
+            if (state.run_until_active && operations_to_run > 0) {
+                const auto result = state.session.run_until_address(
+                    static_cast<uint16_t>(state.run_until_address),
+                    operations_to_run);
+                if (result.hit_target || result.hit_breakpoint || result.hit_watchpoint) {
+                    state.run_until_active = false;
+                    operation_budget = 0.0;
+                }
+            } else if (state.running && operations_to_run > 0) {
+                const auto result = state.run_micro_steps
+                    ? state.session.run_microcycles(operations_to_run)
+                    : state.session.run_instructions(operations_to_run);
+                if (result.hit_breakpoint || result.hit_watchpoint) {
+                    state.running = false;
+                    operation_budget = 0.0;
+                }
             }
         }
 
@@ -164,6 +239,9 @@ int run_gui() {
         SDL_RenderClear(renderer);
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
         SDL_RenderPresent(renderer);
+        if (state.true_running) {
+            SDL_Delay(1);
+        }
     }
 
     ImGui_ImplSDLRenderer2_Shutdown();

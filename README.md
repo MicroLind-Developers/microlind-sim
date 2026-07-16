@@ -51,7 +51,9 @@ ROM, hardware config, and CF image loading. It includes run, pause, reset,
 instruction step, micro-step, step-over, run-until-address, run-until-return,
 and rate-limited Run controls. The run rate is configured as operations per
 minute and displayed as operations per second; Run can execute either full
-instructions or individual micro-steps.
+instructions or individual micro-steps. A True Run mode can target 1, 2, or
+3 MHz while pausing debugger panel refresh and keeping peripherals such as
+serial active.
 
 Debugger panels include registers, flags, disassembly with instruction bytes,
 editable memory, stack inspection, serial RX/TX, breakpoints, watchpoints,

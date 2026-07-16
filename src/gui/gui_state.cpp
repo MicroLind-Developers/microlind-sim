@@ -1,5 +1,6 @@
 #include "gui_state.hpp"
 
+#include <array>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -13,6 +14,41 @@
 #include "microlind/app/util.hpp"
 
 namespace microlind::gui {
+namespace {
+
+constexpr std::array<uint16_t, 128> kCp437Unicode = {
+    0x00C7, 0x00FC, 0x00E9, 0x00E2, 0x00E4, 0x00E0, 0x00E5, 0x00E7,
+    0x00EA, 0x00EB, 0x00E8, 0x00EF, 0x00EE, 0x00EC, 0x00C4, 0x00C5,
+    0x00C9, 0x00E6, 0x00C6, 0x00F4, 0x00F6, 0x00F2, 0x00FB, 0x00F9,
+    0x00FF, 0x00D6, 0x00DC, 0x00A2, 0x00A3, 0x00A5, 0x20A7, 0x0192,
+    0x00E1, 0x00ED, 0x00F3, 0x00FA, 0x00F1, 0x00D1, 0x00AA, 0x00BA,
+    0x00BF, 0x2310, 0x00AC, 0x00BD, 0x00BC, 0x00A1, 0x00AB, 0x00BB,
+    0x2591, 0x2592, 0x2593, 0x2502, 0x2524, 0x2561, 0x2562, 0x2556,
+    0x2555, 0x2563, 0x2551, 0x2557, 0x255D, 0x255C, 0x255B, 0x2510,
+    0x2514, 0x2534, 0x252C, 0x251C, 0x2500, 0x253C, 0x255E, 0x255F,
+    0x255A, 0x2554, 0x2569, 0x2566, 0x2560, 0x2550, 0x256C, 0x2567,
+    0x2568, 0x2564, 0x2565, 0x2559, 0x2558, 0x2552, 0x2553, 0x256B,
+    0x256A, 0x2518, 0x250C, 0x2588, 0x2584, 0x258C, 0x2590, 0x2580,
+    0x03B1, 0x00DF, 0x0393, 0x03C0, 0x03A3, 0x03C3, 0x00B5, 0x03C4,
+    0x03A6, 0x0398, 0x03A9, 0x03B4, 0x221E, 0x03C6, 0x03B5, 0x2229,
+    0x2261, 0x00B1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00F7, 0x2248,
+    0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0,
+};
+
+void append_utf8(std::string& out, uint32_t codepoint) {
+    if (codepoint <= 0x7F) {
+        out.push_back(static_cast<char>(codepoint));
+    } else if (codepoint <= 0x7FF) {
+        out.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    }
+}
+
+} // namespace
 
 std::string hex_value(uint32_t value, int width) {
     std::ostringstream out;
@@ -104,10 +140,23 @@ SDL_Surface* load_png_surface(const std::filesystem::path& path) {
 std::string serial_terminal_text(const std::vector<uint8_t>& bytes) {
     std::string out;
     out.reserve(bytes.size());
-    for (uint8_t value : bytes) {
-        if (value == '\r') continue;
-        if (value == '\n' || value == '\t' || std::isprint(static_cast<unsigned char>(value))) {
+
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        const uint8_t value = bytes[i];
+        if (value == '\r' || value == '\n') {
+            out.push_back('\n');
+            if (i + 1 < bytes.size()) {
+                const uint8_t next = bytes[i + 1];
+                if ((value == '\r' && next == '\n') || (value == '\n' && next == '\r')) {
+                    ++i;
+                }
+            }
+        } else if (value == '\t') {
+            out.push_back('\t');
+        } else if (value >= 0x20 && value <= 0x7E) {
             out.push_back(static_cast<char>(value));
+        } else if (value >= 0x80) {
+            append_utf8(out, kCp437Unicode[static_cast<std::size_t>(value - 0x80)]);
         } else {
             out.push_back('.');
         }

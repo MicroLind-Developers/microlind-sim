@@ -31,6 +31,7 @@ struct GuiSessionState {
     bool serial_rx_hex{};
     int operations_per_minute{600};
     bool run_micro_steps{};
+    uint32_t true_clock_hz{1000000};
     GuiTheme theme{GuiTheme::Dark};
     bool show_file_panel{true};
     bool show_control_panel{true};

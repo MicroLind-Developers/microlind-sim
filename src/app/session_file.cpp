@@ -457,6 +457,13 @@ std::optional<SessionDefinition> load_session_definition(const std::filesystem::
                 return std::nullopt;
             }
             session.gui.run_micro_steps = *parsed;
+        } else if (cli::iequals(key, "TRUE_CLOCK_HZ")) {
+            const auto parsed = cli::parse_number(value);
+            if (!parsed || *parsed == 0) {
+                error = "Bad TRUE_CLOCK_HZ at line " + std::to_string(lineno);
+                return std::nullopt;
+            }
+            session.gui.true_clock_hz = *parsed;
         } else if (cli::iequals(key, "GUI_THEME") || cli::iequals(key, "THEME")) {
             const auto parsed = parse_gui_theme(value);
             if (!parsed) {
@@ -554,6 +561,7 @@ bool save_session_definition(const std::filesystem::path& path, const SessionDef
     file << "SERIAL_RX_HEX=" << (session.gui.serial_rx_hex ? "true" : "false") << '\n';
     file << "OPERATIONS_PER_MINUTE=" << session.gui.operations_per_minute << '\n';
     file << "RUN_MICRO_STEPS=" << (session.gui.run_micro_steps ? "true" : "false") << '\n';
+    file << "TRUE_CLOCK_HZ=" << session.gui.true_clock_hz << '\n';
     file << "GUI_THEME=" << gui_theme_name(session.gui.theme) << '\n';
     write_bool(file, "SHOW_FILES", session.gui.show_file_panel);
     write_bool(file, "SHOW_CONTROL", session.gui.show_control_panel);

@@ -112,10 +112,10 @@ Keys:
 - `SECTORS`: optional minimum sector count.
 - `READ_ONLY`: `true`, `yes`, or `1` opens the image read-only.
 
-Without `IMAGE`, the CF device uses volatile zero-filled storage. With `IMAGE`,
-the image size becomes the disk size unless `SECTORS` is set as a larger
-minimum. Disk images that are not an exact multiple of 512 bytes are padded to
-the next sector.
+Without `IMAGE`, the CF register window is mapped but no media is loaded and
+register reads return `$FF`. With `IMAGE`, the image size becomes the disk size
+unless `SECTORS` is set as a larger minimum. Disk images that are not an exact
+multiple of 512 bytes are padded to the next sector.
 
 ## Memory Mapper
 

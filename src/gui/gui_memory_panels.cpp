@@ -413,6 +413,7 @@ void draw_compact_flash(GuiState& state) {
     const std::string path = cf.image_path.empty() ? std::string("-") : cf.image_path.string();
     ImGui::Text("I/O: %04X-%04X", cf.start, cf.end);
     ImGui::Text("Image: %s", path.c_str());
+    ImGui::Text("Loaded: %s", cf.image_loaded ? "yes" : "no");
     ImGui::Text("Sectors: %u", cf.sector_count);
     ImGui::Text("Mode: %s", cf.read_only ? "read-only" : "read/write");
     ImGui::Text("Transfer: %s", cf_transfer_label(cf.transfer_mode));

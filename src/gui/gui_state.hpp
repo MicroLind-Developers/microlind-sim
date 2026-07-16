@@ -92,9 +92,12 @@ struct GuiState {
     bool running{false};
     bool run_micro_steps{false};
     bool run_until_active{false};
+    bool true_running{false};
     bool quit_requested{false};
     bool help_open{false};
     bool about_open{false};
+    int true_clock_index{0};
+    double true_effective_hz{0.0};
     microlind::app::GuiTheme theme{microlind::app::GuiTheme::Dark};
     bool show_file_panel{true};
     bool show_control_panel{true};
@@ -124,6 +127,7 @@ struct GuiState {
     void stop_execution() {
         running = false;
         run_until_active = false;
+        true_running = false;
     }
 
     void load_rom() {
@@ -139,6 +143,13 @@ struct GuiState {
     void attach_cf() {
         const std::string path = buffer_string(cf_path);
         session.attach_cf_image(path, static_cast<uint32_t>(std::max(cf_min_sectors, 0)));
+    }
+
+    void remove_cf() {
+        if (session.remove_cf_image()) {
+            set_buffer(cf_path, "");
+            cf_min_sectors = 0;
+        }
     }
 
     void load_session_file(const std::filesystem::path& path) {
@@ -161,6 +172,7 @@ struct GuiState {
         raw_base = loaded->raw_base;
         cf_min_sectors = static_cast<int>(loaded->cf_sectors);
         operations_per_minute = loaded->gui.operations_per_minute;
+        true_clock_index = true_clock_index_for_hz(loaded->gui.true_clock_hz);
         memory_start = loaded->gui.memory_start;
         memory_rows = loaded->gui.memory_rows;
         memory_follow_pc = loaded->gui.memory_follow_pc;
@@ -190,8 +202,12 @@ struct GuiState {
 
         const bool config_ok = session.load_hardware_config(loaded->config_path);
         const bool rom_ok = config_ok && session.load_rom(loaded->rom_path, loaded->rom_format, loaded->raw_base);
-        if (rom_ok && !loaded->cf_path.empty()) {
-            session.attach_cf_image(loaded->cf_path, loaded->cf_sectors);
+        if (rom_ok) {
+            if (!loaded->cf_path.empty()) {
+                session.attach_cf_image(loaded->cf_path, loaded->cf_sectors);
+            } else {
+                session.remove_cf_image();
+            }
         }
         if (config_ok && rom_ok) {
             session.set_breakpoints(loaded->breakpoints);
@@ -223,6 +239,7 @@ struct GuiState {
         definition.watchpoints = session.watchpoints();
         definition.gui.operations_per_minute = operations_per_minute;
         definition.gui.run_micro_steps = run_micro_steps;
+        definition.gui.true_clock_hz = static_cast<uint32_t>(true_target_hz());
         definition.gui.memory_start = static_cast<uint16_t>(memory_start);
         definition.gui.memory_rows = memory_rows;
         definition.gui.memory_follow_pc = memory_follow_pc;
@@ -284,13 +301,16 @@ struct GuiState {
 #endif
     }
 
-    void send_serial_text() {
+    void send_serial_text(bool append_carriage_return = false) {
         const std::string text = buffer_string(serial_input);
         bool ok = true;
-        const std::vector<uint8_t> bytes = serial_rx_hex ? parse_hex_bytes(text, ok) : std::vector<uint8_t>(text.begin(), text.end());
+        std::vector<uint8_t> bytes = serial_rx_hex ? parse_hex_bytes(text, ok) : std::vector<uint8_t>(text.begin(), text.end());
         if (!ok) {
             session.add_log("Serial RX hex parse error.");
             return;
+        }
+        if (append_carriage_return) {
+            bytes.push_back('\r');
         }
         if (session.inject_serial_bytes(bytes)) {
             set_buffer(serial_input, "");
@@ -298,6 +318,7 @@ struct GuiState {
     }
 
     void step_once() {
+        true_running = false;
         const auto result = session.run_instructions(1);
         if (result.hit_breakpoint || result.hit_watchpoint) {
             stop_execution();
@@ -319,6 +340,16 @@ struct GuiState {
         running = !running;
         if (running) {
             run_until_active = false;
+            true_running = false;
+        }
+    }
+
+    void toggle_true_run() {
+        true_running = !true_running;
+        if (true_running) {
+            running = false;
+            run_until_active = false;
+            session.add_log("True running at " + std::to_string(true_target_hz() / 1000000) + " MHz.");
         }
     }
 
@@ -344,7 +375,19 @@ struct GuiState {
         return static_cast<double>(std::max(operations_per_minute, 0)) / 60.0;
     }
 
+    uint64_t true_target_hz() const {
+        constexpr uint64_t clocks[] = {1000000, 2000000, 3000000};
+        return clocks[std::clamp(true_clock_index, 0, 2)];
+    }
+
+    static int true_clock_index_for_hz(uint64_t hz) {
+        if (hz <= 1500000) return 0;
+        if (hz <= 2500000) return 1;
+        return 2;
+    }
+
     void step_over() {
+        true_running = false;
         const auto target = session.step_over_target();
         if (!target) {
             step_once();
@@ -357,6 +400,7 @@ struct GuiState {
     }
 
     void run_until_return() {
+        true_running = false;
         const auto target = session.return_address_from_stack();
         if (!target) {
             session.add_log("No return address is available on S.");

@@ -42,6 +42,11 @@ struct RunResult {
     uint8_t watchpoint_value{};
 };
 
+struct RealtimeRunResult {
+    uint64_t cycles{};
+    uint32_t instructions{};
+};
+
 enum class WatchpointType {
     Read,
     Write,
@@ -87,6 +92,7 @@ enum class CfTransferMode {
 
 struct CfSnapshot {
     bool present{};
+    bool image_loaded{};
     uint16_t start{};
     uint16_t end{};
     std::filesystem::path image_path{};
@@ -153,12 +159,14 @@ public:
     bool load_rom(const std::filesystem::path& path, cli::RomFormat format, uint16_t raw_base);
     bool load_hardware_config(const std::filesystem::path& path);
     bool attach_cf_image(const std::filesystem::path& path, uint32_t minimum_sectors);
+    bool remove_cf_image();
 
     void reset();
     CpuTickResult step_instruction();
     SimulatorMicrocycleResult step_microcycle();
     RunResult run_instructions(uint32_t count);
     RunResult run_microcycles(uint32_t count);
+    RealtimeRunResult run_realtime_cycles(uint64_t cycle_budget);
     RunResult run_until_address(uint16_t address, uint32_t max_instructions);
     RunResult run_until_return(uint32_t max_instructions);
     void tick_cycles(uint64_t cycles);

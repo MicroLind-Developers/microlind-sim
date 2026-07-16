@@ -19,6 +19,8 @@ The simulator GUI is an ImGui/SDL application that runs beside the CLI and provi
 - Run full instructions or individual micro-steps.
 - Rate-limit Run by operations per minute with a live operations-per-second
   frequency label.
+- True Run mode for 1, 2, or 3 MHz cycle-targeted execution, with debugger
+  refresh paused while peripherals such as serial continue updating.
 - Step over subroutine calls.
 - Run until return.
 - Run until a chosen address.

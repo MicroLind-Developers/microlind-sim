@@ -156,6 +156,11 @@ void draw_main_menu(GuiState& state) {
             state.stop_execution();
             state.session.reset();
         }
+        if (ImGui::MenuItem(state.true_running ? "Pause True Run" : "True Run")) {
+            state.toggle_true_run();
+        }
+        ImGui::Separator();
+        ImGui::BeginDisabled(state.true_running);
         if (ImGui::MenuItem(state.running ? "Pause" : "Run", "F5")) {
             state.toggle_run();
         }
@@ -171,6 +176,7 @@ void draw_main_menu(GuiState& state) {
         if (ImGui::MenuItem("Run Until Return", "Shift+F11")) {
             state.run_until_return();
         }
+        ImGui::EndDisabled();
         ImGui::EndMenu();
     }
 
@@ -245,9 +251,11 @@ void draw_status_bar(GuiState& state) {
 
     if (ImGui::Begin("Status Bar", nullptr, flags)) {
         const auto& sim = state.session.simulator();
-        const char* run_state = sim.has_pending_microcycles()
+        const char* run_state = state.true_running
+            ? "true running"
+            : (sim.has_pending_microcycles()
             ? "micro"
-            : (state.run_until_active ? "until" : (state.running ? (state.run_micro_steps ? "running micro" : "running") : "paused"));
+            : (state.run_until_active ? "until" : (state.running ? (state.run_micro_steps ? "running micro" : "running") : "paused")));
         ImGui::Text("State: %s", run_state);
         ImGui::SameLine();
         ImGui::TextUnformatted("|");
@@ -261,6 +269,15 @@ void draw_status_bar(GuiState& state) {
         ImGui::TextUnformatted("|");
         ImGui::SameLine();
         ImGui::Text("Bus: %llu", static_cast<unsigned long long>(sim.bus().bus_cycle_count()));
+        if (state.true_running) {
+            ImGui::SameLine();
+            ImGui::TextUnformatted("|");
+            ImGui::SameLine();
+            ImGui::Text(
+                "True: %.1f/%.2f MHz",
+                static_cast<double>(state.true_target_hz()) / 1000000.0,
+                state.true_effective_hz / 1000000.0);
+        }
         if (sim.has_pending_microcycles()) {
             ImGui::SameLine();
             ImGui::TextUnformatted("|");
@@ -369,21 +386,23 @@ void draw_workbench(GuiState& state) {
     draw_help_modal(state);
     draw_about_modal(state);
 
-    if (state.show_file_panel) draw_file_panel(state);
     if (state.show_control_panel) draw_control_panel(state);
-    if (state.show_registers) draw_registers(state);
-    if (state.show_disassembly) draw_disassembly(state);
-    if (state.show_memory_viewer) draw_memory_viewer(state);
-    if (state.show_stack) draw_stack(state);
-    if (state.show_memory_map) draw_memory_map(state);
-    if (state.show_mapper) draw_mapper(state);
-    if (state.show_pld_logic) draw_pld_logic(state);
-    if (state.show_compact_flash) draw_compact_flash(state);
-    if (state.show_breakpoints) draw_breakpoints(state);
-    if (state.show_watchpoints) draw_watchpoints(state);
-    if (state.show_trace) draw_trace(state);
     if (state.show_serial) draw_serial(state);
-    if (state.show_log) draw_log(state);
+    if (!state.true_running) {
+        if (state.show_file_panel) draw_file_panel(state);
+        if (state.show_registers) draw_registers(state);
+        if (state.show_disassembly) draw_disassembly(state);
+        if (state.show_memory_viewer) draw_memory_viewer(state);
+        if (state.show_stack) draw_stack(state);
+        if (state.show_memory_map) draw_memory_map(state);
+        if (state.show_mapper) draw_mapper(state);
+        if (state.show_pld_logic) draw_pld_logic(state);
+        if (state.show_compact_flash) draw_compact_flash(state);
+        if (state.show_breakpoints) draw_breakpoints(state);
+        if (state.show_watchpoints) draw_watchpoints(state);
+        if (state.show_trace) draw_trace(state);
+        if (state.show_log) draw_log(state);
+    }
     draw_status_bar(state);
 }
 
