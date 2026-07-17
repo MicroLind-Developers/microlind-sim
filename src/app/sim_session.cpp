@@ -38,6 +38,30 @@ WatchpointType merge_watchpoint_types(WatchpointType a, WatchpointType b) {
     return a == b ? a : WatchpointType::ReadWrite;
 }
 
+class RealtimeBusScope {
+public:
+    explicit RealtimeBusScope(Bus& bus)
+        : bus_(bus),
+          detailed_bus_phases_(bus.detailed_bus_phases()),
+          access_logging_(bus.access_logging()) {
+        bus_.set_detailed_bus_phases(false);
+        bus_.set_access_logging(false);
+    }
+
+    ~RealtimeBusScope() {
+        bus_.set_detailed_bus_phases(detailed_bus_phases_);
+        bus_.set_access_logging(access_logging_);
+    }
+
+    RealtimeBusScope(const RealtimeBusScope&) = delete;
+    RealtimeBusScope& operator=(const RealtimeBusScope&) = delete;
+
+private:
+    Bus& bus_;
+    bool detailed_bus_phases_{};
+    bool access_logging_{};
+};
+
 uint8_t mapper_bits_for_address(
     const cli::HardwareConfig& cfg,
     const devices::MapperState* mapper_state,
@@ -154,6 +178,26 @@ bool SimSession::remove_cf_image() {
     return true;
 }
 
+BusDecodeMode SimSession::logic_bus_mode() const {
+    if (!hw_cfg_ || !hw_cfg_->logic.present) {
+        return BusDecodeMode::RangeMap;
+    }
+    return hw_cfg_->logic.bus_mode;
+}
+
+bool SimSession::set_logic_bus_mode(BusDecodeMode mode) {
+    if (!hw_cfg_ || !hw_cfg_->logic.present) {
+        add_log("No PLD logic is configured.");
+        return false;
+    }
+    if (hw_cfg_->logic.bus_mode == mode) {
+        return true;
+    }
+    hw_cfg_->logic.bus_mode = mode;
+    rebuild("Changed PLD bus mode.");
+    return true;
+}
+
 void SimSession::reset() {
     sim_.reset_from_vector();
     sim_.reset_clock();
@@ -236,6 +280,7 @@ RealtimeRunResult SimSession::run_realtime_cycles(uint64_t cycle_budget) {
     RealtimeRunResult result;
     if (cycle_budget == 0) return result;
 
+    RealtimeBusScope realtime_bus(sim_.bus());
     sim_.bus().clear_access_log();
     sim_.bus().clear_decode_log();
     while (result.cycles < cycle_budget) {
@@ -648,6 +693,7 @@ LogicDecodeSnapshot SimSession::logic_decode_snapshot(const BusSignals& signals)
     }
 
     snapshot.configured = true;
+    snapshot.bus_mode = hw_cfg_->logic.bus_mode;
     snapshot.signal_logic_path = hw_cfg_->logic.signal_logic_path;
     snapshot.memory_logic_path = hw_cfg_->logic.memory_logic_path;
     snapshot.address_logic_path = hw_cfg_->logic.address_logic_path;

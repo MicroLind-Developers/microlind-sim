@@ -150,6 +150,7 @@ public:
     bool load_hardware_config(const std::filesystem::path& path);
     bool attach_cf_image(const std::filesystem::path& path, uint32_t minimum_sectors);
     bool remove_cf_image();
+    bool set_logic_bus_mode(BusDecodeMode mode);
     void reset();
 
     app::RunResult run_instructions(uint32_t count);

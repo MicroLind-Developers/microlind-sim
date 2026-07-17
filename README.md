@@ -22,6 +22,12 @@ debugger GUI.
 cmake -S . -B build
 cmake --build build
 ```
+Single-config generators default to a Release build. To keep a separate
+performance build tree:
+```
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release
+```
 Run the CLI:
 ```
 ./build/microlind-sim-cli --6309 --rom path/to/bios.rom

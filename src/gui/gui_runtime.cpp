@@ -18,7 +18,7 @@ namespace {
 
 constexpr double kMaxTrueRunCatchupSeconds = 0.02;
 constexpr double kMaxTrueRunWorkSeconds = 0.004;
-constexpr uint64_t kMaxTrueRunBatchCycles = 128;
+constexpr uint64_t kMaxTrueRunBatchCycles = 4096;
 
 bool is_debug_run_mode(RuntimeMode mode) {
     switch (mode) {
@@ -561,6 +561,13 @@ bool GuiRuntime::remove_cf_image() {
     stop_true_run();
     std::lock_guard lock(mutex_);
     return session_.remove_cf_image();
+}
+
+bool GuiRuntime::set_logic_bus_mode(BusDecodeMode mode) {
+    stop_true_run();
+    std::lock_guard lock(mutex_);
+    mode_ = RuntimeMode::Paused;
+    return session_.set_logic_bus_mode(mode);
 }
 
 void GuiRuntime::reset() {

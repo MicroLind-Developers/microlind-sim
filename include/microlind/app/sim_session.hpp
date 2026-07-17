@@ -126,6 +126,7 @@ struct SerialSnapshot {
 struct LogicDecodeSnapshot {
     bool configured{};
     bool available{};
+    BusDecodeMode bus_mode{BusDecodeMode::RangeMap};
     BusPhase phase{BusPhase::QLowELow};
     BusCycleKind cycle_kind{BusCycleKind::Idle};
     uint16_t address{};
@@ -160,6 +161,8 @@ public:
     bool load_hardware_config(const std::filesystem::path& path);
     bool attach_cf_image(const std::filesystem::path& path, uint32_t minimum_sectors);
     bool remove_cf_image();
+    [[nodiscard]] BusDecodeMode logic_bus_mode() const;
+    bool set_logic_bus_mode(BusDecodeMode mode);
 
     void reset();
     CpuTickResult step_instruction();

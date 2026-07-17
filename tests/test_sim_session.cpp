@@ -153,6 +153,7 @@ TEST(SimSessionTest, ReportsPldLogicDecodeSnapshotForGui) {
 
     const auto rom = session.logic_decode_snapshot(0xF000, true);
     EXPECT_TRUE(rom.configured);
+    EXPECT_EQ(rom.bus_mode, microlind::BusDecodeMode::Route);
     ASSERT_TRUE(rom.available);
     ASSERT_TRUE(rom.decoded.ok());
     EXPECT_TRUE(rom.decoded.rom_en);
@@ -165,6 +166,20 @@ TEST(SimSessionTest, ReportsPldLogicDecodeSnapshotForGui) {
     EXPECT_TRUE(cf_write.decoded.io_en);
     EXPECT_TRUE(cf_write.decoded.cf_en);
     EXPECT_TRUE(cf_write.decoded.wr);
+}
+
+TEST(SimSessionTest, CanSwitchPldBusModeForGui) {
+    auto session = loaded_session();
+    EXPECT_EQ(session.logic_bus_mode(), microlind::BusDecodeMode::Route);
+
+    ASSERT_TRUE(session.set_logic_bus_mode(microlind::BusDecodeMode::RangeMap));
+    EXPECT_EQ(session.logic_bus_mode(), microlind::BusDecodeMode::RangeMap);
+    EXPECT_EQ(session.logic_decode_snapshot(0xF000, true).bus_mode, microlind::BusDecodeMode::RangeMap);
+    EXPECT_EQ(session.simulator().bus().decode_mode(), microlind::BusDecodeMode::RangeMap);
+
+    ASSERT_TRUE(session.set_logic_bus_mode(microlind::BusDecodeMode::Validate));
+    EXPECT_EQ(session.logic_bus_mode(), microlind::BusDecodeMode::Validate);
+    EXPECT_EQ(session.simulator().bus().decode_mode(), microlind::BusDecodeMode::Validate);
 }
 
 TEST(SimSessionTest, StepsSingleMicrocycleForGui) {

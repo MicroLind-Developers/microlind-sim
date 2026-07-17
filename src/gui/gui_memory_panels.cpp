@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <initializer_list>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -254,6 +255,32 @@ const char* bus_cycle_kind_label(microlind::BusCycleKind kind) {
     return "Unknown";
 }
 
+const char* bus_decode_mode_label(microlind::BusDecodeMode mode) {
+    switch (mode) {
+    case microlind::BusDecodeMode::RangeMap: return "Range";
+    case microlind::BusDecodeMode::Validate: return "Validate";
+    case microlind::BusDecodeMode::Route: return "Route";
+    }
+    return "Unknown";
+}
+
+int bus_decode_mode_index(microlind::BusDecodeMode mode) {
+    switch (mode) {
+    case microlind::BusDecodeMode::RangeMap: return 0;
+    case microlind::BusDecodeMode::Validate: return 1;
+    case microlind::BusDecodeMode::Route: return 2;
+    }
+    return 0;
+}
+
+microlind::BusDecodeMode bus_decode_mode_from_index(int index) {
+    switch (index) {
+    case 1: return microlind::BusDecodeMode::Validate;
+    case 2: return microlind::BusDecodeMode::Route;
+    default: return microlind::BusDecodeMode::RangeMap;
+    }
+}
+
 void draw_logic_signal_row(const char* name, bool asserted) {
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
@@ -317,6 +344,20 @@ void draw_pld_logic(GuiState& state) {
         ImGui::End();
         return;
     }
+
+    const char* bus_modes[] = {"Range", "Validate", "Route"};
+    int bus_mode_index = bus_decode_mode_index(snapshot.bus_mode);
+    ImGui::BeginDisabled(state.runtime.execution_active());
+    ImGui::SetNextItemWidth(112.0f);
+    if (ImGui::Combo("Bus mode", &bus_mode_index, bus_modes, static_cast<int>(std::size(bus_modes)))) {
+        state.runtime.set_logic_bus_mode(bus_decode_mode_from_index(bus_mode_index));
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && state.runtime.execution_active()) {
+        ImGui::SetTooltip("Pause execution before changing PLD bus mode");
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", bus_decode_mode_label(snapshot.bus_mode));
 
     ImGui::Text("SIGNAL: %s", snapshot.signal_logic_path.filename().string().c_str());
     ImGui::Text("MEMORY: %s", snapshot.memory_logic_path.filename().string().c_str());
