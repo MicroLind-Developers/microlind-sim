@@ -17,7 +17,8 @@ namespace microlind::gui {
 void draw_memory_map(GuiState& state) {
     set_next_window_defaults(944.0f, 28.0f, 240.0f, 190.0f);
     ImGui::Begin("Memory Map", &state.show_memory_map);
-    const std::vector<std::string> summary = state.session.memory_map();
+    const auto snapshot = state.runtime.debugger_snapshot();
+    const auto& summary = snapshot.memory_map;
     if (summary.empty()) {
         ImGui::TextDisabled("No mapped devices.");
     } else {
@@ -32,8 +33,8 @@ void draw_memory_viewer(GuiState& state) {
     set_next_window_defaults(944.0f, 528.0f, 560.0f, 260.0f);
     ImGui::Begin("Memory", &state.show_memory_viewer);
 
-    auto& sim = state.session.simulator();
-    const auto& regs = sim.cpu().regs();
+    const auto debug_snapshot = state.runtime.debugger_snapshot();
+    const auto& regs = debug_snapshot.regs;
 
     if (state.memory_follow_pc) {
         state.memory_start = regs.pc & 0xFFF0;
@@ -84,6 +85,7 @@ void draw_memory_viewer(GuiState& state) {
                                   ImGuiTableFlags_SizingFixedFit;
     const float line_height = ImGui::GetTextLineHeightWithSpacing();
     const float table_height = std::max(line_height * 6.0f, ImGui::GetContentRegionAvail().y);
+    const auto memory_rows = state.runtime.memory_snapshot(static_cast<uint16_t>(state.memory_start), state.memory_rows);
     if (ImGui::BeginTable("memory_view", kCols + 2, flags, ImVec2(0.0f, table_height))) {
         ImGui::TableSetupScrollFreeze(1, 1);
         ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed, 64.0f);
@@ -98,30 +100,25 @@ void draw_memory_viewer(GuiState& state) {
         ImGui::TableSetupColumn("ASCII", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableHeadersRow();
 
-        for (int row = 0; row < state.memory_rows; ++row) {
+        for (const auto& row : memory_rows) {
             ImGui::TableNextRow();
-            const uint16_t row_address = static_cast<uint16_t>(state.memory_start + row * kCols);
             ImGui::TableNextColumn();
-            ImGui::Text("%04X", row_address);
+            ImGui::Text("%04X", row.address);
 
             std::array<char, kCols + 1> ascii{};
             for (int col = 0; col < kCols; ++col) {
                 ImGui::TableNextColumn();
-                const uint16_t address = static_cast<uint16_t>(row_address + col);
-                uint8_t value = state.session.peek_memory(address);
+                const auto index = static_cast<std::size_t>(col);
+                const uint16_t address = static_cast<uint16_t>(row.address + col);
+                uint8_t value = row.bytes[index];
                 ascii[static_cast<std::size_t>(col)] =
                     std::isprint(static_cast<unsigned char>(value)) ? static_cast<char>(value) : '.';
 
-                const bool at_pc = address == regs.pc;
-                const bool at_s = address == regs.s;
-                const bool at_u = address == regs.u;
-                const bool watched = state.session.is_watchpoint(address, microlind::app::WatchpointType::Read) ||
-                                     state.session.is_watchpoint(address, microlind::app::WatchpointType::Write);
-                if (at_pc) {
+                if (row.at_pc[index]) {
                     ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, IM_COL32(38, 96, 56, 180));
-                } else if (at_s || at_u) {
+                } else if (row.at_s[index] || row.at_u[index]) {
                     ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, IM_COL32(72, 72, 116, 180));
-                } else if (watched) {
+                } else if (row.watched[index]) {
                     ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, IM_COL32(120, 92, 38, 180));
                 }
 
@@ -135,8 +132,8 @@ void draw_memory_viewer(GuiState& state) {
                         nullptr,
                         "%02X",
                         ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_AutoSelectAll)) {
-                    state.session.write_memory(address, value);
-                    state.session.add_log("Wrote " + hex_value(value, 2) + " to " + hex_value(address, 4) + ".");
+                    state.runtime.write_memory(address, value);
+                    state.runtime.add_log("Wrote " + hex_value(value, 2) + " to " + hex_value(address, 4) + ".");
                 }
                 ImGui::PopID();
             }
@@ -153,7 +150,8 @@ void draw_memory_viewer(GuiState& state) {
 void draw_mapper(GuiState& state) {
     set_next_window_defaults(944.0f, 224.0f, 240.0f, 294.0f);
     ImGui::Begin("Memory Mapper", &state.show_mapper);
-    const auto mapper = state.session.mapper_snapshot();
+    const auto snapshot = state.runtime.debugger_snapshot();
+    const auto& mapper = snapshot.mapper;
     if (!mapper.present) {
         ImGui::TextDisabled("No memory mapper configured.");
         ImGui::End();
@@ -192,8 +190,8 @@ void draw_mapper(GuiState& state) {
                         "%02X",
                         ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_AutoSelectAll)) {
                     const uint16_t reg = mapper.bank_registers[i];
-                    state.session.write_memory(reg, bank);
-                    state.session.add_log(
+                    state.runtime.write_memory(reg, bank);
+                    state.runtime.add_log(
                         "Mapper window " + std::to_string(i) + " bank set to " +
                         hex_value(bank, 2) + " via " + hex_value(reg, 4) + ".");
                 }
@@ -285,7 +283,8 @@ void draw_pld_logic(GuiState& state) {
     set_next_window_defaults(1188.0f, 524.0f, 300.0f, 300.0f);
     ImGui::Begin("PLD Logic", &state.show_pld_logic);
 
-    const auto& regs = state.session.simulator().cpu().regs();
+    const auto debug_snapshot = state.runtime.debugger_snapshot();
+    const auto& regs = debug_snapshot.regs;
     if (!state.pld_live_bus && state.pld_follow_pc) {
         state.pld_address = regs.pc;
     }
@@ -309,9 +308,10 @@ void draw_pld_logic(GuiState& state) {
     }
     ImGui::EndDisabled();
 
-    const auto snapshot = state.pld_live_bus
-        ? state.session.logic_decode_snapshot(state.session.simulator().bus().last_signals())
-        : state.session.logic_decode_snapshot(static_cast<uint16_t>(state.pld_address), state.pld_read);
+    const auto snapshot = state.runtime.logic_snapshot(
+        state.pld_live_bus,
+        static_cast<uint16_t>(state.pld_address),
+        state.pld_read);
     if (!snapshot.configured) {
         ImGui::TextDisabled("No [PLD_LOGIC] configured.");
         ImGui::End();
@@ -403,7 +403,8 @@ void draw_pld_logic(GuiState& state) {
 void draw_compact_flash(GuiState& state) {
     set_next_window_defaults(480.0f, 520.0f, 456.0f, 180.0f);
     ImGui::Begin("CompactFlash", &state.show_compact_flash);
-    const auto cf = state.session.cf_snapshot();
+    const auto snapshot = state.runtime.debugger_snapshot();
+    const auto& cf = snapshot.compact_flash;
     if (!cf.present) {
         ImGui::TextDisabled("No CompactFlash device configured.");
         ImGui::End();

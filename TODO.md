@@ -2,6 +2,15 @@
 
 ## GUI Debugger
 
+- Implement unified GUI runtime handling.
+  - Follow `docs/gui-runtime-threading-plan.md`.
+  - Done: added the single-threaded `GuiRuntime` facade.
+  - Done: converted panel display reads to runtime snapshots/range requests.
+  - Done: moved True Run to a worker thread with queued runtime commands.
+  - Done: unified normal debugger run modes behind `GuiRuntime` state.
+  - Done: routed GUI panel mutations through runtime APIs instead of direct `SimSession` access.
+  - Future option: move debug Run/Run Until to a worker if long operations need cancellation/responsiveness improvements.
+
 - Polish the Memory window.
   - Add copy/paste for byte ranges.
   - Add fill range.

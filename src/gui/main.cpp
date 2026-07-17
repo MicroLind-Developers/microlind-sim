@@ -10,6 +10,7 @@
 
 #include "gui_panels.hpp"
 #include "gui_state.hpp"
+#include "gui_thread_names.hpp"
 
 namespace {
 
@@ -69,11 +70,9 @@ void load_gui_fonts(ImGuiIO& io) {
     io.Fonts->AddFontDefault();
 }
 
-double elapsed_seconds_since(uint64_t start_counter, uint64_t frequency) {
-    return static_cast<double>(SDL_GetPerformanceCounter() - start_counter) / static_cast<double>(frequency);
-}
-
 int run_gui() {
+    microlind::gui::set_current_thread_name("microlind-gui");
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         return 1;
@@ -122,17 +121,11 @@ int run_gui() {
     apply_gui_theme(applied_theme);
     state.about_logo = load_png_texture(renderer, "resources/mlsim_logo.png");
     if (state.about_logo.texture == nullptr) {
-        state.session.add_log("Could not load About logo: resources/mlsim_logo.png");
+        state.runtime.add_log("Could not load About logo: resources/mlsim_logo.png");
     }
     bool done = false;
     uint64_t last_counter = SDL_GetPerformanceCounter();
     double operation_budget = 0.0;
-    double true_cycle_budget = 0.0;
-    double true_stats_elapsed = 0.0;
-    uint64_t true_stats_cycles = 0;
-    constexpr double kMaxTrueRunCatchupSeconds = 0.02;
-    constexpr double kMaxTrueRunWorkSeconds = 0.004;
-    constexpr uint64_t kMaxTrueRunBatchCycles = 2048;
 
     while (!done) {
         const uint64_t now_counter = SDL_GetPerformanceCounter();
@@ -155,41 +148,12 @@ int run_gui() {
             }
         }
 
-        if (state.true_running) {
+        if (state.true_running()) {
             operation_budget = 0.0;
-            const double target_hz = static_cast<double>(state.true_target_hz());
-            true_cycle_budget += elapsed_seconds * target_hz;
-            true_cycle_budget = std::min(true_cycle_budget, target_hz * kMaxTrueRunCatchupSeconds);
-
-            const uint64_t true_run_start = SDL_GetPerformanceCounter();
-            while (true_cycle_budget >= 1.0 &&
-                   elapsed_seconds_since(true_run_start, SDL_GetPerformanceFrequency()) < kMaxTrueRunWorkSeconds) {
-                const auto cycles_to_run = static_cast<uint64_t>(
-                    std::min<double>(true_cycle_budget, static_cast<double>(kMaxTrueRunBatchCycles)));
-                const auto result = state.session.run_realtime_cycles(cycles_to_run);
-                if (result.cycles == 0) break;
-
-                true_stats_cycles += result.cycles;
-                true_cycle_budget = static_cast<double>(result.cycles) >= true_cycle_budget
-                    ? 0.0
-                    : true_cycle_budget - static_cast<double>(result.cycles);
-            }
-
-            true_stats_elapsed += elapsed_seconds;
-            if (true_stats_elapsed >= 0.25) {
-                state.true_effective_hz = static_cast<double>(true_stats_cycles) / true_stats_elapsed;
-                true_stats_cycles = 0;
-                true_stats_elapsed = 0.0;
-            }
         } else {
-            true_cycle_budget = 0.0;
-            true_stats_elapsed = 0.0;
-            true_stats_cycles = 0;
-            state.true_effective_hz = 0.0;
-
-            const bool timed_run_active = state.run_until_active || state.running;
+            const bool timed_run_active = state.debug_run_active();
             if (timed_run_active) {
-                operation_budget += elapsed_seconds * state.operations_per_second();
+                operation_budget += elapsed_seconds * state.runtime.operations_per_second();
                 operation_budget = std::min(operation_budget, 1000.0);
             } else {
                 operation_budget = 0.0;
@@ -200,20 +164,9 @@ int run_gui() {
                 operation_budget -= static_cast<double>(operations_to_run);
             }
 
-            if (state.run_until_active && operations_to_run > 0) {
-                const auto result = state.session.run_until_address(
-                    static_cast<uint16_t>(state.run_until_address),
-                    operations_to_run);
-                if (result.hit_target || result.hit_breakpoint || result.hit_watchpoint) {
-                    state.run_until_active = false;
-                    operation_budget = 0.0;
-                }
-            } else if (state.running && operations_to_run > 0) {
-                const auto result = state.run_micro_steps
-                    ? state.session.run_microcycles(operations_to_run)
-                    : state.session.run_instructions(operations_to_run);
-                if (result.hit_breakpoint || result.hit_watchpoint) {
-                    state.running = false;
+            if (state.debug_run_active() && operations_to_run > 0) {
+                state.runtime.run_debug_batch(operations_to_run);
+                if (!state.debug_run_active()) {
                     operation_budget = 0.0;
                 }
             }
@@ -239,7 +192,7 @@ int run_gui() {
         SDL_RenderClear(renderer);
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
         SDL_RenderPresent(renderer);
-        if (state.true_running) {
+        if (state.true_running()) {
             SDL_Delay(1);
         }
     }

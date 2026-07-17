@@ -10,7 +10,6 @@
 
 #include "imgui.h"
 
-#include "microlind/app/disassembler.hpp"
 #include "microlind/cpu.hpp"
 
 namespace microlind::gui {
@@ -42,8 +41,8 @@ void draw_register_row(const char* name, uint32_t value, int width) {
 } // namespace
 
 void draw_registers(GuiState& state) {
-    const auto& sim = state.session.simulator();
-    const auto& regs = sim.cpu().regs();
+    const auto snapshot = state.runtime.debugger_snapshot();
+    const auto& regs = snapshot.regs;
 
     set_next_window_defaults(8.0f, 376.0f, 240.0f, 360.0f);
     ImGui::Begin("Registers", &state.show_registers);
@@ -78,17 +77,15 @@ void draw_registers(GuiState& state) {
 
     ImGui::Separator();
     ImGui::TextUnformatted("Clock");
-    ImGui::Text("Cycles: %llu", static_cast<unsigned long long>(sim.clock().total_cycles()));
-    ImGui::Text("Clock: %llu Hz", static_cast<unsigned long long>(sim.clock().frequency_hz()));
+    ImGui::Text("Cycles: %llu", static_cast<unsigned long long>(snapshot.total_cycles));
+    ImGui::Text("Clock: %llu Hz", static_cast<unsigned long long>(snapshot.clock_hz));
     ImGui::End();
 }
 
 void draw_disassembly(GuiState& state) {
     set_next_window_defaults(376.0f, 186.0f, 560.0f, 340.0f);
     ImGui::Begin("Disassembly", &state.show_disassembly);
-    auto& sim = state.session.simulator();
-    uint16_t pc = sim.cpu().regs().pc;
-    const uint16_t current_pc = pc;
+    const auto lines = state.runtime.disassembly_snapshot(18);
 
     if (ImGui::BeginTable("disassembly", 3, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
         ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed, 72.0f);
@@ -96,36 +93,28 @@ void draw_disassembly(GuiState& state) {
         ImGui::TableSetupColumn("Disassembly");
         ImGui::TableHeadersRow();
 
-        for (int i = 0; i < 18; ++i) {
-            const uint16_t line_pc = pc;
-            const auto disasm = microlind::cli::disassemble(sim.bus(), sim.cpu(), line_pc);
-            const uint8_t length = std::max<uint8_t>(disasm.length, 1);
-            const std::string bytes = instruction_bytes(sim.bus(), line_pc, length);
-            const bool is_current = line_pc == current_pc;
-
+        for (const auto& line : lines) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            if (is_current) {
-                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.6f, 1.0f), "%04X", line_pc);
+            if (line.current) {
+                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.6f, 1.0f), "%04X", line.address);
             } else {
-                ImGui::Text("%04X", line_pc);
+                ImGui::Text("%04X", line.address);
             }
 
             ImGui::TableNextColumn();
-            if (is_current) {
-                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.6f, 1.0f), "%s", bytes.c_str());
+            if (line.current) {
+                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.6f, 1.0f), "%s", line.bytes.c_str());
             } else {
-                ImGui::TextUnformatted(bytes.c_str());
+                ImGui::TextUnformatted(line.bytes.c_str());
             }
 
             ImGui::TableNextColumn();
-            if (is_current) {
-                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.6f, 1.0f), "%s", disasm.text.c_str());
+            if (line.current) {
+                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.6f, 1.0f), "%s", line.text.c_str());
             } else {
-                ImGui::TextUnformatted(disasm.text.c_str());
+                ImGui::TextUnformatted(line.text.c_str());
             }
-
-            pc = static_cast<uint16_t>(pc + length);
         }
         ImGui::EndTable();
     }
@@ -133,7 +122,8 @@ void draw_disassembly(GuiState& state) {
 }
 
 void draw_stack(GuiState& state) {
-    const auto& regs = state.session.simulator().cpu().regs();
+    const auto snapshot = state.runtime.debugger_snapshot();
+    const auto& regs = snapshot.regs;
     const uint16_t stack_pointer = state.stack_register_index == 0 ? regs.s : regs.u;
 
     set_next_window_defaults(1188.0f, 28.0f, 236.0f, 490.0f);
@@ -153,6 +143,7 @@ void draw_stack(GuiState& state) {
 
     ImGui::Text("%s = %04X", stack_names[state.stack_register_index], stack_pointer);
 
+    const auto stack_rows = state.runtime.stack_snapshot(static_cast<uint16_t>(state.stack_start), state.stack_rows, state.stack_register_index);
     if (ImGui::BeginTable("stack", 6, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
         ImGui::TableSetupColumn("");
         ImGui::TableSetupColumn("Address");
@@ -162,37 +153,31 @@ void draw_stack(GuiState& state) {
         ImGui::TableSetupColumn("ASCII");
         ImGui::TableHeadersRow();
 
-        for (int row = 0; row < state.stack_rows; ++row) {
-            const uint16_t address = static_cast<uint16_t>(state.stack_start + row * 2);
-            const uint8_t high = state.session.peek_memory(address);
-            const uint8_t low = state.session.peek_memory(static_cast<uint16_t>(address + 1));
-            const uint16_t word = static_cast<uint16_t>((high << 8) | low);
-            const bool at_pointer = address == stack_pointer;
-
+        for (const auto& row : stack_rows) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            if (at_pointer) {
+            if (row.at_pointer) {
                 ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.6f, 1.0f), "SP");
             } else {
                 ImGui::TextUnformatted("");
             }
 
             ImGui::TableNextColumn();
-            if (at_pointer) {
-                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.6f, 1.0f), "%04X", address);
+            if (row.at_pointer) {
+                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.6f, 1.0f), "%04X", row.address);
             } else {
-                ImGui::Text("%04X", address);
+                ImGui::Text("%04X", row.address);
             }
 
             ImGui::TableNextColumn();
-            ImGui::Text("%02X", high);
+            ImGui::Text("%02X", row.high);
             ImGui::TableNextColumn();
-            ImGui::Text("%02X", low);
+            ImGui::Text("%02X", row.low);
             ImGui::TableNextColumn();
-            ImGui::Text("%04X", word);
+            ImGui::Text("%04X", row.word);
             ImGui::TableNextColumn();
-            const char c0 = std::isprint(static_cast<unsigned char>(high)) ? static_cast<char>(high) : '.';
-            const char c1 = std::isprint(static_cast<unsigned char>(low)) ? static_cast<char>(low) : '.';
+            const char c0 = std::isprint(static_cast<unsigned char>(row.high)) ? static_cast<char>(row.high) : '.';
+            const char c1 = std::isprint(static_cast<unsigned char>(row.low)) ? static_cast<char>(row.low) : '.';
             ImGui::Text("%c%c", c0, c1);
         }
 
@@ -210,18 +195,18 @@ void draw_breakpoints(GuiState& state) {
     ImGui::InputText("Label", state.breakpoint_label.data(), state.breakpoint_label.size());
 
     if (ImGui::Button("Add")) {
-        if (state.session.add_breakpoint(static_cast<uint16_t>(state.breakpoint_address), buffer_string(state.breakpoint_label))) {
+        if (state.runtime.add_breakpoint(static_cast<uint16_t>(state.breakpoint_address), buffer_string(state.breakpoint_label))) {
             set_buffer(state.breakpoint_label, "");
         }
     }
     ImGui::SameLine();
     if (ImGui::Button("Remove")) {
-        state.session.remove_breakpoint(static_cast<uint16_t>(state.breakpoint_address));
+        state.runtime.remove_breakpoint(static_cast<uint16_t>(state.breakpoint_address));
     }
     ImGui::SameLine();
     if (ImGui::Button("Clear")) {
-        state.session.clear_breakpoints();
-        state.session.add_log("Cleared breakpoints.");
+        state.runtime.clear_breakpoints();
+        state.runtime.add_log("Cleared breakpoints.");
     }
 
     ImGui::Separator();
@@ -233,14 +218,15 @@ void draw_breakpoints(GuiState& state) {
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 64.0f);
         ImGui::TableHeadersRow();
 
-        for (const auto& breakpoint : state.session.breakpoints()) {
+        const auto snapshot = state.runtime.debugger_snapshot();
+        for (const auto& breakpoint : snapshot.breakpoints) {
             ImGui::PushID(static_cast<int>(breakpoint.address));
             ImGui::TableNextRow();
 
             ImGui::TableNextColumn();
             bool enabled = breakpoint.enabled;
             if (ImGui::Checkbox("##enabled", &enabled)) {
-                state.session.set_breakpoint_enabled(breakpoint.address, enabled);
+                state.runtime.set_breakpoint_enabled(breakpoint.address, enabled);
             }
 
             ImGui::TableNextColumn();
@@ -254,12 +240,12 @@ void draw_breakpoints(GuiState& state) {
             set_buffer(label, breakpoint.label);
             ImGui::SetNextItemWidth(-FLT_MIN);
             if (ImGui::InputText("##label", label.data(), label.size())) {
-                state.session.set_breakpoint_label(breakpoint.address, buffer_string(label));
+                state.runtime.set_breakpoint_label(breakpoint.address, buffer_string(label));
             }
 
             ImGui::TableNextColumn();
             if (ImGui::SmallButton("Remove")) {
-                state.session.remove_breakpoint(breakpoint.address);
+                state.runtime.remove_breakpoint(breakpoint.address);
                 ImGui::PopID();
                 break;
             }
@@ -278,7 +264,7 @@ void draw_watchpoints(GuiState& state) {
     ImGui::InputText("Label", state.watchpoint_label.data(), state.watchpoint_label.size());
 
     if (ImGui::Button("Add Read")) {
-        if (state.session.add_watchpoint(
+        if (state.runtime.add_watchpoint(
                 static_cast<uint16_t>(state.watchpoint_address),
                 microlind::app::WatchpointType::Read,
                 buffer_string(state.watchpoint_label))) {
@@ -287,7 +273,7 @@ void draw_watchpoints(GuiState& state) {
     }
     ImGui::SameLine();
     if (ImGui::Button("Add Write")) {
-        if (state.session.add_watchpoint(
+        if (state.runtime.add_watchpoint(
                 static_cast<uint16_t>(state.watchpoint_address),
                 microlind::app::WatchpointType::Write,
                 buffer_string(state.watchpoint_label))) {
@@ -296,8 +282,8 @@ void draw_watchpoints(GuiState& state) {
     }
     ImGui::SameLine();
     if (ImGui::Button("Clear")) {
-        state.session.clear_watchpoints();
-        state.session.add_log("Cleared watchpoints.");
+        state.runtime.clear_watchpoints();
+        state.runtime.add_log("Cleared watchpoints.");
     }
 
     ImGui::Separator();
@@ -310,14 +296,15 @@ void draw_watchpoints(GuiState& state) {
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 64.0f);
         ImGui::TableHeadersRow();
 
-        for (const auto& watchpoint : state.session.watchpoints()) {
+        const auto snapshot = state.runtime.debugger_snapshot();
+        for (const auto& watchpoint : snapshot.watchpoints) {
             ImGui::PushID(static_cast<int>(watchpoint.address));
             ImGui::TableNextRow();
 
             ImGui::TableNextColumn();
             bool enabled = watchpoint.enabled;
             if (ImGui::Checkbox("##enabled", &enabled)) {
-                state.session.set_watchpoint_enabled(watchpoint.address, enabled);
+                state.runtime.set_watchpoint_enabled(watchpoint.address, enabled);
             }
 
             ImGui::TableNextColumn();
@@ -334,12 +321,12 @@ void draw_watchpoints(GuiState& state) {
             set_buffer(label, watchpoint.label);
             ImGui::SetNextItemWidth(-FLT_MIN);
             if (ImGui::InputText("##label", label.data(), label.size())) {
-                state.session.set_watchpoint_label(watchpoint.address, buffer_string(label));
+                state.runtime.set_watchpoint_label(watchpoint.address, buffer_string(label));
             }
 
             ImGui::TableNextColumn();
             if (ImGui::SmallButton("Remove")) {
-                state.session.remove_watchpoint(watchpoint.address);
+                state.runtime.remove_watchpoint(watchpoint.address);
                 ImGui::PopID();
                 break;
             }
@@ -353,12 +340,13 @@ void draw_watchpoints(GuiState& state) {
 void draw_trace(GuiState& state) {
     set_next_window_defaults(480.0f, 706.0f, 456.0f, 160.0f);
     ImGui::Begin("Trace", &state.show_trace);
-    const auto& trace = state.session.trace();
+    const auto snapshot = state.runtime.debugger_snapshot();
+    const auto& trace = snapshot.trace;
     if (ImGui::Button("Clear")) {
-        state.session.clear_trace();
+        state.runtime.clear_trace();
     }
     ImGui::SameLine();
-    ImGui::Text("Entries: %llu", static_cast<unsigned long long>(state.session.trace().size()));
+    ImGui::Text("Entries: %llu", static_cast<unsigned long long>(trace.size()));
     ImGui::Separator();
 
     ImGui::BeginChild("trace_scroll", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);

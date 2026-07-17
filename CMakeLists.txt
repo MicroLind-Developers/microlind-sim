@@ -43,6 +43,7 @@ target_link_libraries(microlind-sim-cli PRIVATE microlind-sim-app)
 
 include(CTest)
 if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
     find_package(GTest CONFIG QUIET)
     if(NOT GTest_FOUND)
         set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
@@ -63,13 +64,17 @@ if(BUILD_TESTING)
         tests/test_cpu.cpp
         tests/test_integration.cpp
         tests/test_logic.cpp
+        tests/test_gui_runtime.cpp
         tests/test_microcycle.cpp
         tests/test_sim_session.cpp
+        src/gui/gui_runtime.cpp
     )
+    target_include_directories(microlind-sim-tests PRIVATE src/gui)
     target_link_libraries(microlind-sim-tests PRIVATE
         microlind-sim-app
         GTest::gmock
         GTest::gtest_main
+        Threads::Threads
     )
     gtest_discover_tests(microlind-sim-tests
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
@@ -85,6 +90,7 @@ set(MICROLIND_REPOSITORY_URL "https://github.com/MicroLind-Developers/microlind-
 if(MICROLIND_BUILD_GUI)
     find_package(SDL2 REQUIRED)
     find_package(PNG REQUIRED)
+    find_package(Threads REQUIRED)
 
     if(NOT TARGET SDL2::SDL2)
         add_library(SDL2::SDL2 INTERFACE IMPORTED)
@@ -159,6 +165,7 @@ if(MICROLIND_BUILD_GUI)
         src/gui/gui_file_panels.cpp
         src/gui/gui_memory_panels.cpp
         src/gui/gui_panels.cpp
+        src/gui/gui_runtime.cpp
         src/gui/gui_state.cpp
         src/gui/main.cpp
     )
@@ -170,7 +177,7 @@ if(MICROLIND_BUILD_GUI)
         MICROLIND_HAS_PORTABLE_FILE_DIALOGS=1
         MICROLIND_REPOSITORY_URL="${MICROLIND_REPOSITORY_URL}"
     )
-    target_link_libraries(microlind-sim-gui PRIVATE microlind-sim-app microlind-imgui PNG::PNG)
+    target_link_libraries(microlind-sim-gui PRIVATE microlind-sim-app microlind-imgui PNG::PNG Threads::Threads)
 endif()
 
 option(MICROLIND_WARNINGS "Enable extra warnings" ON)

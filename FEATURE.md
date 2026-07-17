@@ -21,6 +21,10 @@ The simulator GUI is an ImGui/SDL application that runs beside the CLI and provi
   frequency label.
 - True Run mode for 1, 2, or 3 MHz cycle-targeted execution, with debugger
   refresh paused while peripherals such as serial continue updating.
+- Threaded runtime for True Run, with the GUI reading copied snapshots and
+  serial/control commands queued safely to the simulator worker.
+- Unified runtime mode handling for Run, Micro Run, Run Until, Step Over, True
+  Run, Pause, and Reset.
 - Step over subroutine calls.
 - Run until return.
 - Run until a chosen address.

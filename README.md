@@ -53,7 +53,10 @@ and rate-limited Run controls. The run rate is configured as operations per
 minute and displayed as operations per second; Run can execute either full
 instructions or individual micro-steps. A True Run mode can target 1, 2, or
 3 MHz while pausing debugger panel refresh and keeping peripherals such as
-serial active.
+serial active. True Run executes on a named simulator worker thread while the
+GUI reads runtime snapshots and queues live serial/control commands safely.
+Normal debugger Run, Micro Run, Run Until, Step Over, and True Run share the
+same runtime mode handling.
 
 Debugger panels include registers, flags, disassembly with instruction bytes,
 editable memory, stack inspection, serial RX/TX, breakpoints, watchpoints,

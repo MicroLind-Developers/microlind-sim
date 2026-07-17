@@ -14,9 +14,10 @@
 #include "portable-file-dialogs.h"
 #endif
 
+#include "gui_runtime.hpp"
+
 #include "microlind/app/image_loader.hpp"
 #include "microlind/app/session_file.hpp"
-#include "microlind/app/sim_session.hpp"
 #include "microlind/cpu.hpp"
 
 namespace microlind::gui {
@@ -59,7 +60,7 @@ microlind::cli::RomFormat selected_rom_format(int index);
 int rom_format_combo_index(microlind::cli::RomFormat format);
 
 struct GuiState {
-    microlind::app::SimSession session{microlind::CpuMode::HD6309};
+    GuiRuntime runtime{microlind::CpuMode::HD6309};
 
     std::array<char, 512> rom_path{};
     std::array<char, 512> config_path{};
@@ -72,7 +73,6 @@ struct GuiState {
     int rom_format_index{1};
     int raw_base{0x8000};
     int cf_min_sectors{0};
-    int operations_per_minute{600};
     int memory_start{0x0000};
     int memory_rows{16};
     bool memory_follow_pc{false};
@@ -89,15 +89,9 @@ struct GuiState {
     bool pld_live_bus{false};
     bool pld_follow_pc{true};
     bool pld_read{true};
-    bool running{false};
-    bool run_micro_steps{false};
-    bool run_until_active{false};
-    bool true_running{false};
     bool quit_requested{false};
     bool help_open{false};
     bool about_open{false};
-    int true_clock_index{0};
-    double true_effective_hz{0.0};
     microlind::app::GuiTheme theme{microlind::app::GuiTheme::Dark};
     bool show_file_panel{true};
     bool show_control_panel{true};
@@ -121,32 +115,47 @@ struct GuiState {
         set_buffer(rom_path, "examples/bios.ihex");
         set_buffer(config_path, "examples/hw.cfg");
         set_buffer(cf_path, "examples/sim.img");
-        session.add_log("GUI ready.");
+        runtime.add_log("GUI ready.");
+    }
+
+    bool running() const {
+        const auto mode = runtime.mode();
+        return mode == RuntimeMode::DebugRun || mode == RuntimeMode::DebugMicroRun;
+    }
+
+    bool run_until_active() const {
+        return runtime.run_until_active();
+    }
+
+    bool true_running() const {
+        return runtime.true_run_active();
+    }
+
+    bool debug_run_active() const {
+        return runtime.debug_run_active();
     }
 
     void stop_execution() {
-        running = false;
-        run_until_active = false;
-        true_running = false;
+        runtime.stop();
     }
 
     void load_rom() {
         const std::string path = buffer_string(rom_path);
-        session.load_rom(path, selected_rom_format(rom_format_index), static_cast<uint16_t>(raw_base));
+        runtime.load_rom(path, selected_rom_format(rom_format_index), static_cast<uint16_t>(raw_base));
     }
 
     void load_config() {
         const std::string path = buffer_string(config_path);
-        session.load_hardware_config(path);
+        runtime.load_hardware_config(path);
     }
 
     void attach_cf() {
         const std::string path = buffer_string(cf_path);
-        session.attach_cf_image(path, static_cast<uint32_t>(std::max(cf_min_sectors, 0)));
+        runtime.attach_cf_image(path, static_cast<uint32_t>(std::max(cf_min_sectors, 0)));
     }
 
     void remove_cf() {
-        if (session.remove_cf_image()) {
+        if (runtime.remove_cf_image()) {
             set_buffer(cf_path, "");
             cf_min_sectors = 0;
         }
@@ -156,13 +165,13 @@ struct GuiState {
         std::string error;
         const auto loaded = microlind::app::load_session_definition(path, error);
         if (!loaded) {
-            session.add_log("Session error: " + error);
+            runtime.add_log("Session error: " + error);
             return;
         }
 
         stop_execution();
         if (loaded->mode) {
-            session.set_mode(*loaded->mode);
+            runtime.set_cpu_mode(*loaded->mode);
         }
         set_buffer(session_path, path.string());
         set_buffer(config_path, loaded->config_path.string());
@@ -171,8 +180,8 @@ struct GuiState {
         rom_format_index = rom_format_combo_index(loaded->rom_format);
         raw_base = loaded->raw_base;
         cf_min_sectors = static_cast<int>(loaded->cf_sectors);
-        operations_per_minute = loaded->gui.operations_per_minute;
-        true_clock_index = true_clock_index_for_hz(loaded->gui.true_clock_hz);
+        runtime.set_operations_per_minute(static_cast<uint32_t>(std::max(loaded->gui.operations_per_minute, 0)));
+        runtime.set_true_run_target_hz(true_hz_for_index(true_clock_index_for_hz(loaded->gui.true_clock_hz)));
         memory_start = loaded->gui.memory_start;
         memory_rows = loaded->gui.memory_rows;
         memory_follow_pc = loaded->gui.memory_follow_pc;
@@ -182,7 +191,7 @@ struct GuiState {
         stack_follow_pointer = loaded->gui.stack_follow_pointer;
         serial_hex_view = loaded->gui.serial_hex_view;
         serial_rx_hex = loaded->gui.serial_rx_hex;
-        run_micro_steps = loaded->gui.run_micro_steps;
+        runtime.set_run_micro_steps(loaded->gui.run_micro_steps);
         theme = loaded->gui.theme;
         show_file_panel = loaded->gui.show_file_panel;
         show_control_panel = loaded->gui.show_control_panel;
@@ -200,20 +209,20 @@ struct GuiState {
         show_serial = loaded->gui.show_serial;
         show_log = loaded->gui.show_log;
 
-        const bool config_ok = session.load_hardware_config(loaded->config_path);
-        const bool rom_ok = config_ok && session.load_rom(loaded->rom_path, loaded->rom_format, loaded->raw_base);
+        const bool config_ok = runtime.load_hardware_config(loaded->config_path);
+        const bool rom_ok = config_ok && runtime.load_rom(loaded->rom_path, loaded->rom_format, loaded->raw_base);
         if (rom_ok) {
             if (!loaded->cf_path.empty()) {
-                session.attach_cf_image(loaded->cf_path, loaded->cf_sectors);
+                runtime.attach_cf_image(loaded->cf_path, loaded->cf_sectors);
             } else {
-                session.remove_cf_image();
+                runtime.remove_cf_image();
             }
         }
         if (config_ok && rom_ok) {
-            session.set_breakpoints(loaded->breakpoints);
-            session.set_watchpoints(loaded->watchpoints);
+            runtime.set_breakpoints(loaded->breakpoints);
+            runtime.set_watchpoints(loaded->watchpoints);
             pending_layout_ini = loaded->layout_ini;
-            session.add_log("Loaded session: " + path.string());
+            runtime.add_log("Loaded session: " + path.string());
         }
     }
 
@@ -223,9 +232,11 @@ struct GuiState {
 
     bool save_session_file(const std::filesystem::path& path) {
         if (path.empty()) {
-            session.add_log("Session path is empty.");
+            runtime.add_log("Session path is empty.");
             return false;
         }
+
+        stop_execution();
 
         microlind::app::SessionDefinition definition;
         definition.config_path = buffer_string(config_path);
@@ -234,12 +245,12 @@ struct GuiState {
         definition.rom_format = selected_rom_format(rom_format_index);
         definition.raw_base = static_cast<uint16_t>(raw_base);
         definition.cf_sectors = static_cast<uint32_t>(std::max(cf_min_sectors, 0));
-        definition.mode = session.mode();
-        definition.breakpoints = session.breakpoints();
-        definition.watchpoints = session.watchpoints();
-        definition.gui.operations_per_minute = operations_per_minute;
-        definition.gui.run_micro_steps = run_micro_steps;
-        definition.gui.true_clock_hz = static_cast<uint32_t>(true_target_hz());
+        definition.mode = runtime.cpu_mode();
+        definition.breakpoints = runtime.breakpoints();
+        definition.watchpoints = runtime.watchpoints();
+        definition.gui.operations_per_minute = static_cast<int>(runtime.operations_per_minute());
+        definition.gui.run_micro_steps = runtime.run_micro_steps();
+        definition.gui.true_clock_hz = static_cast<uint32_t>(runtime.true_target_hz());
         definition.gui.memory_start = static_cast<uint16_t>(memory_start);
         definition.gui.memory_rows = memory_rows;
         definition.gui.memory_follow_pc = memory_follow_pc;
@@ -274,12 +285,12 @@ struct GuiState {
 
         std::string error;
         if (!microlind::app::save_session_definition(path, definition, error)) {
-            session.add_log(error);
+            runtime.add_log(error);
             return false;
         }
 
         set_buffer(session_path, path.string());
-        session.add_log("Saved session: " + path.string());
+        runtime.add_log("Saved session: " + path.string());
         return true;
     }
 
@@ -306,20 +317,20 @@ struct GuiState {
         bool ok = true;
         std::vector<uint8_t> bytes = serial_rx_hex ? parse_hex_bytes(text, ok) : std::vector<uint8_t>(text.begin(), text.end());
         if (!ok) {
-            session.add_log("Serial RX hex parse error.");
+            runtime.add_log("Serial RX hex parse error.");
             return;
         }
         if (append_carriage_return) {
             bytes.push_back('\r');
         }
-        if (session.inject_serial_bytes(bytes)) {
+        if (runtime.inject_serial_bytes(bytes)) {
             set_buffer(serial_input, "");
         }
     }
 
     void step_once() {
-        true_running = false;
-        const auto result = session.run_instructions(1);
+        const auto result = runtime.run_instructions(1);
+        runtime.stop();
         if (result.hit_breakpoint || result.hit_watchpoint) {
             stop_execution();
         }
@@ -327,29 +338,28 @@ struct GuiState {
 
     void step_microcycle() {
         stop_execution();
-        const auto result = session.step_microcycle();
+        const auto result = runtime.step_microcycle();
         if (result.instruction_started) {
-            session.add_log("Started micro-step instruction.");
+            runtime.add_log("Started micro-step instruction.");
         }
         if (result.instruction_complete) {
-            session.add_log("Completed micro-step instruction.");
+            runtime.add_log("Completed micro-step instruction.");
         }
     }
 
     void toggle_run() {
-        running = !running;
-        if (running) {
-            run_until_active = false;
-            true_running = false;
+        if (running()) {
+            runtime.stop();
+        } else {
+            runtime.start_debug_run(runtime.run_micro_steps());
         }
     }
 
     void toggle_true_run() {
-        true_running = !true_running;
-        if (true_running) {
-            running = false;
-            run_until_active = false;
-            session.add_log("True running at " + std::to_string(true_target_hz() / 1000000) + " MHz.");
+        if (true_running()) {
+            runtime.stop_true_run();
+        } else {
+            runtime.start_true_run(runtime.true_target_hz());
         }
     }
 
@@ -371,13 +381,9 @@ struct GuiState {
         show_log = visible;
     }
 
-    double operations_per_second() const {
-        return static_cast<double>(std::max(operations_per_minute, 0)) / 60.0;
-    }
-
-    uint64_t true_target_hz() const {
+    static uint64_t true_hz_for_index(int index) {
         constexpr uint64_t clocks[] = {1000000, 2000000, 3000000};
-        return clocks[std::clamp(true_clock_index, 0, 2)];
+        return clocks[std::clamp(index, 0, 2)];
     }
 
     static int true_clock_index_for_hz(uint64_t hz) {
@@ -387,29 +393,36 @@ struct GuiState {
     }
 
     void step_over() {
-        true_running = false;
-        const auto target = session.step_over_target();
+        stop_execution();
+        const auto target = runtime.step_over_target();
         if (!target) {
             step_once();
             return;
         }
         run_until_address = *target;
-        running = false;
-        run_until_active = true;
-        session.add_log("Stepping over until " + hex_value(static_cast<uint16_t>(run_until_address), 4) + ".");
+        runtime.start_step_over(*target);
+        runtime.add_log("Stepping over until " + hex_value(static_cast<uint16_t>(run_until_address), 4) + ".");
     }
 
     void run_until_return() {
-        true_running = false;
-        const auto target = session.return_address_from_stack();
+        stop_execution();
+        const auto target = runtime.return_address_from_stack();
         if (!target) {
-            session.add_log("No return address is available on S.");
+            runtime.add_log("No return address is available on S.");
             return;
         }
         run_until_address = *target;
-        running = false;
-        run_until_active = true;
-        session.add_log("Running until return " + hex_value(static_cast<uint16_t>(run_until_address), 4) + ".");
+        runtime.start_run_until_return(*target);
+        runtime.add_log("Running until return " + hex_value(static_cast<uint16_t>(run_until_address), 4) + ".");
+    }
+
+    void toggle_run_until_address() {
+        if (run_until_active()) {
+            runtime.stop();
+            return;
+        }
+        runtime.start_run_until_address(static_cast<uint16_t>(run_until_address));
+        runtime.add_log("Running until " + hex_value(static_cast<uint16_t>(run_until_address), 4) + ".");
     }
 };
 
