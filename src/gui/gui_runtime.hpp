@@ -55,6 +55,7 @@ struct RuntimeDebuggerSnapshot {
     std::vector<std::string> memory_map;
     app::MapperSnapshot mapper;
     app::CfSnapshot compact_flash;
+    app::ParallelSnapshot parallel;
     std::vector<app::Breakpoint> breakpoints;
     std::vector<app::Watchpoint> watchpoints;
     std::vector<app::InstructionTraceEntry> trace;

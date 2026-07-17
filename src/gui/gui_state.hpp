@@ -103,6 +103,7 @@ struct GuiState {
     bool show_mapper{true};
     bool show_pld_logic{true};
     bool show_compact_flash{true};
+    bool show_parallel{true};
     bool show_breakpoints{true};
     bool show_watchpoints{true};
     bool show_trace{true};
@@ -203,6 +204,7 @@ struct GuiState {
         show_mapper = loaded->gui.show_mapper;
         show_pld_logic = loaded->gui.show_pld_logic;
         show_compact_flash = loaded->gui.show_compact_flash;
+        show_parallel = loaded->gui.show_parallel;
         show_breakpoints = loaded->gui.show_breakpoints;
         show_watchpoints = loaded->gui.show_watchpoints;
         show_trace = loaded->gui.show_trace;
@@ -271,6 +273,7 @@ struct GuiState {
         definition.gui.show_mapper = show_mapper;
         definition.gui.show_pld_logic = show_pld_logic;
         definition.gui.show_compact_flash = show_compact_flash;
+        definition.gui.show_parallel = show_parallel;
         definition.gui.show_breakpoints = show_breakpoints;
         definition.gui.show_watchpoints = show_watchpoints;
         definition.gui.show_trace = show_trace;
@@ -374,6 +377,7 @@ struct GuiState {
         show_mapper = visible;
         show_pld_logic = visible;
         show_compact_flash = visible;
+        show_parallel = visible;
         show_breakpoints = visible;
         show_watchpoints = visible;
         show_trace = visible;

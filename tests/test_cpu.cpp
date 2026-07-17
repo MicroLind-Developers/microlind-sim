@@ -11,6 +11,7 @@
 #include "microlind/cpu.hpp"
 #include "microlind/devices/interrupt_controller.hpp"
 #include "microlind/devices/memory.hpp"
+#include "microlind/devices/parallel.hpp"
 #include "microlind/devices/serial.hpp"
 #include "microlind/simulator.hpp"
 
@@ -232,6 +233,46 @@ TEST(SerialDeviceTest, SerialIrqCanDriveInterruptController) {
     EXPECT_EQ(serial.read8(0x03), 0x41);
     EXPECT_EQ(irq.pending_level(), 0);
     EXPECT_FALSE(cpu_irq_line);
+}
+
+TEST(ParallelDeviceTest, PortsRespectDataDirectionRegisters) {
+    microlind::devices::W65C22 via;
+
+    EXPECT_EQ(via.peek8(0x01), 0xFF);
+    via.set_port_a_input(0xA5);
+    via.write8(0x03, 0xF0); // DDRA
+    via.write8(0x01, 0x3C); // ORA
+
+    EXPECT_EQ(via.ddr_a(), 0xF0);
+    EXPECT_EQ(via.output_a(), 0x3C);
+    EXPECT_EQ(via.peek8(0x01), 0x35);
+
+    via.set_port_b_input(0xF0);
+    via.write8(0x02, 0x0F); // DDRB
+    via.write8(0x00, 0xA5); // ORB
+    EXPECT_EQ(via.peek8(0x00), 0xF5);
+}
+
+TEST(ParallelDeviceTest, TimerInterruptFollowsIerAndIfr) {
+    bool irq_line = false;
+    microlind::devices::W65C22 via([&](bool asserted) {
+        irq_line = asserted;
+    });
+
+    via.write8(0x0E, 0xC0); // enable timer 1 IRQ
+    via.write8(0x04, 0x02);
+    via.write8(0x05, 0x00);
+    EXPECT_FALSE(via.irq_asserted());
+
+    via.tick(3);
+    EXPECT_TRUE(via.irq_asserted());
+    EXPECT_TRUE(irq_line);
+    EXPECT_EQ(via.ifr() & 0xC0, 0xC0);
+
+    via.write8(0x0D, 0x40);
+    EXPECT_FALSE(via.irq_asserted());
+    EXPECT_FALSE(irq_line);
+    EXPECT_EQ(via.ifr() & 0x40, 0x00);
 }
 
 TEST(CpuExecutionTest, HD6309InvalidOpcodeTrapsThroughFFF0Vector) {

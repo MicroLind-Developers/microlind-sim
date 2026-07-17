@@ -12,6 +12,7 @@
 
 #include "microlind/devices/compact_flash.hpp"
 #include "microlind/devices/memory_mapper.hpp"
+#include "microlind/devices/parallel.hpp"
 #include "microlind/devices/serial.hpp"
 
 namespace microlind::app {
@@ -96,7 +97,8 @@ SimSession::SimSession(CpuMode mode)
           &serial_dev_,
           [this](uint8_t value) { on_serial_tx(value); },
           &mapper_state_,
-          &cf_dev_)) {
+          &cf_dev_,
+          &parallel_dev_)) {
     add_log("Session ready.");
 }
 
@@ -397,6 +399,31 @@ SerialSnapshot SimSession::serial_snapshot() const {
     snapshot.led_green = led.green;
     snapshot.led_blue = led.blue;
     snapshot.irq_asserted = serial_dev_->irq_asserted();
+    return snapshot;
+}
+
+ParallelSnapshot SimSession::parallel_snapshot() const {
+    ParallelSnapshot snapshot;
+    snapshot.present = parallel_dev_ != nullptr;
+    if (!hw_cfg_ || !hw_cfg_->parallel.present || !parallel_dev_) {
+        return snapshot;
+    }
+
+    snapshot.start = hw_cfg_->parallel.start;
+    snapshot.end = hw_cfg_->parallel.end;
+    snapshot.input_a = parallel_dev_->input_a();
+    snapshot.input_b = parallel_dev_->input_b();
+    snapshot.output_a = parallel_dev_->output_a();
+    snapshot.output_b = parallel_dev_->output_b();
+    snapshot.ddr_a = parallel_dev_->ddr_a();
+    snapshot.ddr_b = parallel_dev_->ddr_b();
+    snapshot.port_a = static_cast<uint8_t>((snapshot.output_a & snapshot.ddr_a) | (snapshot.input_a & ~snapshot.ddr_a));
+    snapshot.port_b = static_cast<uint8_t>((snapshot.output_b & snapshot.ddr_b) | (snapshot.input_b & ~snapshot.ddr_b));
+    snapshot.acr = parallel_dev_->acr();
+    snapshot.pcr = parallel_dev_->pcr();
+    snapshot.ifr = parallel_dev_->ifr();
+    snapshot.ier = parallel_dev_->ier();
+    snapshot.irq_asserted = parallel_dev_->irq_asserted();
     return snapshot;
 }
 
@@ -730,6 +757,7 @@ void SimSession::add_log(std::string message) {
 void SimSession::rebuild(std::string reason) {
     serial_dev_ = nullptr;
     cf_dev_ = nullptr;
+    parallel_dev_ = nullptr;
     mapper_state_.reset();
     logic_devices_.reset();
     logic_error_.clear();
@@ -747,6 +775,7 @@ void SimSession::rebuild(std::string reason) {
         [this](uint8_t value) { on_serial_tx(value); },
         &mapper_state_,
         &cf_dev_,
+        &parallel_dev_,
         &diagnostics);
     for (const auto& diagnostic : diagnostics) {
         add_log(diagnostic);

@@ -134,6 +134,7 @@ RuntimeDebuggerSnapshot GuiRuntime::debugger_snapshot() const {
         session_.memory_map(),
         session_.mapper_snapshot(),
         session_.cf_snapshot(),
+        session_.parallel_snapshot(),
         session_.breakpoints(),
         session_.watchpoints(),
         session_.trace(),

@@ -501,4 +501,70 @@ void draw_compact_flash(GuiState& state) {
     ImGui::End();
 }
 
+void draw_parallel(GuiState& state) {
+    set_next_window_defaults(480.0f, 706.0f, 456.0f, 180.0f);
+    ImGui::Begin("Parallel I/O", &state.show_parallel);
+    const auto snapshot = state.runtime.debugger_snapshot();
+    const auto& parallel = snapshot.parallel;
+    if (!parallel.present) {
+        ImGui::TextDisabled("No W65C22 parallel device configured.");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Text("I/O: %04X-%04X", parallel.start, parallel.end);
+    ImGui::Text("IRQ: %s", parallel.irq_asserted ? "asserted" : "idle");
+
+    if (ImGui::BeginTable("parallel_registers", 4, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Register");
+        ImGui::TableSetupColumn("A");
+        ImGui::TableSetupColumn("B");
+        ImGui::TableSetupColumn("Notes");
+        ImGui::TableHeadersRow();
+
+        auto row = [](const char* name, uint8_t a, uint8_t b, const char* notes) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(name);
+            ImGui::TableNextColumn();
+            ImGui::Text("%02X", a);
+            ImGui::TableNextColumn();
+            ImGui::Text("%02X", b);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(notes);
+        };
+
+        row("Port", parallel.port_a, parallel.port_b, "effective pins");
+        row("Output", parallel.output_a, parallel.output_b, "output latch");
+        row("Input", parallel.input_a, parallel.input_b, "external pins");
+        row("DDR", parallel.ddr_a, parallel.ddr_b, "1=output");
+
+        ImGui::EndTable();
+    }
+
+    ImGui::Separator();
+    if (ImGui::BeginTable("parallel_control", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Register");
+        ImGui::TableSetupColumn("Value");
+        ImGui::TableHeadersRow();
+
+        auto row = [](const char* name, uint8_t value) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(name);
+            ImGui::TableNextColumn();
+            ImGui::Text("%02X", value);
+        };
+
+        row("ACR", parallel.acr);
+        row("PCR", parallel.pcr);
+        row("IFR", parallel.ifr);
+        row("IER", parallel.ier);
+
+        ImGui::EndTable();
+    }
+
+    ImGui::End();
+}
+
 } // namespace microlind::gui

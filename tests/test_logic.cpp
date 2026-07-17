@@ -292,6 +292,10 @@ TEST(BoardLogicTest, MatchesConfiguredHardwareMapForRepresentativeAddresses) {
     EXPECT_EQ(cfg->logic.bus_mode, microlind::BusDecodeMode::Route);
     ASSERT_TRUE(cfg->serial.present);
     EXPECT_EQ(cfg->serial.irq_level, 1);
+    ASSERT_TRUE(cfg->parallel.present);
+    EXPECT_EQ(cfg->parallel.start, 0xF420);
+    EXPECT_EQ(cfg->parallel.end, 0xF42F);
+    EXPECT_EQ(cfg->parallel.irq_level, 2);
     const auto devices = load_board_logic_devices();
 
     const auto issues = microlind::cli::validate_hardware_config_against_logic(*cfg, devices);

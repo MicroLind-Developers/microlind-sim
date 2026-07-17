@@ -61,5 +61,9 @@
   - Audit interrupt/status register details against the datasheet.
 
 - Add device modules for remaining board peripherals.
-  - Parallel I/O.
   - Video/sound stubs.
+
+- Deepen W65C22 parallel I/O behavior as software needs it.
+  - Audit port handshaking, CA/CB control lines, shift-register behavior, and
+    timer edge cases against the datasheet.
+  - Add GUI controls or test hooks for external port input pins when needed.

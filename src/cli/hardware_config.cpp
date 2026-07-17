@@ -62,7 +62,7 @@ std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& 
     }
 
     HardwareConfig cfg;
-    enum class Section { None, Rom, Ram, Serial, Cf, Mapper, Logic };
+    enum class Section { None, Rom, Ram, Serial, Parallel, Cf, Mapper, Logic };
     Section section = Section::None;
 
     RomRegion pending_rom{};
@@ -89,6 +89,7 @@ std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& 
             if (iequals(sect, "ROM")) section = Section::Rom;
             else if (iequals(sect, "RAM")) section = Section::Ram;
             else if (iequals(sect, "SERIAL")) section = Section::Serial;
+            else if (iequals(sect, "PARALLEL") || iequals(sect, "PAR")) section = Section::Parallel;
             else if (iequals(sect, "CF") || iequals(sect, "COMPACT_FLASH")) section = Section::Cf;
             else if (iequals(sect, "MEMORY_MAPPER")) section = Section::Mapper;
             else if (iequals(sect, "PLD_LOGIC") || iequals(sect, "LOGIC")) section = Section::Logic;
@@ -132,6 +133,15 @@ std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& 
                 if (auto v = parse_number(value)) cfg.serial.end = static_cast<uint16_t>(*v); else { error = "Bad IO_END_ADDRESS at line " + std::to_string(lineno); return std::nullopt; }
             } else if (iequals(key, "IRQ_LEVEL")) {
                 if (auto v = parse_number(value); v && *v <= 0x0F) cfg.serial.irq_level = static_cast<uint8_t>(*v); else { error = "Bad SERIAL IRQ_LEVEL at line " + std::to_string(lineno); return std::nullopt; }
+            }
+        } else if (section == Section::Parallel) {
+            cfg.parallel.present = true;
+            if (iequals(key, "IO_START_ADDRESS")) {
+                if (auto v = parse_number(value)) cfg.parallel.start = static_cast<uint16_t>(*v); else { error = "Bad PARALLEL IO_START_ADDRESS at line " + std::to_string(lineno); return std::nullopt; }
+            } else if (iequals(key, "IO_END_ADDRESS")) {
+                if (auto v = parse_number(value)) cfg.parallel.end = static_cast<uint16_t>(*v); else { error = "Bad PARALLEL IO_END_ADDRESS at line " + std::to_string(lineno); return std::nullopt; }
+            } else if (iequals(key, "IRQ_LEVEL")) {
+                if (auto v = parse_number(value); v && *v <= 0x0F) cfg.parallel.irq_level = static_cast<uint8_t>(*v); else { error = "Bad PARALLEL IRQ_LEVEL at line " + std::to_string(lineno); return std::nullopt; }
             }
         } else if (section == Section::Cf) {
             cfg.cf.present = true;

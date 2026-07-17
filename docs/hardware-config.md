@@ -117,6 +117,28 @@ register reads return `$FF`. With `IMAGE`, the image size becomes the disk size
 unless `SECTORS` is set as a larger minimum. Disk images that are not an exact
 multiple of 512 bytes are padded to the next sector.
 
+## Parallel I/O
+
+`[PARALLEL]` or `[PAR]` maps the W65C22/VIA-style parallel I/O device.
+
+```ini
+[PARALLEL]
+IO_START_ADDRESS=0xF420
+IO_END_ADDRESS=0xF42F
+IRQ_LEVEL=2
+```
+
+Keys:
+
+- `IO_START_ADDRESS`: first parallel I/O register address.
+- `IO_END_ADDRESS`: last parallel I/O register address.
+- `IRQ_LEVEL`: optional microLind IRQ controller level asserted by the
+  parallel device when an enabled W65C22 interrupt is pending. Defaults to `2`.
+
+The initial W65C22 model exposes port A/B output latches, input pins, data
+direction registers, ACR/PCR, IFR/IER, shift register storage, and basic
+timer-driven interrupt flags.
+
 ## Memory Mapper
 
 `[MEMORY_MAPPER]` maps bank registers and, optionally, the CPU windows they
@@ -191,8 +213,8 @@ Keys:
 - `route`: use the PLD-selected device role for bus accesses. Devices are still
   created from `hw.cfg`; PLD routing chooses between those mapped devices.
 
-The simulator validates configured ROM, RAM, memory mapper, CompactFlash, and
-serial ranges against the PLD decode during rebuild. CLI builds print
+The simulator validates configured ROM, RAM, memory mapper, CompactFlash,
+parallel, and serial ranges against the PLD decode during rebuild. CLI builds print
 diagnostics, and GUI/session rebuilds add them to the event log.
 
 ## CLI Helpers

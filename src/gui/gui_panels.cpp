@@ -212,6 +212,7 @@ void draw_main_menu(GuiState& state) {
         ImGui::MenuItem("Memory Mapper", nullptr, &state.show_mapper);
         ImGui::MenuItem("PLD Logic", nullptr, &state.show_pld_logic);
         ImGui::MenuItem("CompactFlash", nullptr, &state.show_compact_flash);
+        ImGui::MenuItem("Parallel I/O", nullptr, &state.show_parallel);
         ImGui::MenuItem("Serial", nullptr, &state.show_serial);
         ImGui::Separator();
         ImGui::MenuItem("Breakpoints", nullptr, &state.show_breakpoints);
@@ -408,6 +409,7 @@ void draw_workbench(GuiState& state) {
         if (state.show_mapper) draw_mapper(state);
         if (state.show_pld_logic) draw_pld_logic(state);
         if (state.show_compact_flash) draw_compact_flash(state);
+        if (state.show_parallel) draw_parallel(state);
         if (state.show_breakpoints) draw_breakpoints(state);
         if (state.show_watchpoints) draw_watchpoints(state);
         if (state.show_trace) draw_trace(state);

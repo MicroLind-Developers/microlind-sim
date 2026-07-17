@@ -25,6 +25,7 @@ add_library(microlind-sim
     src/cpu_micro_ops.cpp
     src/devices/compact_flash.cpp
     src/devices/interrupt_controller.cpp
+    src/devices/parallel.cpp
     src/simulator.cpp
     src/devices/memory.cpp
     src/devices/memory_mapper.cpp

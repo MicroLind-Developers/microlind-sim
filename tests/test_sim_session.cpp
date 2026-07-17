@@ -58,6 +58,13 @@ TEST(SimSessionTest, ReportsExplicitMapperWindowsAndCompactFlashSnapshot) {
     EXPECT_FALSE(cf.read_only);
     EXPECT_EQ(cf.status, 0xFF);
     EXPECT_EQ(cf.transfer_mode, microlind::app::CfTransferMode::None);
+
+    const auto parallel = session.parallel_snapshot();
+    ASSERT_TRUE(parallel.present);
+    EXPECT_EQ(parallel.start, 0xF420);
+    EXPECT_EQ(parallel.end, 0xF42F);
+    EXPECT_EQ(parallel.port_a, 0xFF);
+    EXPECT_EQ(parallel.port_b, 0xFF);
 }
 
 TEST(SimSessionTest, CompactFlashReturnsFFWhenNoImageIsLoaded) {
@@ -474,6 +481,7 @@ TEST(SessionFileTest, LoadsPathsLayoutAndPersistedDebuggerState) {
         file << "SHOW_MEMORY_MAPPER=true\n";
         file << "SHOW_PLD_LOGIC=false\n";
         file << "SHOW_COMPACT_FLASH=true\n";
+        file << "SHOW_PARALLEL=false\n";
         file << "SHOW_BREAKPOINTS=false\n";
         file << "SHOW_WATCHPOINTS=true\n";
         file << "SHOW_TRACE=false\n";
@@ -519,6 +527,7 @@ TEST(SessionFileTest, LoadsPathsLayoutAndPersistedDebuggerState) {
     EXPECT_TRUE(loaded->gui.show_mapper);
     EXPECT_FALSE(loaded->gui.show_pld_logic);
     EXPECT_TRUE(loaded->gui.show_compact_flash);
+    EXPECT_FALSE(loaded->gui.show_parallel);
     EXPECT_FALSE(loaded->gui.show_breakpoints);
     EXPECT_TRUE(loaded->gui.show_watchpoints);
     EXPECT_FALSE(loaded->gui.show_trace);
@@ -592,6 +601,7 @@ TEST(SessionFileTest, SavesAndReloadsPersistedDebuggerState) {
     session.gui.show_mapper = true;
     session.gui.show_pld_logic = false;
     session.gui.show_compact_flash = true;
+    session.gui.show_parallel = false;
     session.gui.show_breakpoints = false;
     session.gui.show_watchpoints = true;
     session.gui.show_trace = false;
@@ -626,6 +636,7 @@ TEST(SessionFileTest, SavesAndReloadsPersistedDebuggerState) {
     EXPECT_EQ(loaded->gui.show_mapper, session.gui.show_mapper);
     EXPECT_EQ(loaded->gui.show_pld_logic, session.gui.show_pld_logic);
     EXPECT_EQ(loaded->gui.show_compact_flash, session.gui.show_compact_flash);
+    EXPECT_EQ(loaded->gui.show_parallel, session.gui.show_parallel);
     EXPECT_EQ(loaded->gui.show_breakpoints, session.gui.show_breakpoints);
     EXPECT_EQ(loaded->gui.show_watchpoints, session.gui.show_watchpoints);
     EXPECT_EQ(loaded->gui.show_trace, session.gui.show_trace);

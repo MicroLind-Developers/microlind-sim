@@ -31,6 +31,13 @@ struct SerialConfig {
     bool present{false};
 };
 
+struct ParallelConfig {
+    uint16_t start{};
+    uint16_t end{};
+    uint8_t irq_level{2};
+    bool present{false};
+};
+
 struct CfConfig {
     uint16_t start{};
     uint16_t end{};
@@ -64,6 +71,7 @@ struct HardwareConfig {
     std::vector<RomRegion> roms;
     RamConfig ram;
     SerialConfig serial;
+    ParallelConfig parallel;
     CfConfig cf;
     MapperConfig mapper;
     LogicConfig logic;

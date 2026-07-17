@@ -19,6 +19,7 @@
 namespace microlind::devices {
 class CompactFlash;
 struct MapperState;
+class W65C22;
 class XR88C92;
 }
 
@@ -123,6 +124,25 @@ struct SerialSnapshot {
     bool irq_asserted{};
 };
 
+struct ParallelSnapshot {
+    bool present{};
+    uint16_t start{};
+    uint16_t end{};
+    uint8_t port_a{};
+    uint8_t port_b{};
+    uint8_t input_a{};
+    uint8_t input_b{};
+    uint8_t output_a{};
+    uint8_t output_b{};
+    uint8_t ddr_a{};
+    uint8_t ddr_b{};
+    uint8_t acr{};
+    uint8_t pcr{};
+    uint8_t ifr{};
+    uint8_t ier{};
+    bool irq_asserted{};
+};
+
 struct LogicDecodeSnapshot {
     bool configured{};
     bool available{};
@@ -208,6 +228,7 @@ public:
 
     [[nodiscard]] bool serial_mapped() const { return serial_dev_ != nullptr; }
     [[nodiscard]] SerialSnapshot serial_snapshot() const;
+    [[nodiscard]] ParallelSnapshot parallel_snapshot() const;
     [[nodiscard]] std::vector<std::string> memory_map() const;
     [[nodiscard]] MapperSnapshot mapper_snapshot() const;
     [[nodiscard]] CfSnapshot cf_snapshot() const;
@@ -237,6 +258,7 @@ private:
     std::optional<cli::HardwareConfig> hw_cfg_;
     std::shared_ptr<devices::MapperState> mapper_state_;
     devices::XR88C92* serial_dev_{nullptr};
+    devices::W65C22* parallel_dev_{nullptr};
     devices::CompactFlash* cf_dev_{nullptr};
     std::optional<microlind::logic::BoardLogicDevices> logic_devices_;
     std::string logic_error_;
