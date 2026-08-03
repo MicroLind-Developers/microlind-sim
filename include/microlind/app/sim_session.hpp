@@ -19,6 +19,7 @@
 namespace microlind::devices {
 class CompactFlash;
 struct MapperState;
+class Vdc8568;
 class W65C22;
 class XR88C92;
 }
@@ -143,6 +144,28 @@ struct ParallelSnapshot {
     bool irq_asserted{};
 };
 
+struct VdcSnapshot {
+    static constexpr uint8_t Columns = 80;
+    static constexpr uint8_t Rows = 25;
+    static constexpr std::size_t Cells = static_cast<std::size_t>(Columns) * Rows;
+
+    bool present{};
+    uint16_t start{};
+    uint16_t end{};
+    uint8_t selected_register{};
+    uint8_t status{};
+    std::array<uint8_t, 0x25> registers{};
+    uint16_t display_start{};
+    uint16_t attribute_start{};
+    uint16_t update_address{};
+    uint16_t cursor_position{};
+    uint8_t columns{Columns};
+    uint8_t rows{Rows};
+    uint64_t frame_version{};
+    std::array<uint8_t, Cells> chars{};
+    std::array<uint8_t, Cells> attrs{};
+};
+
 struct LogicDecodeSnapshot {
     bool configured{};
     bool available{};
@@ -229,6 +252,7 @@ public:
     [[nodiscard]] bool serial_mapped() const { return serial_dev_ != nullptr; }
     [[nodiscard]] SerialSnapshot serial_snapshot() const;
     [[nodiscard]] ParallelSnapshot parallel_snapshot() const;
+    [[nodiscard]] VdcSnapshot vdc_snapshot() const;
     [[nodiscard]] std::vector<std::string> memory_map() const;
     [[nodiscard]] MapperSnapshot mapper_snapshot() const;
     [[nodiscard]] CfSnapshot cf_snapshot() const;
@@ -259,6 +283,7 @@ private:
     std::shared_ptr<devices::MapperState> mapper_state_;
     devices::XR88C92* serial_dev_{nullptr};
     devices::W65C22* parallel_dev_{nullptr};
+    devices::Vdc8568* vdc_dev_{nullptr};
     devices::CompactFlash* cf_dev_{nullptr};
     std::optional<microlind::logic::BoardLogicDevices> logic_devices_;
     std::string logic_error_;

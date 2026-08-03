@@ -70,6 +70,41 @@ TEST(GuiRuntimeTest, SerialInjectionDuringTrueRunReachesDevice) {
     EXPECT_EQ(runtime.peek_memory(0xF433), 'A');
 }
 
+TEST(GuiRuntimeTest, VdcSnapshotUpdatesDuringTrueRun) {
+    GuiRuntime runtime(microlind::CpuMode::HD6309);
+    ASSERT_TRUE(runtime.load_hardware_config("tests/data/hw_test.cfg"));
+
+    const std::vector<uint8_t> program{
+        0x86, 0x12,             // LDA #$12 (update address high register)
+        0xB7, 0xF4, 0x40,       // STA $F440
+        0x86, 0x20,             // LDA #$20
+        0xB7, 0xF4, 0x41,       // STA $F441
+        0x86, 0x13,             // LDA #$13 (update address low register)
+        0xB7, 0xF4, 0x40,       // STA $F440
+        0x86, 0x00,             // LDA #$00
+        0xB7, 0xF4, 0x41,       // STA $F441
+        0x86, 0x1F,             // LDA #$1F (VRAM data register)
+        0xB7, 0xF4, 0x40,       // STA $F440
+        0x86, 'A',
+        0xB7, 0xF4, 0x41,       // STA $F441
+        0x20, 0xFE,             // BRA *
+    };
+    for (std::size_t index = 0; index < program.size(); ++index) {
+        runtime.write_memory(static_cast<uint16_t>(index), program[index]);
+    }
+
+    runtime.start_true_run(1000000);
+    bool updated = false;
+    for (int attempt = 0; attempt < 100 && !updated; ++attempt) {
+        updated = runtime.vdc_snapshot().chars[0] == 'A';
+        if (!updated) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    EXPECT_TRUE(runtime.true_run_active());
+    EXPECT_TRUE(updated);
+    runtime.stop_true_run();
+}
+
 TEST(GuiRuntimeTest, DebugBatchRunsThroughRuntimeMode) {
     GuiRuntime runtime(microlind::CpuMode::HD6309);
     runtime.write_memory(0x0000, 0x12); // NOP

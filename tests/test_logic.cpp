@@ -296,6 +296,10 @@ TEST(BoardLogicTest, MatchesConfiguredHardwareMapForRepresentativeAddresses) {
     EXPECT_EQ(cfg->parallel.start, 0xF420);
     EXPECT_EQ(cfg->parallel.end, 0xF42F);
     EXPECT_EQ(cfg->parallel.irq_level, 2);
+    ASSERT_TRUE(cfg->video.present);
+    EXPECT_EQ(cfg->video.start, 0xF440);
+    EXPECT_EQ(cfg->video.end, 0xF441);
+    EXPECT_EQ(cfg->video.vram_size, 65536u);
     const auto devices = load_board_logic_devices();
 
     const auto issues = microlind::cli::validate_hardware_config_against_logic(*cfg, devices);
@@ -336,6 +340,7 @@ TEST(BoardLogicTest, GeneratesPartialHardwareConfigForVisualValidation) {
     EXPECT_THAT(generated, HasSubstr("[RAM]\n# Derived from RAML_EN with AM19..AM21 clear.\nSTART=0x0000\nEND=0xDFFF"));
     EXPECT_THAT(generated, HasSubstr("[CF]\nIO_START_ADDRESS=0xF418\nIO_END_ADDRESS=0xF41F"));
     EXPECT_THAT(generated, HasSubstr("[SERIAL]\nIO_START_ADDRESS=0xF430\nIO_END_ADDRESS=0xF43F"));
+    EXPECT_THAT(generated, HasSubstr("[VIDEO]\nIO_START_ADDRESS=0xF440\nIO_END_ADDRESS=0xF441"));
     EXPECT_THAT(generated, HasSubstr("BANK_0_REGISTER=0xF400"));
     EXPECT_THAT(generated, HasSubstr("BANK_3_REGISTER=0xF403"));
     EXPECT_THAT(generated, HasSubstr("WINDOW_0=0x0000-0x3FFF"));

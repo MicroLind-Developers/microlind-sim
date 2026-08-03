@@ -135,10 +135,16 @@ RuntimeDebuggerSnapshot GuiRuntime::debugger_snapshot() const {
         session_.mapper_snapshot(),
         session_.cf_snapshot(),
         session_.parallel_snapshot(),
+        session_.vdc_snapshot(),
         session_.breakpoints(),
         session_.watchpoints(),
         session_.trace(),
     };
+}
+
+app::VdcSnapshot GuiRuntime::vdc_snapshot() const {
+    std::lock_guard lock(mutex_);
+    return session_.vdc_snapshot();
 }
 
 std::vector<RuntimeDisassemblyLine> GuiRuntime::disassembly_snapshot(int line_count) {

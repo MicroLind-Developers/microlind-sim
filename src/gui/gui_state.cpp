@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <iomanip>
@@ -45,6 +46,20 @@ void append_utf8(std::string& out, uint32_t codepoint) {
         out.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
         out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
         out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    }
+}
+
+char vdc_glyph(uint8_t value) {
+    return value >= 0x20 && value <= 0x7E ? static_cast<char>(value) : '.';
+}
+
+void blend_pixel(uint8_t* pixel, const std::array<uint8_t, 3>& color, uint8_t alpha) {
+    const unsigned inverse_alpha = 255u - alpha;
+    for (std::size_t channel = 0; channel < color.size(); ++channel) {
+        pixel[channel] = static_cast<uint8_t>(
+            (static_cast<unsigned>(color[channel]) * alpha +
+             static_cast<unsigned>(pixel[channel]) * inverse_alpha + 127u) /
+            255u);
     }
 }
 
@@ -135,6 +150,117 @@ SDL_Surface* load_png_surface(const std::filesystem::path& path) {
 
     png_image_free(&image);
     return surface;
+}
+
+bool save_vdc_screenshot_png(
+    const std::filesystem::path& path,
+    const microlind::app::VdcSnapshot& vdc,
+    ImFont* font,
+    std::string& error) {
+    error.clear();
+    if (!vdc.present) {
+        error = "No VDC is configured.";
+        return false;
+    }
+    if (font == nullptr || font->OwnerAtlas == nullptr) {
+        error = "The VDC font is unavailable.";
+        return false;
+    }
+    if (vdc.columns == 0 || vdc.rows == 0 ||
+        static_cast<std::size_t>(vdc.columns) * vdc.rows > vdc.chars.size()) {
+        error = "The VDC frame dimensions are invalid.";
+        return false;
+    }
+
+    constexpr float font_size = 16.0f;
+    ImFontBaked* baked = font->GetFontBaked(font_size);
+    if (baked == nullptr) {
+        error = "The VDC font could not be rasterized.";
+        return false;
+    }
+
+    // Preload the complete VDC display range before retaining atlas pointers or UVs.
+    for (ImWchar codepoint = 0x20; codepoint <= 0x7E; ++codepoint) {
+        baked->FindGlyph(codepoint);
+    }
+
+    const ImTextureData* atlas = font->OwnerAtlas->TexData;
+    if (atlas == nullptr || atlas->Pixels == nullptr || atlas->Width <= 0 || atlas->Height <= 0 ||
+        (atlas->BytesPerPixel != 1 && atlas->BytesPerPixel != 4)) {
+        error = "The VDC font atlas is unavailable.";
+        return false;
+    }
+
+    const ImFontGlyph* widest = baked->FindGlyph('M');
+    const int cell_width = std::max(1, static_cast<int>(std::ceil(widest != nullptr ? widest->AdvanceX : font_size / 2.0f)));
+    const int cell_height = std::max(1, static_cast<int>(std::ceil(baked->Size)));
+    const int width = static_cast<int>(vdc.columns) * cell_width;
+    const int height = static_cast<int>(vdc.rows) * cell_height;
+
+    constexpr std::array<uint8_t, 3> background{16, 18, 20};
+    constexpr std::array<uint8_t, 3> foreground{226, 230, 234};
+    constexpr std::array<uint8_t, 3> cursor_foreground{242, 224, 82};
+    std::vector<uint8_t> pixels(static_cast<std::size_t>(width) * height * 4);
+    for (std::size_t offset = 0; offset < pixels.size(); offset += 4) {
+        pixels[offset] = background[0];
+        pixels[offset + 1] = background[1];
+        pixels[offset + 2] = background[2];
+        pixels[offset + 3] = 255;
+    }
+
+    const uint16_t cursor_offset = static_cast<uint16_t>(vdc.cursor_position - vdc.display_start);
+    const bool cursor_visible = cursor_offset < static_cast<std::size_t>(vdc.columns) * vdc.rows;
+
+    for (std::size_t cell = 0; cell < static_cast<std::size_t>(vdc.columns) * vdc.rows; ++cell) {
+        const ImFontGlyph* found = baked->FindGlyph(static_cast<ImWchar>(vdc_glyph(vdc.chars[cell])));
+        if (found == nullptr || !found->Visible) continue;
+        const ImFontGlyph glyph = *found;
+
+        const int source_x = static_cast<int>(std::lround(glyph.U0 * atlas->Width));
+        const int source_y = static_cast<int>(std::lround(glyph.V0 * atlas->Height));
+        const int source_width = std::max(1, static_cast<int>(std::lround((glyph.U1 - glyph.U0) * atlas->Width)));
+        const int source_height = std::max(1, static_cast<int>(std::lround((glyph.V1 - glyph.V0) * atlas->Height)));
+        const int glyph_width = std::max(1, static_cast<int>(std::ceil(glyph.X1 - glyph.X0)));
+        const int glyph_height = std::max(1, static_cast<int>(std::ceil(glyph.Y1 - glyph.Y0)));
+        const int cell_x = static_cast<int>(cell % vdc.columns) * cell_width;
+        const int cell_y = static_cast<int>(cell / vdc.columns) * cell_height;
+        const int destination_x = cell_x + static_cast<int>(std::floor(glyph.X0));
+        const int destination_y = cell_y + static_cast<int>(std::floor(glyph.Y0));
+        const auto& color = cursor_visible && cell == cursor_offset ? cursor_foreground : foreground;
+
+        for (int y = 0; y < glyph_height; ++y) {
+            const int output_y = destination_y + y;
+            if (output_y < 0 || output_y >= height) continue;
+            const int atlas_y = source_y + y * source_height / glyph_height;
+            if (atlas_y < 0 || atlas_y >= atlas->Height) continue;
+            for (int x = 0; x < glyph_width; ++x) {
+                const int output_x = destination_x + x;
+                if (output_x < 0 || output_x >= width) continue;
+                const int atlas_x = source_x + x * source_width / glyph_width;
+                if (atlas_x < 0 || atlas_x >= atlas->Width) continue;
+
+                const std::size_t atlas_offset =
+                    (static_cast<std::size_t>(atlas_y) * atlas->Width + atlas_x) * atlas->BytesPerPixel;
+                const uint8_t alpha = atlas->Pixels[atlas_offset + (atlas->BytesPerPixel == 4 ? 3 : 0)];
+                uint8_t* output = pixels.data() +
+                    (static_cast<std::size_t>(output_y) * width + output_x) * 4;
+                blend_pixel(output, color, alpha);
+            }
+        }
+    }
+
+    png_image image{};
+    image.version = PNG_IMAGE_VERSION;
+    image.width = static_cast<png_uint_32>(width);
+    image.height = static_cast<png_uint_32>(height);
+    image.format = PNG_FORMAT_RGBA;
+    if (png_image_write_to_file(&image, path.string().c_str(), 0, pixels.data(), 0, nullptr) == 0) {
+        error = image.message[0] != '\0' ? image.message : "libpng could not write the file.";
+        png_image_free(&image);
+        return false;
+    }
+    png_image_free(&image);
+    return true;
 }
 
 std::string serial_terminal_text(const std::vector<uint8_t>& bytes) {

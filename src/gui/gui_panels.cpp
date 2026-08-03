@@ -213,6 +213,7 @@ void draw_main_menu(GuiState& state) {
         ImGui::MenuItem("PLD Logic", nullptr, &state.show_pld_logic);
         ImGui::MenuItem("CompactFlash", nullptr, &state.show_compact_flash);
         ImGui::MenuItem("Parallel I/O", nullptr, &state.show_parallel);
+        ImGui::MenuItem("VDC Display", nullptr, &state.show_video);
         ImGui::MenuItem("Serial", nullptr, &state.show_serial);
         ImGui::Separator();
         ImGui::MenuItem("Breakpoints", nullptr, &state.show_breakpoints);
@@ -362,7 +363,7 @@ void draw_about_modal(GuiState& state) {
     ImGui::TextUnformatted("Libraries and tools used");
     ImGui::BulletText("Dear ImGui - immediate-mode GUI and docking/table widgets");
     ImGui::BulletText("SDL2 - desktop windowing, renderer, input, and texture backend");
-    ImGui::BulletText("libpng - loading the application logo texture");
+    ImGui::BulletText("libpng - PNG image loading and VDC screenshot export");
     ImGui::BulletText("portable-file-dialogs - native file open/save dialogs when available");
     ImGui::BulletText("GoogleTest / GoogleMock - automated simulator and app-layer tests");
     ImGui::BulletText("CMake - build configuration and dependency wiring");
@@ -399,6 +400,7 @@ void draw_workbench(GuiState& state) {
 
     if (state.show_control_panel) draw_control_panel(state);
     if (state.show_serial) draw_serial(state);
+    if (state.show_video) draw_vdc_display(state);
     if (!state.true_running()) {
         if (state.show_file_panel) draw_file_panel(state);
         if (state.show_registers) draw_registers(state);

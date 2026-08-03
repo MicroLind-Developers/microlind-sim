@@ -38,6 +38,13 @@ struct ParallelConfig {
     bool present{false};
 };
 
+struct VideoConfig {
+    uint16_t start{};
+    uint16_t end{};
+    uint32_t vram_size{65536};
+    bool present{false};
+};
+
 struct CfConfig {
     uint16_t start{};
     uint16_t end{};
@@ -72,6 +79,7 @@ struct HardwareConfig {
     RamConfig ram;
     SerialConfig serial;
     ParallelConfig parallel;
+    VideoConfig video;
     CfConfig cf;
     MapperConfig mapper;
     LogicConfig logic;

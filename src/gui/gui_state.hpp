@@ -44,6 +44,11 @@ std::string hex_value(uint32_t value, int width);
 std::string instruction_bytes(microlind::Bus& bus, uint16_t pc, uint8_t length);
 TextureResource load_png_texture(SDL_Renderer* renderer, const std::filesystem::path& path);
 SDL_Surface* load_png_surface(const std::filesystem::path& path);
+bool save_vdc_screenshot_png(
+    const std::filesystem::path& path,
+    const microlind::app::VdcSnapshot& vdc,
+    ImFont* font,
+    std::string& error);
 std::string serial_terminal_text(const std::vector<uint8_t>& bytes);
 std::vector<uint8_t> parse_hex_bytes(std::string_view input, bool& ok);
 const char* watchpoint_type_label(microlind::app::WatchpointType type);
@@ -104,12 +109,16 @@ struct GuiState {
     bool show_pld_logic{true};
     bool show_compact_flash{true};
     bool show_parallel{true};
+    bool show_video{true};
     bool show_breakpoints{true};
     bool show_watchpoints{true};
     bool show_trace{true};
     bool show_serial{true};
     bool show_log{true};
     TextureResource about_logo{};
+    ImFont* vdc_font{};
+    microlind::app::VdcSnapshot cached_vdc{};
+    double last_vdc_refresh_time{-1.0};
 
     GuiState() {
         set_buffer(session_path, "examples/bios.session");
@@ -205,6 +214,7 @@ struct GuiState {
         show_pld_logic = loaded->gui.show_pld_logic;
         show_compact_flash = loaded->gui.show_compact_flash;
         show_parallel = loaded->gui.show_parallel;
+        show_video = loaded->gui.show_video;
         show_breakpoints = loaded->gui.show_breakpoints;
         show_watchpoints = loaded->gui.show_watchpoints;
         show_trace = loaded->gui.show_trace;
@@ -274,6 +284,7 @@ struct GuiState {
         definition.gui.show_pld_logic = show_pld_logic;
         definition.gui.show_compact_flash = show_compact_flash;
         definition.gui.show_parallel = show_parallel;
+        definition.gui.show_video = show_video;
         definition.gui.show_breakpoints = show_breakpoints;
         definition.gui.show_watchpoints = show_watchpoints;
         definition.gui.show_trace = show_trace;
@@ -378,6 +389,7 @@ struct GuiState {
         show_pld_logic = visible;
         show_compact_flash = visible;
         show_parallel = visible;
+        show_video = visible;
         show_breakpoints = visible;
         show_watchpoints = visible;
         show_trace = visible;

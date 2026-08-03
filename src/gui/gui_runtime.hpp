@@ -56,6 +56,7 @@ struct RuntimeDebuggerSnapshot {
     app::MapperSnapshot mapper;
     app::CfSnapshot compact_flash;
     app::ParallelSnapshot parallel;
+    app::VdcSnapshot vdc;
     std::vector<app::Breakpoint> breakpoints;
     std::vector<app::Watchpoint> watchpoints;
     std::vector<app::InstructionTraceEntry> trace;
@@ -100,6 +101,7 @@ public:
     void set_cpu_mode(CpuMode mode);
     [[nodiscard]] RuntimeStatusSnapshot status_snapshot() const;
     [[nodiscard]] RuntimeDebuggerSnapshot debugger_snapshot() const;
+    [[nodiscard]] app::VdcSnapshot vdc_snapshot() const;
     [[nodiscard]] std::vector<RuntimeDisassemblyLine> disassembly_snapshot(int line_count);
     [[nodiscard]] std::vector<RuntimeMemoryRow> memory_snapshot(uint16_t start, int rows);
     [[nodiscard]] std::vector<RuntimeStackRow> stack_snapshot(uint16_t start, int rows, int stack_register_index);

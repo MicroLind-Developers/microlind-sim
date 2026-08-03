@@ -139,6 +139,31 @@ The initial W65C22 model exposes port A/B output latches, input pins, data
 direction registers, ACR/PCR, IFR/IER, shift register storage, and basic
 timer-driven interrupt flags.
 
+## Video / VDC
+
+`[VIDEO]` or `[VDC]` maps the MOS 8563/8568-style VDC two-register CPU
+interface. The VDC owns 64 KiB of private video RAM that is accessed through
+the VDC data register, not through the normal CPU memory map.
+
+```ini
+[VIDEO]
+IO_START_ADDRESS=0xF440
+IO_END_ADDRESS=0xF441
+VRAM_SIZE=65536
+```
+
+Keys:
+
+- `IO_START_ADDRESS`: VDC control/status register address.
+- `IO_END_ADDRESS`: VDC data register address. The first implementation expects
+  this to be `IO_START_ADDRESS + 1`.
+- `VRAM_SIZE`: documented private VDC RAM size. The simulator currently models
+  64 KiB.
+
+The initial model ignores exact VDC timing and reports ready immediately. The
+GUI VDC Display window reflects the 80x25 text display RAM at a 25 Hz refresh
+rate using `resources/Bescii-Mono.ttf`.
+
 ## Memory Mapper
 
 `[MEMORY_MAPPER]` maps bank registers and, optionally, the CPU windows they

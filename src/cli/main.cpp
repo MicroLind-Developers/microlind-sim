@@ -162,6 +162,7 @@ int main(int argc, char** argv) {
         nullptr,
         nullptr,
         nullptr,
+        nullptr,
         &build_diagnostics);
     print_build_diagnostics(build_diagnostics);
 
@@ -305,7 +306,7 @@ int main(int argc, char** argv) {
             current_image = load_image(path, f, base);
             if (!current_image) { std::cout << "Failed to load image\n"; continue; }
             build_diagnostics.clear();
-            sim = build_sim(mode, &*current_image, hw_cfg ? &*hw_cfg : nullptr, &serial_dev, nullptr, nullptr, nullptr, nullptr, &build_diagnostics);
+            sim = build_sim(mode, &*current_image, hw_cfg ? &*hw_cfg : nullptr, &serial_dev, nullptr, nullptr, nullptr, nullptr, nullptr, &build_diagnostics);
             print_build_diagnostics(build_diagnostics);
             std::cout << "Image loaded and CPU reset.\n";
         } else if (cmd == "loadcfg") {
@@ -319,7 +320,7 @@ int main(int argc, char** argv) {
             }
             hw_cfg = std::move(cfg);
             build_diagnostics.clear();
-            sim = build_sim(mode, current_image ? &*current_image : nullptr, hw_cfg ? &*hw_cfg : nullptr, &serial_dev, nullptr, nullptr, nullptr, nullptr, &build_diagnostics);
+            sim = build_sim(mode, current_image ? &*current_image : nullptr, hw_cfg ? &*hw_cfg : nullptr, &serial_dev, nullptr, nullptr, nullptr, nullptr, nullptr, &build_diagnostics);
             print_build_diagnostics(build_diagnostics);
             std::cout << "Hardware config loaded and CPU reset.\n";
         } else if (cmd == "loadcf") {
@@ -346,7 +347,7 @@ int main(int argc, char** argv) {
                 }
             }
             build_diagnostics.clear();
-            sim = build_sim(mode, current_image ? &*current_image : nullptr, hw_cfg ? &*hw_cfg : nullptr, &serial_dev, nullptr, nullptr, nullptr, nullptr, &build_diagnostics);
+            sim = build_sim(mode, current_image ? &*current_image : nullptr, hw_cfg ? &*hw_cfg : nullptr, &serial_dev, nullptr, nullptr, nullptr, nullptr, nullptr, &build_diagnostics);
             print_build_diagnostics(build_diagnostics);
             std::cout << "CF disk image loaded and CPU reset.\n";
         } else if (cmd == "pldcfg") {

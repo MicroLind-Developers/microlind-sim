@@ -61,9 +61,17 @@
   - Audit interrupt/status register details against the datasheet.
 
 - Add device modules for remaining board peripherals.
-  - Video/sound stubs.
+  - Sound stubs.
 
 - Deepen W65C22 parallel I/O behavior as software needs it.
   - Audit port handshaking, CA/CB control lines, shift-register behavior, and
     timer edge cases against the datasheet.
   - Add GUI controls or test hooks for external port input pins when needed.
+
+- Deepen MOS 8563/8568 VDC behavior as software needs it.
+  - Done: implement the VDC block fill command.
+  - Add the VDC block copy command.
+  - Add color attributes, cursor modes, blink, underline, and alternate
+    character handling.
+  - Add graphical mode once firmware or tests need it.
+  - Improve ready/vblank/update timing after the first always-ready model.

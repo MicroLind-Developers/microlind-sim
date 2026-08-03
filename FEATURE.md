@@ -69,6 +69,8 @@ The simulator GUI is an ImGui/SDL application that runs beside the CLI and provi
 - CompactFlash panel showing image path, sector count, status/error registers, selected LBA, command state, and transfer progress.
 - Parallel I/O panel showing W65C22 port pins, output latches, data direction
   registers, control registers, interrupt flags, and IRQ state.
+- VDC Display panel showing the MOS 8563/8568 80x25 text display RAM with a
+  25 Hz GUI refresh cadence.
 - Serial panel with terminal view, raw hex view, RX text injection, RX hex-byte
   injection, TX clear, output-port byte display, and RGB power LED display.
 

@@ -70,6 +70,14 @@ void load_gui_fonts(ImGuiIO& io) {
     io.Fonts->AddFontDefault();
 }
 
+ImFont* load_vdc_font(ImGuiIO& io) {
+    const std::filesystem::path path{"resources/Bescii-Mono.ttf"};
+    if (!std::filesystem::exists(path)) {
+        return nullptr;
+    }
+    return io.Fonts->AddFontFromFileTTF(path.string().c_str(), 16.0f);
+}
+
 int run_gui() {
     microlind::gui::set_current_thread_name("microlind-gui");
 
@@ -112,11 +120,13 @@ int run_gui() {
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 #endif
     load_gui_fonts(io);
+    ImFont* vdc_font = load_vdc_font(io);
 
     ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer2_Init(renderer);
 
     GuiState state;
+    state.vdc_font = vdc_font;
     auto applied_theme = state.theme;
     apply_gui_theme(applied_theme);
     state.about_logo = load_png_texture(renderer, "resources/mlsim_logo.png");

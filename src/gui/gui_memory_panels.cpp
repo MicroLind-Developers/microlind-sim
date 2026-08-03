@@ -567,4 +567,102 @@ void draw_parallel(GuiState& state) {
     ImGui::End();
 }
 
+void draw_vdc_display(GuiState& state) {
+    set_next_window_defaults(320.0f, 706.0f, 724.0f, 460.0f);
+    ImGui::Begin("VDC Display", &state.show_video);
+
+    const double now = ImGui::GetTime();
+    if (state.last_vdc_refresh_time < 0.0 || now - state.last_vdc_refresh_time >= 0.04) {
+        state.cached_vdc = state.runtime.vdc_snapshot();
+        state.last_vdc_refresh_time = now;
+    }
+
+    const auto& vdc = state.cached_vdc;
+    if (!vdc.present) {
+        ImGui::TextDisabled("No MOS 8563/8568 VDC configured.");
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::Button("Save PNG...")) {
+#ifdef MICROLIND_HAS_PORTABLE_FILE_DIALOGS
+        std::filesystem::path path = pick_save_file(
+            "Save VDC screenshot",
+            "vdc-screenshot.png",
+            {"PNG images", "*.png", "All files", "*"});
+#else
+        std::filesystem::path path{"vdc-screenshot.png"};
+#endif
+        if (!path.empty()) {
+            if (!path.has_extension()) path += ".png";
+            std::string error;
+            ImFont* font = state.vdc_font != nullptr ? state.vdc_font : ImGui::GetFont();
+            if (save_vdc_screenshot_png(path, vdc, font, error)) {
+                state.runtime.add_log("Saved VDC screenshot: " + path.string());
+            } else {
+                state.runtime.add_log("Could not save VDC screenshot: " + error);
+            }
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Save the VDC display as a PNG image");
+    }
+    ImGui::SameLine();
+
+    ImGui::Text(
+        "I/O: %04X-%04X  REG:%02X  STATUS:%02X  DISP:%04X  ATTR:%04X  UPDATE:%04X  FRAME:%llu",
+        vdc.start,
+        vdc.end,
+        vdc.selected_register,
+        vdc.status,
+        vdc.display_start,
+        vdc.attribute_start,
+        vdc.update_address,
+        static_cast<unsigned long long>(vdc.frame_version));
+    ImGui::Separator();
+
+    const uint16_t cursor_offset = static_cast<uint16_t>(vdc.cursor_position - vdc.display_start);
+    const bool cursor_visible = cursor_offset < vdc.chars.size();
+    const int cursor_row = cursor_visible ? static_cast<int>(cursor_offset / vdc.columns) : -1;
+    const int cursor_col = cursor_visible ? static_cast<int>(cursor_offset % vdc.columns) : -1;
+
+    auto glyph = [](uint8_t value) {
+        if (value >= 0x20 && value <= 0x7E) {
+            return static_cast<char>(value);
+        }
+        return '.';
+    };
+
+    ImGui::BeginChild("vdc_text", ImVec2(0.0f, 0.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
+    if (state.vdc_font != nullptr) {
+        ImGui::PushFont(state.vdc_font);
+    }
+
+    for (int row = 0; row < vdc.rows; ++row) {
+        const std::size_t row_start = static_cast<std::size_t>(row) * vdc.columns;
+        std::string line;
+        line.reserve(vdc.columns);
+        for (int col = 0; col < vdc.columns; ++col) {
+            line.push_back(glyph(vdc.chars[row_start + static_cast<std::size_t>(col)]));
+        }
+
+        if (row == cursor_row && cursor_col >= 0 && cursor_col < static_cast<int>(line.size())) {
+            ImGui::TextUnformatted(line.data(), line.data() + cursor_col);
+            ImGui::SameLine(0.0f, 0.0f);
+            const char cursor_char[] = {line[static_cast<std::size_t>(cursor_col)], '\0'};
+            ImGui::TextColored(ImVec4(0.95f, 0.88f, 0.32f, 1.0f), "%s", cursor_char);
+            ImGui::SameLine(0.0f, 0.0f);
+            ImGui::TextUnformatted(line.data() + cursor_col + 1, line.data() + line.size());
+        } else {
+            ImGui::TextUnformatted(line.data(), line.data() + line.size());
+        }
+    }
+
+    if (state.vdc_font != nullptr) {
+        ImGui::PopFont();
+    }
+    ImGui::EndChild();
+    ImGui::End();
+}
+
 } // namespace microlind::gui

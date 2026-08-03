@@ -14,6 +14,7 @@
 #include "microlind/devices/memory_mapper.hpp"
 #include "microlind/devices/parallel.hpp"
 #include "microlind/devices/serial.hpp"
+#include "microlind/devices/vdc.hpp"
 
 namespace microlind::app {
 
@@ -98,7 +99,8 @@ SimSession::SimSession(CpuMode mode)
           [this](uint8_t value) { on_serial_tx(value); },
           &mapper_state_,
           &cf_dev_,
-          &parallel_dev_)) {
+          &parallel_dev_,
+          &vdc_dev_)) {
     add_log("Session ready.");
 }
 
@@ -424,6 +426,28 @@ ParallelSnapshot SimSession::parallel_snapshot() const {
     snapshot.ifr = parallel_dev_->ifr();
     snapshot.ier = parallel_dev_->ier();
     snapshot.irq_asserted = parallel_dev_->irq_asserted();
+    return snapshot;
+}
+
+VdcSnapshot SimSession::vdc_snapshot() const {
+    VdcSnapshot snapshot;
+    snapshot.present = vdc_dev_ != nullptr;
+    if (!hw_cfg_ || !hw_cfg_->video.present || !vdc_dev_) {
+        return snapshot;
+    }
+
+    snapshot.start = hw_cfg_->video.start;
+    snapshot.end = hw_cfg_->video.end;
+    snapshot.selected_register = vdc_dev_->selected_register();
+    snapshot.status = vdc_dev_->status();
+    snapshot.registers = vdc_dev_->registers();
+    snapshot.display_start = vdc_dev_->display_start();
+    snapshot.attribute_start = vdc_dev_->attribute_start();
+    snapshot.update_address = vdc_dev_->update_address();
+    snapshot.cursor_position = vdc_dev_->cursor_position();
+    snapshot.frame_version = vdc_dev_->frame_version();
+    snapshot.chars = vdc_dev_->display_chars();
+    snapshot.attrs = vdc_dev_->display_attrs();
     return snapshot;
 }
 
@@ -758,6 +782,7 @@ void SimSession::rebuild(std::string reason) {
     serial_dev_ = nullptr;
     cf_dev_ = nullptr;
     parallel_dev_ = nullptr;
+    vdc_dev_ = nullptr;
     mapper_state_.reset();
     logic_devices_.reset();
     logic_error_.clear();
@@ -776,6 +801,7 @@ void SimSession::rebuild(std::string reason) {
         &mapper_state_,
         &cf_dev_,
         &parallel_dev_,
+        &vdc_dev_,
         &diagnostics);
     for (const auto& diagnostic : diagnostics) {
         add_log(diagnostic);

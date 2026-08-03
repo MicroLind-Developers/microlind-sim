@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
@@ -13,6 +14,7 @@
 #include "microlind/devices/memory.hpp"
 #include "microlind/devices/parallel.hpp"
 #include "microlind/devices/serial.hpp"
+#include "microlind/devices/vdc.hpp"
 #include "microlind/simulator.hpp"
 
 #include "test_harness.hpp"
@@ -273,6 +275,126 @@ TEST(ParallelDeviceTest, TimerInterruptFollowsIerAndIfr) {
     EXPECT_FALSE(via.irq_asserted());
     EXPECT_FALSE(irq_line);
     EXPECT_EQ(via.ifr() & 0x40, 0x00);
+}
+
+TEST(VdcDeviceTest, SelectsAndReadsWritableRegistersThroughTwoByteWindow) {
+    microlind::devices::Vdc8568 vdc;
+
+    EXPECT_EQ(vdc.read8(0x00) & 0x80, 0x80);
+
+    vdc.write8(0x00, 0x06);
+    EXPECT_EQ(vdc.read8(0x01), 25);
+
+    vdc.write8(0x00, 0x1A);
+    vdc.write8(0x01, 0x5A);
+    EXPECT_EQ(vdc.peek8(0x01), 0x5A);
+    EXPECT_EQ(vdc.registers()[0x1A], 0x5A);
+}
+
+TEST(VdcDeviceTest, DataRegisterAccessesPrivateVramAndIncrementsUpdateAddress) {
+    microlind::devices::Vdc8568 vdc;
+
+    vdc.write8(0x00, 0x12);
+    vdc.write8(0x01, 0x20);
+    vdc.write8(0x00, 0x13);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x1F);
+    vdc.write8(0x01, 'A');
+    EXPECT_EQ(vdc.update_address(), 0x2001);
+
+    vdc.write8(0x00, 0x12);
+    vdc.write8(0x01, 0x20);
+    vdc.write8(0x00, 0x13);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x1F);
+    EXPECT_EQ(vdc.peek8(0x01), 'A');
+    EXPECT_EQ(vdc.update_address(), 0x2000);
+    EXPECT_EQ(vdc.read8(0x01), 'A');
+    EXPECT_EQ(vdc.update_address(), 0x2001);
+}
+
+TEST(VdcDeviceTest, BlockFillWritesWordCountBytesAndAdvancesUpdateAddress) {
+    microlind::devices::Vdc8568 vdc;
+
+    vdc.write8(0x00, 0x0C);
+    vdc.write8(0x01, 0x20);
+    vdc.write8(0x00, 0x0D);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x12);
+    vdc.write8(0x01, 0x20);
+    vdc.write8(0x00, 0x13);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x18);
+    vdc.write8(0x01, 0x00); // fill mode
+    vdc.write8(0x00, 0x1F);
+    vdc.write8(0x01, 'X'); // first byte is the normal data-register write
+
+    const uint64_t version_before_fill = vdc.frame_version();
+    vdc.write8(0x00, 0x1E);
+    vdc.write8(0x01, 3);
+
+    const auto chars = vdc.display_chars();
+    EXPECT_EQ(chars[0], 'X');
+    EXPECT_EQ(chars[1], 'X');
+    EXPECT_EQ(chars[2], 'X');
+    EXPECT_EQ(chars[3], 'X');
+    EXPECT_EQ(chars[4], ' ');
+    EXPECT_EQ(vdc.update_address(), 0x2004);
+    EXPECT_EQ(vdc.frame_version(), version_before_fill + 1);
+}
+
+TEST(VdcDeviceTest, ZeroLengthBlockFillWrites256BytesAndWrapsVram) {
+    microlind::devices::Vdc8568 vdc;
+
+    vdc.write8(0x00, 0x0C);
+    vdc.write8(0x01, 0xFF);
+    vdc.write8(0x00, 0x0D);
+    vdc.write8(0x01, 0xF0);
+    vdc.write8(0x00, 0x12);
+    vdc.write8(0x01, 0xFF);
+    vdc.write8(0x00, 0x13);
+    vdc.write8(0x01, 0xF0);
+    vdc.write8(0x00, 0x1F);
+    vdc.write8(0x01, '#');
+    vdc.write8(0x00, 0x1E);
+    vdc.write8(0x01, 0x00);
+
+    const auto chars = vdc.display_chars();
+    EXPECT_TRUE(std::all_of(chars.begin(), chars.begin() + 257, [](uint8_t value) { return value == '#'; }));
+    EXPECT_EQ(chars[257], ' ');
+    EXPECT_EQ(vdc.update_address(), 0x00F1);
+}
+
+TEST(VdcDeviceTest, DataRegisterIgnoresDisplayRowAddressIncrement) {
+    microlind::devices::Vdc8568 vdc;
+
+    vdc.write8(0x00, 0x1B);
+    vdc.write8(0x01, 80);
+    vdc.write8(0x00, 0x1F);
+    vdc.write8(0x01, 'A');
+    vdc.write8(0x01, 'B');
+
+    const auto chars = vdc.display_chars();
+    EXPECT_EQ(chars[0], 'A');
+    EXPECT_EQ(chars[1], 'B');
+    EXPECT_EQ(vdc.update_address(), 0x0002);
+}
+
+TEST(VdcDeviceTest, DisplaySnapshotReflectsDisplayRam) {
+    microlind::devices::Vdc8568 vdc;
+
+    vdc.write8(0x00, 0x12);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x13);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x1F);
+    vdc.write8(0x01, 'H');
+    vdc.write8(0x01, 'i');
+
+    const auto chars = vdc.display_chars();
+    EXPECT_EQ(chars[0], 'H');
+    EXPECT_EQ(chars[1], 'i');
+    EXPECT_EQ(chars[2], ' ');
 }
 
 TEST(CpuExecutionTest, HD6309InvalidOpcodeTrapsThroughFFF0Vector) {
