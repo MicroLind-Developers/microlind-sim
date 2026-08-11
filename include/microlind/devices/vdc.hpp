@@ -14,6 +14,7 @@ public:
     static constexpr uint8_t Columns = 80;
     static constexpr uint8_t Rows = 25;
     static constexpr std::size_t DisplayCells = static_cast<std::size_t>(Columns) * Rows;
+    static constexpr std::size_t CharacterBytes = 8192;
     static constexpr std::size_t VramSize = 65536;
 
     Vdc8568();
@@ -29,9 +30,11 @@ public:
     [[nodiscard]] uint16_t attribute_start() const;
     [[nodiscard]] uint16_t update_address() const;
     [[nodiscard]] uint16_t cursor_position() const;
+    [[nodiscard]] uint16_t character_start() const;
     [[nodiscard]] uint64_t frame_version() const { return frame_version_; }
     [[nodiscard]] std::array<uint8_t, DisplayCells> display_chars() const;
     [[nodiscard]] std::array<uint8_t, DisplayCells> display_attrs() const;
+    [[nodiscard]] std::array<uint8_t, CharacterBytes> character_data() const;
 
 private:
     static constexpr uint8_t RegDisplayStartHigh = 0x0C;
@@ -42,8 +45,14 @@ private:
     static constexpr uint8_t RegUpdateAddressLow = 0x13;
     static constexpr uint8_t RegAttributeStartHigh = 0x14;
     static constexpr uint8_t RegAttributeStartLow = 0x15;
+    static constexpr uint8_t RegCharacterHorizontal = 0x16;
+    static constexpr uint8_t RegCharacterVertical = 0x17;
     static constexpr uint8_t RegBlockControl = 0x18;
+    static constexpr uint8_t RegHorizontalScroll = 0x19;
+    static constexpr uint8_t RegColor = 0x1A;
     static constexpr uint8_t RegAddressIncrement = 0x1B;
+    static constexpr uint8_t RegCharacterBase = 0x1C;
+    static constexpr uint8_t RegUnderlineScan = 0x1D;
     static constexpr uint8_t RegWordCount = 0x1E;
     static constexpr uint8_t RegData = 0x1F;
 

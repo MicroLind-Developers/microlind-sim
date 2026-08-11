@@ -70,8 +70,7 @@
 
 - Deepen MOS 8563/8568 VDC behavior as software needs it.
   - Done: implement the VDC block fill command.
+  - Done: render text and attributes from VDC character-generator RAM.
   - Add the VDC block copy command.
-  - Add color attributes, cursor modes, blink, underline, and alternate
-    character handling.
   - Add graphical mode once firmware or tests need it.
   - Improve ready/vblank/update timing after the first always-ready model.

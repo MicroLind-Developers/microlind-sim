@@ -17,12 +17,18 @@ uint16_t word_from_regs(const std::array<uint8_t, Vdc8568::RegisterCount>& regs,
 } // namespace
 
 Vdc8568::Vdc8568() {
-    vram_.fill(0x20);
+    vram_.fill(0x00);
+    std::fill_n(vram_.begin(), DisplayCells, 0x20);
+    std::fill_n(vram_.begin() + 0x0800, DisplayCells, 0x0F);
     regs_[0x06] = Rows;
-    regs_[0x09] = 0x0F;
+    regs_[0x09] = 0x07;
+    regs_[0x0B] = 0x07;
     regs_[RegAttributeStartHigh] = 0x08;
     regs_[RegAttributeStartLow] = 0x00;
+    regs_[RegCharacterHorizontal] = 0x78;
+    regs_[RegCharacterVertical] = 0x08;
     regs_[RegAddressIncrement] = 0x01;
+    regs_[RegCharacterBase] = 0x20;
     regs_[0x1A] = 0xF0;
 }
 
@@ -68,6 +74,10 @@ uint16_t Vdc8568::cursor_position() const {
     return word_from_regs(regs_, RegCursorHigh, RegCursorLow);
 }
 
+uint16_t Vdc8568::character_start() const {
+    return static_cast<uint16_t>((regs_[RegCharacterBase] & 0xE0) << 8);
+}
+
 std::array<uint8_t, Vdc8568::DisplayCells> Vdc8568::display_chars() const {
     std::array<uint8_t, DisplayCells> chars{};
     const uint16_t start = display_start();
@@ -84,6 +94,15 @@ std::array<uint8_t, Vdc8568::DisplayCells> Vdc8568::display_attrs() const {
         attrs[i] = vram_[static_cast<uint16_t>(start + i)];
     }
     return attrs;
+}
+
+std::array<uint8_t, Vdc8568::CharacterBytes> Vdc8568::character_data() const {
+    std::array<uint8_t, CharacterBytes> data{};
+    const uint16_t start = character_start();
+    for (std::size_t i = 0; i < data.size(); ++i) {
+        data[i] = vram_[static_cast<uint16_t>(start + i)];
+    }
+    return data;
 }
 
 uint8_t Vdc8568::read_selected_register(bool side_effects) {
@@ -116,7 +135,12 @@ void Vdc8568::write_selected_register(uint8_t value) {
         }
         if (selected_register_ == RegDisplayStartHigh || selected_register_ == RegDisplayStartLow ||
             selected_register_ == RegAttributeStartHigh || selected_register_ == RegAttributeStartLow ||
-            selected_register_ == RegCursorHigh || selected_register_ == RegCursorLow) {
+            selected_register_ == RegCursorHigh || selected_register_ == RegCursorLow ||
+            selected_register_ == 0x09 || selected_register_ == 0x0A || selected_register_ == 0x0B ||
+            selected_register_ == RegCharacterHorizontal || selected_register_ == RegCharacterVertical ||
+            selected_register_ == RegBlockControl || selected_register_ == RegHorizontalScroll ||
+            selected_register_ == RegColor || selected_register_ == RegCharacterBase ||
+            selected_register_ == RegUnderlineScan) {
             ++frame_version_;
         }
     }

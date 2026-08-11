@@ -18,6 +18,7 @@
 
 #include "microlind/app/image_loader.hpp"
 #include "microlind/app/session_file.hpp"
+#include "microlind/app/vdc_render.hpp"
 #include "microlind/cpu.hpp"
 
 namespace microlind::gui {
@@ -47,7 +48,12 @@ SDL_Surface* load_png_surface(const std::filesystem::path& path);
 bool save_vdc_screenshot_png(
     const std::filesystem::path& path,
     const microlind::app::VdcSnapshot& vdc,
-    ImFont* font,
+    double elapsed_seconds,
+    std::string& error);
+bool update_rgba_texture(
+    SDL_Renderer* renderer,
+    TextureResource& texture,
+    const microlind::app::VdcFramebuffer& framebuffer,
     std::string& error);
 std::string serial_terminal_text(const std::vector<uint8_t>& bytes);
 std::vector<uint8_t> parse_hex_bytes(std::string_view input, bool& ok);
@@ -91,6 +97,8 @@ struct GuiState {
     bool stack_follow_pointer{true};
     bool serial_hex_view{false};
     bool serial_rx_hex{false};
+    int vdc_scale_mode{};
+    bool vdc_crt_aspect{true};
     bool pld_live_bus{false};
     bool pld_follow_pc{true};
     bool pld_read{true};
@@ -116,7 +124,8 @@ struct GuiState {
     bool show_serial{true};
     bool show_log{true};
     TextureResource about_logo{};
-    ImFont* vdc_font{};
+    TextureResource vdc_display{};
+    SDL_Renderer* renderer{};
     microlind::app::VdcSnapshot cached_vdc{};
     double last_vdc_refresh_time{-1.0};
 
@@ -201,6 +210,8 @@ struct GuiState {
         stack_follow_pointer = loaded->gui.stack_follow_pointer;
         serial_hex_view = loaded->gui.serial_hex_view;
         serial_rx_hex = loaded->gui.serial_rx_hex;
+        vdc_scale_mode = std::clamp(loaded->gui.vdc_scale_mode, 0, 4);
+        vdc_crt_aspect = loaded->gui.vdc_crt_aspect;
         runtime.set_run_micro_steps(loaded->gui.run_micro_steps);
         theme = loaded->gui.theme;
         show_file_panel = loaded->gui.show_file_panel;
@@ -272,6 +283,8 @@ struct GuiState {
         definition.gui.stack_follow_pointer = stack_follow_pointer;
         definition.gui.serial_hex_view = serial_hex_view;
         definition.gui.serial_rx_hex = serial_rx_hex;
+        definition.gui.vdc_scale_mode = vdc_scale_mode;
+        definition.gui.vdc_crt_aspect = vdc_crt_aspect;
         definition.gui.theme = theme;
         definition.gui.show_file_panel = show_file_panel;
         definition.gui.show_control_panel = show_control_panel;

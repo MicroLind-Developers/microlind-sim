@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "imgui.h"
+#include "microlind/app/vdc_render.hpp"
 
 namespace microlind::gui {
 
@@ -596,8 +597,7 @@ void draw_vdc_display(GuiState& state) {
         if (!path.empty()) {
             if (!path.has_extension()) path += ".png";
             std::string error;
-            ImFont* font = state.vdc_font != nullptr ? state.vdc_font : ImGui::GetFont();
-            if (save_vdc_screenshot_png(path, vdc, font, error)) {
+            if (save_vdc_screenshot_png(path, vdc, now, error)) {
                 state.runtime.add_log("Saved VDC screenshot: " + path.string());
             } else {
                 state.runtime.add_log("Could not save VDC screenshot: " + error);
@@ -608,59 +608,63 @@ void draw_vdc_display(GuiState& state) {
         ImGui::SetTooltip("Save the VDC display as a PNG image");
     }
     ImGui::SameLine();
+    ImGui::SetNextItemWidth(88.0f);
+    ImGui::Combo("Size", &state.vdc_scale_mode, "Fit\0" "1x\0" "2x\0" "3x\0" "4x\0");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Scale the VDC framebuffer in the display panel");
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("CRT aspect", &state.vdc_crt_aspect);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Double vertical pixel height for the classic 640x200 display aspect");
+    }
 
     ImGui::Text(
-        "I/O: %04X-%04X  REG:%02X  STATUS:%02X  DISP:%04X  ATTR:%04X  UPDATE:%04X  FRAME:%llu",
+        "I/O: %04X-%04X  REG:%02X  STATUS:%02X  DISP:%04X  ATTR:%04X  CHAR:%04X  UPDATE:%04X  FRAME:%llu",
         vdc.start,
         vdc.end,
         vdc.selected_register,
         vdc.status,
         vdc.display_start,
         vdc.attribute_start,
+        vdc.character_start,
         vdc.update_address,
         static_cast<unsigned long long>(vdc.frame_version));
     ImGui::Separator();
 
-    const uint16_t cursor_offset = static_cast<uint16_t>(vdc.cursor_position - vdc.display_start);
-    const bool cursor_visible = cursor_offset < vdc.chars.size();
-    const int cursor_row = cursor_visible ? static_cast<int>(cursor_offset / vdc.columns) : -1;
-    const int cursor_col = cursor_visible ? static_cast<int>(cursor_offset % vdc.columns) : -1;
-
-    auto glyph = [](uint8_t value) {
-        if (value >= 0x20 && value <= 0x7E) {
-            return static_cast<char>(value);
-        }
-        return '.';
-    };
-
-    ImGui::BeginChild("vdc_text", ImVec2(0.0f, 0.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
-    if (state.vdc_font != nullptr) {
-        ImGui::PushFont(state.vdc_font);
+    const std::size_t cell_count = static_cast<std::size_t>(vdc.columns) * vdc.rows;
+    if (vdc.columns == 0 || vdc.rows == 0 || cell_count > vdc.chars.size()) {
+        ImGui::TextDisabled("Invalid VDC display dimensions.");
+        ImGui::End();
+        return;
+    }
+    const auto framebuffer = microlind::app::render_vdc_framebuffer(vdc, now);
+    std::string texture_error;
+    if (!update_rgba_texture(state.renderer, state.vdc_display, framebuffer, texture_error)) {
+        ImGui::TextDisabled("Could not render the VDC framebuffer: %s", texture_error.c_str());
+        ImGui::End();
+        return;
     }
 
-    for (int row = 0; row < vdc.rows; ++row) {
-        const std::size_t row_start = static_cast<std::size_t>(row) * vdc.columns;
-        std::string line;
-        line.reserve(vdc.columns);
-        for (int col = 0; col < vdc.columns; ++col) {
-            line.push_back(glyph(vdc.chars[row_start + static_cast<std::size_t>(col)]));
-        }
-
-        if (row == cursor_row && cursor_col >= 0 && cursor_col < static_cast<int>(line.size())) {
-            ImGui::TextUnformatted(line.data(), line.data() + cursor_col);
-            ImGui::SameLine(0.0f, 0.0f);
-            const char cursor_char[] = {line[static_cast<std::size_t>(cursor_col)], '\0'};
-            ImGui::TextColored(ImVec4(0.95f, 0.88f, 0.32f, 1.0f), "%s", cursor_char);
-            ImGui::SameLine(0.0f, 0.0f);
-            ImGui::TextUnformatted(line.data() + cursor_col + 1, line.data() + line.size());
-        } else {
-            ImGui::TextUnformatted(line.data(), line.data() + line.size());
-        }
+    ImGui::BeginChild("vdc_framebuffer", ImVec2(0.0f, 0.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
+    const ImVec2 available = ImGui::GetContentRegionAvail();
+    const float vertical_aspect = state.vdc_crt_aspect ? 2.0f : 1.0f;
+    float scale = static_cast<float>(std::clamp(state.vdc_scale_mode, 1, 4));
+    if (state.vdc_scale_mode == 0) {
+        const float horizontal_scale = available.x / static_cast<float>(framebuffer.width);
+        const float vertical_scale = available.y / (static_cast<float>(framebuffer.height) * vertical_aspect);
+        scale = std::max(0.1f, std::min(horizontal_scale, vertical_scale));
     }
-
-    if (state.vdc_font != nullptr) {
-        ImGui::PopFont();
-    }
+    const ImVec2 display_size{
+        static_cast<float>(framebuffer.width) * scale,
+        static_cast<float>(framebuffer.height) * scale * vertical_aspect};
+    const ImVec2 cursor = ImGui::GetCursorPos();
+    ImGui::SetCursorPos(ImVec2(
+        cursor.x + std::max(0.0f, (available.x - display_size.x) * 0.5f),
+        cursor.y + std::max(0.0f, (available.y - display_size.y) * 0.5f)));
+    ImGui::Image(
+        reinterpret_cast<ImTextureID>(state.vdc_display.texture),
+        display_size);
     ImGui::EndChild();
     ImGui::End();
 }

@@ -445,9 +445,11 @@ VdcSnapshot SimSession::vdc_snapshot() const {
     snapshot.attribute_start = vdc_dev_->attribute_start();
     snapshot.update_address = vdc_dev_->update_address();
     snapshot.cursor_position = vdc_dev_->cursor_position();
+    snapshot.character_start = vdc_dev_->character_start();
     snapshot.frame_version = vdc_dev_->frame_version();
     snapshot.chars = vdc_dev_->display_chars();
     snapshot.attrs = vdc_dev_->display_attrs();
+    snapshot.character_data = vdc_dev_->character_data();
     return snapshot;
 }
 

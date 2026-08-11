@@ -32,12 +32,10 @@ toward more complete VDC timing and display behavior.
   READY status on a physical pin, which does not change the CPU-visible model
   here.
 - Use `$F440/$F441` as the VDC I/O range.
-- Use `resources/Bescii-Mono.ttf` for the GUI text window.
-- Implement text mode first by reflecting display RAM characters into the GUI
-  window.
-- Store/register-snapshot attribute-related state, but do not let attributes
-  drive the first text-window rendering pass.
-- Do not implement exact character-cell pixel rendering yet.
+- Render text mode from display, attribute, and character-generator RAM into a
+  native-pixel framebuffer.
+- Keep the framebuffer compositor independent of SDL and ImGui so screenshots
+  and the live display use identical pixels.
 - Defer graphical mode. It is handled differently and is not needed for the
   current software target.
 - Ignore exact VDC timing in the first implementation. The status register can
@@ -139,20 +137,15 @@ Add a `Video` / `VDC Display` window:
   - dirty frame/version.
 - View menu toggle and session persistence.
 
-First rendering pass:
+Rendering pipeline:
 
-- render text cells directly with ImGui using `resources/Bescii-Mono.ttf`.
-- use 80 columns x 25 rows from the VDC snapshot.
-- reflect character bytes from display RAM directly to the window.
-- printable ASCII shown normally.
-- non-printable bytes shown as placeholder glyphs.
-- cursor indicated using the cursor position registers.
-
-Second rendering pass:
-
-- build an SDL texture/pixel buffer for an authentic character-cell display.
-- add foreground/background colors from VDC attributes.
-- add underline, reverse, flash, and alternate charset handling.
+- snapshot the 8 KiB character-generator bank selected by register `$1C`.
+- use 16 bytes per character and attribute bit 7 to select characters 256-511.
+- derive cell and displayed-pixel geometry from registers `$09`, `$16`, and `$17`.
+- compose text, RGBI attributes, reverse, underline, flash, and cursor pixels into
+  a native-resolution RGBA framebuffer.
+- upload the framebuffer to an SDL texture for the live display.
+- write the same framebuffer directly for PNG screenshots.
 
 ## Threading Model
 
@@ -251,14 +244,14 @@ GUI-adjacent tests:
 - Update `examples/hw.cfg` and `docs/hardware-config.md`.
 - Add SimSession VDC snapshot support.
 
-### Phase 3: GUI Text Window
+### Phase 3: GUI Display
 
 - Add `show_video` to GUI state/session persistence.
 - Add View menu entry.
 - Add `draw_vdc_display()`.
-- Load `resources/Bescii-Mono.ttf` as the display font.
-- Render 80x25 display RAM characters from the snapshot with that font.
-- Add simple cursor highlighting.
+- Snapshot display, attribute, and character-generator RAM.
+- Render 80x25 display RAM characters into a native-pixel framebuffer.
+- Render VDC cursor modes and scan lines.
 - Update `FEATURE.md`.
 
 ### Phase 4: Runtime Snapshot Efficiency
@@ -286,8 +279,8 @@ GUI-adjacent tests:
 - Audit against MOS 8563/8568 reference behavior.
 - Improve ready/hblank/vblank/update-ready timing.
 - Block fill registers are implemented; model block copy when firmware uses it.
-- Model display enabled and cursor modes.
-- Add character generator memory behavior.
+- Model display-enable blanking.
+- Extend character-generator addressing for modes using 32 bytes per character.
 - Add tests from real BIOS routines.
 
 ## Risks
@@ -298,8 +291,8 @@ GUI-adjacent tests:
   display snapshot and dirty version tracking.
 - VDC busy timing can affect firmware loops. Start simple, but isolate timing so
   it can be improved without changing the bus/device API.
-- Character encoding may not be ASCII. The first display should make unknown
-  bytes visible and later support the real microLind character set.
+- Firmware must populate character-generator RAM before text glyphs appear,
+  matching the VDC hardware rather than assuming a host character encoding.
 
 ## First Milestone
 

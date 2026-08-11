@@ -40,6 +40,7 @@ add_library(microlind-sim-app
     src/app/logic_validation.cpp
     src/app/session_file.cpp
     src/app/sim_session.cpp
+    src/app/vdc_render.cpp
     src/cli/disassembler.cpp
     src/cli/hardware_config.cpp
     src/cli/image_loader.cpp
@@ -79,6 +80,7 @@ if(BUILD_TESTING)
         tests/test_gui_runtime.cpp
         tests/test_microcycle.cpp
         tests/test_sim_session.cpp
+        tests/test_vdc_render.cpp
         src/gui/gui_runtime.cpp
     )
     target_include_directories(microlind-sim-tests PRIVATE src/gui)

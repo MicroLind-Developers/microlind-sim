@@ -338,7 +338,7 @@ TEST(VdcDeviceTest, BlockFillWritesWordCountBytesAndAdvancesUpdateAddress) {
     EXPECT_EQ(chars[1], 'X');
     EXPECT_EQ(chars[2], 'X');
     EXPECT_EQ(chars[3], 'X');
-    EXPECT_EQ(chars[4], ' ');
+    EXPECT_EQ(chars[4], 0x00);
     EXPECT_EQ(vdc.update_address(), 0x2004);
     EXPECT_EQ(vdc.frame_version(), version_before_fill + 1);
 }
@@ -395,6 +395,52 @@ TEST(VdcDeviceTest, DisplaySnapshotReflectsDisplayRam) {
     EXPECT_EQ(chars[0], 'H');
     EXPECT_EQ(chars[1], 'i');
     EXPECT_EQ(chars[2], ' ');
+}
+
+TEST(VdcDeviceTest, AttributeSnapshotReflectsAttributeRamAndVisibleRegisterChanges) {
+    microlind::devices::Vdc8568 vdc;
+
+    vdc.write8(0x00, 0x14);
+    vdc.write8(0x01, 0x20);
+    vdc.write8(0x00, 0x15);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x12);
+    vdc.write8(0x01, 0x20);
+    vdc.write8(0x00, 0x13);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x1F);
+    vdc.write8(0x01, 0xF9);
+    vdc.write8(0x01, 0x42);
+
+    const auto attrs = vdc.display_attrs();
+    EXPECT_EQ(attrs[0], 0xF9);
+    EXPECT_EQ(attrs[1], 0x42);
+
+    const uint64_t version = vdc.frame_version();
+    for (const uint8_t visible_register : {0x09, 0x0A, 0x0B, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1C, 0x1D}) {
+        vdc.write8(0x00, visible_register);
+        vdc.write8(0x01, 0x01);
+    }
+    EXPECT_EQ(vdc.frame_version(), version + 10);
+}
+
+TEST(VdcDeviceTest, CharacterSnapshotUsesCharacterBaseRegister) {
+    microlind::devices::Vdc8568 vdc;
+
+    vdc.write8(0x00, 0x1C);
+    vdc.write8(0x01, 0x40);
+    EXPECT_EQ(vdc.character_start(), 0x4000);
+
+    constexpr uint16_t glyph_address = 0x4000 + 65 * 16 + 3;
+    vdc.write8(0x00, 0x12);
+    vdc.write8(0x01, static_cast<uint8_t>(glyph_address >> 8));
+    vdc.write8(0x00, 0x13);
+    vdc.write8(0x01, static_cast<uint8_t>(glyph_address));
+    vdc.write8(0x00, 0x1F);
+    vdc.write8(0x01, 0x81);
+
+    const auto characters = vdc.character_data();
+    EXPECT_EQ(characters[65 * 16 + 3], 0x81);
 }
 
 TEST(CpuExecutionTest, HD6309InvalidOpcodeTrapsThroughFFF0Vector) {

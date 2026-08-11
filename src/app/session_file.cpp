@@ -443,6 +443,24 @@ std::optional<SessionDefinition> load_session_definition(const std::filesystem::
                 return std::nullopt;
             }
             session.gui.serial_rx_hex = *parsed;
+        } else if (cli::iequals(key, "VDC_SCALE")) {
+            if (cli::iequals(value, "fit")) {
+                session.gui.vdc_scale_mode = 0;
+            } else {
+                const auto parsed = cli::parse_number(value);
+                if (!parsed || *parsed < 1 || *parsed > 4) {
+                    error = "Bad VDC_SCALE at line " + std::to_string(lineno);
+                    return std::nullopt;
+                }
+                session.gui.vdc_scale_mode = static_cast<int>(*parsed);
+            }
+        } else if (cli::iequals(key, "VDC_CRT_ASPECT")) {
+            const auto parsed = parse_bool(value);
+            if (!parsed) {
+                error = "Bad VDC_CRT_ASPECT at line " + std::to_string(lineno);
+                return std::nullopt;
+            }
+            session.gui.vdc_crt_aspect = *parsed;
         } else if (cli::iequals(key, "OPERATIONS_PER_MINUTE") || cli::iequals(key, "STEPS_PER_FRAME")) {
             const auto parsed = cli::parse_number(value);
             if (!parsed) {
@@ -563,6 +581,8 @@ bool save_session_definition(const std::filesystem::path& path, const SessionDef
     file << "STACK_FOLLOW=" << (session.gui.stack_follow_pointer ? "true" : "false") << '\n';
     file << "SERIAL_HEX_VIEW=" << (session.gui.serial_hex_view ? "true" : "false") << '\n';
     file << "SERIAL_RX_HEX=" << (session.gui.serial_rx_hex ? "true" : "false") << '\n';
+    file << "VDC_SCALE=" << (session.gui.vdc_scale_mode == 0 ? "fit" : std::to_string(session.gui.vdc_scale_mode)) << '\n';
+    file << "VDC_CRT_ASPECT=" << (session.gui.vdc_crt_aspect ? "true" : "false") << '\n';
     file << "OPERATIONS_PER_MINUTE=" << session.gui.operations_per_minute << '\n';
     file << "RUN_MICRO_STEPS=" << (session.gui.run_micro_steps ? "true" : "false") << '\n';
     file << "TRUE_CLOCK_HZ=" << session.gui.true_clock_hz << '\n';

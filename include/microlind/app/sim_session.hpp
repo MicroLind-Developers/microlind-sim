@@ -148,6 +148,7 @@ struct VdcSnapshot {
     static constexpr uint8_t Columns = 80;
     static constexpr uint8_t Rows = 25;
     static constexpr std::size_t Cells = static_cast<std::size_t>(Columns) * Rows;
+    static constexpr std::size_t CharacterBytes = 8192;
 
     bool present{};
     uint16_t start{};
@@ -159,11 +160,13 @@ struct VdcSnapshot {
     uint16_t attribute_start{};
     uint16_t update_address{};
     uint16_t cursor_position{};
+    uint16_t character_start{};
     uint8_t columns{Columns};
     uint8_t rows{Rows};
     uint64_t frame_version{};
     std::array<uint8_t, Cells> chars{};
     std::array<uint8_t, Cells> attrs{};
+    std::array<uint8_t, CharacterBytes> character_data{};
 };
 
 struct LogicDecodeSnapshot {

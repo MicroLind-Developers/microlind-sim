@@ -29,6 +29,8 @@ struct GuiSessionState {
     bool stack_follow_pointer{true};
     bool serial_hex_view{};
     bool serial_rx_hex{};
+    int vdc_scale_mode{};
+    bool vdc_crt_aspect{true};
     int operations_per_minute{600};
     bool run_micro_steps{};
     uint32_t true_clock_hz{1000000};

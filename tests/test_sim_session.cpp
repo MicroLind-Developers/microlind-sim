@@ -476,6 +476,8 @@ TEST(SessionFileTest, LoadsPathsLayoutAndPersistedDebuggerState) {
         file << "STACK_FOLLOW=false\n";
         file << "SERIAL_HEX_VIEW=true\n";
         file << "SERIAL_RX_HEX=on\n";
+        file << "VDC_SCALE=3\n";
+        file << "VDC_CRT_ASPECT=false\n";
         file << "OPERATIONS_PER_MINUTE=250\n";
         file << "RUN_MICRO_STEPS=true\n";
         file << "TRUE_CLOCK_HZ=2000000\n";
@@ -523,6 +525,8 @@ TEST(SessionFileTest, LoadsPathsLayoutAndPersistedDebuggerState) {
     EXPECT_FALSE(loaded->gui.stack_follow_pointer);
     EXPECT_TRUE(loaded->gui.serial_hex_view);
     EXPECT_TRUE(loaded->gui.serial_rx_hex);
+    EXPECT_EQ(loaded->gui.vdc_scale_mode, 3);
+    EXPECT_FALSE(loaded->gui.vdc_crt_aspect);
     EXPECT_EQ(loaded->gui.operations_per_minute, 250);
     EXPECT_TRUE(loaded->gui.run_micro_steps);
     EXPECT_EQ(loaded->gui.true_clock_hz, 2000000u);
@@ -598,6 +602,8 @@ TEST(SessionFileTest, SavesAndReloadsPersistedDebuggerState) {
     session.gui.stack_follow_pointer = true;
     session.gui.serial_hex_view = true;
     session.gui.serial_rx_hex = false;
+    session.gui.vdc_scale_mode = 2;
+    session.gui.vdc_crt_aspect = false;
     session.gui.operations_per_minute = 123;
     session.gui.run_micro_steps = true;
     session.gui.true_clock_hz = 3000000;
@@ -634,6 +640,8 @@ TEST(SessionFileTest, SavesAndReloadsPersistedDebuggerState) {
     EXPECT_EQ(loaded->layout_ini, session.layout_ini);
     EXPECT_EQ(loaded->gui.memory_start, session.gui.memory_start);
     EXPECT_EQ(loaded->gui.stack_start, session.gui.stack_start);
+    EXPECT_EQ(loaded->gui.vdc_scale_mode, session.gui.vdc_scale_mode);
+    EXPECT_EQ(loaded->gui.vdc_crt_aspect, session.gui.vdc_crt_aspect);
     EXPECT_EQ(loaded->gui.operations_per_minute, session.gui.operations_per_minute);
     EXPECT_EQ(loaded->gui.run_micro_steps, session.gui.run_micro_steps);
     EXPECT_EQ(loaded->gui.true_clock_hz, session.gui.true_clock_hz);

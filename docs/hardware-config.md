@@ -161,8 +161,12 @@ Keys:
   64 KiB.
 
 The initial model ignores exact VDC timing and reports ready immediately. The
-GUI VDC Display window reflects the 80x25 text display RAM at a 25 Hz refresh
-rate using `resources/Bescii-Mono.ttf`.
+GUI VDC Display window snapshots the 80x25 text and attribute planes plus the
+8 KiB character-generator bank selected by register `$1C`. It composes those
+bytes into a native-pixel RGBA framebuffer at a 25 Hz snapshot refresh rate.
+The display panel offers fit-to-panel and 1x-4x zoom modes. CRT aspect mode
+doubles the displayed vertical pixel height while leaving framebuffer and PNG
+dimensions unchanged.
 
 ## Memory Mapper
 
