@@ -40,10 +40,11 @@ Reading the VDC status register returns a set of bit flags:
 | 4 | Update Ready | 1 = RAM update operation is complete |
 | 3 | Display Enabled | 1 = CRT display is active |
 
+
 ## VDC register map
 These are the regissters available in the VDC:
 | Register | Mnemonic | Bit 7 | Bit 6 | Bit 5 | Bit 4 | Bit 3 | Bit 2 | Bit 1 | Bit 0 | Description |
-|---|---|---|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|---|---|---|---|
 | $00 | H_TOT | HT7 | HT6 | HT5 | HT4 | HT3 | HT2 | HT1 | HT0 | Horizontal Total |
 | $01 | H_DISP | HD7 | HD6 | HD5 | HD4 | HD3 | HD2 | HD1 | HD0 | Horizontal Displayed |
 | $02 | HS_POS | HP7 | HP6 | HP5 | HP4 | HP3 | HP2 | HP1 | HP0 | Horizontal Sync Position |

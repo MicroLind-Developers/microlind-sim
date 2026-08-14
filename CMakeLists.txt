@@ -124,10 +124,7 @@ if(MICROLIND_BUILD_GUI)
             GIT_SHALLOW TRUE
             UPDATE_DISCONNECTED TRUE
         )
-        FetchContent_GetProperties(imgui)
-        if(NOT imgui_POPULATED)
-            FetchContent_Populate(imgui)
-        endif()
+        FetchContent_MakeAvailable(imgui)
         set(MICROLIND_RESOLVED_IMGUI_DIR "${imgui_SOURCE_DIR}")
     endif()
     if(NOT EXISTS "${MICROLIND_RESOLVED_IMGUI_DIR}/imgui.cpp")
@@ -155,10 +152,7 @@ if(MICROLIND_BUILD_GUI)
         GIT_SHALLOW TRUE
         UPDATE_DISCONNECTED TRUE
     )
-    FetchContent_GetProperties(portable_file_dialogs)
-    if(NOT portable_file_dialogs_POPULATED)
-        FetchContent_Populate(portable_file_dialogs)
-    endif()
+    FetchContent_MakeAvailable(portable_file_dialogs)
 
     set(MICROLIND_GUI_HELP_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/gui_help_document.cpp")
     add_custom_command(
