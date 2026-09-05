@@ -171,9 +171,11 @@ if(MICROLIND_BUILD_GUI)
         "${MICROLIND_GUI_HELP_SOURCE}"
         src/gui/gui_debugger_panels.cpp
         src/gui/gui_file_panels.cpp
+        src/gui/gui_logic_analyser.cpp
         src/gui/gui_memory_panels.cpp
         src/gui/gui_panels.cpp
         src/gui/gui_runtime.cpp
+        src/gui/gui_speaker.cpp
         src/gui/gui_state.cpp
         src/gui/main.cpp
     )

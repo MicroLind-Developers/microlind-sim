@@ -32,6 +32,55 @@ enum class RuntimeMode {
     Stopping,
 };
 
+enum class LogicSignal : uint8_t {
+    ClockE,
+    ClockQ,
+    ReadWrite,
+    BusAvailable,
+    BusStatus,
+    CpuIrq,
+    CpuFirq,
+    ViaIrq,
+    ViaTimer1Running,
+    ViaPb7,
+    ViaTimer1Flag,
+    ViaTimer2Flag,
+    ParallelSelected,
+    BusRead,
+    BusWrite,
+    Count,
+};
+
+constexpr std::size_t kLogicSignalCount = static_cast<std::size_t>(LogicSignal::Count);
+
+enum class LogicTriggerMode : uint8_t {
+    Rising,
+    Falling,
+    Either,
+};
+
+enum class LogicCaptureState : uint8_t {
+    Stopped,
+    WaitingForTrigger,
+    Capturing,
+};
+
+struct LogicAnalyserSample {
+    uint64_t cycle{};
+    uint16_t pc{};
+    std::array<bool, kLogicSignalCount> values{};
+};
+
+struct LogicAnalyserSnapshot {
+    LogicCaptureState state{LogicCaptureState::Stopped};
+    bool microcycle_resolution{};
+    std::optional<LogicSignal> trigger;
+    LogicTriggerMode trigger_mode{LogicTriggerMode::Rising};
+    std::vector<LogicAnalyserSample> samples;
+};
+
+[[nodiscard]] const char* logic_signal_name(LogicSignal signal);
+
 struct RuntimeStatusSnapshot {
     RuntimeMode mode{RuntimeMode::Paused};
     uint16_t pc{};
@@ -101,11 +150,19 @@ public:
     void set_cpu_mode(CpuMode mode);
     [[nodiscard]] RuntimeStatusSnapshot status_snapshot() const;
     [[nodiscard]] RuntimeDebuggerSnapshot debugger_snapshot() const;
+    [[nodiscard]] app::ParallelSnapshot parallel_snapshot() const;
     [[nodiscard]] app::VdcSnapshot vdc_snapshot() const;
     [[nodiscard]] std::vector<RuntimeDisassemblyLine> disassembly_snapshot(int line_count);
     [[nodiscard]] std::vector<RuntimeMemoryRow> memory_snapshot(uint16_t start, int rows);
     [[nodiscard]] std::vector<RuntimeStackRow> stack_snapshot(uint16_t start, int rows, int stack_register_index);
     [[nodiscard]] app::LogicDecodeSnapshot logic_snapshot(bool live_bus, uint16_t address, bool read);
+    [[nodiscard]] LogicAnalyserSnapshot logic_analyser_snapshot() const;
+    void start_logic_analyser(
+        bool microcycle_resolution,
+        std::optional<LogicSignal> trigger = std::nullopt,
+        LogicTriggerMode trigger_mode = LogicTriggerMode::Rising);
+    void stop_logic_analyser();
+    void clear_logic_analyser();
 
     void stop();
     [[nodiscard]] uint32_t operations_per_minute() const;
@@ -171,6 +228,7 @@ private:
     void drain_commands();
     void complete_pending_commands(bool ok);
     void true_run_worker();
+    void capture_logic_analyser_sample();
 
     app::SimSession session_;
     mutable std::mutex mutex_;
@@ -185,6 +243,8 @@ private:
     bool run_micro_steps_{false};
     uint64_t true_target_hz_{1000000};
     double true_effective_hz_{0.0};
+    LogicAnalyserSnapshot logic_analyser_;
+    std::optional<bool> logic_trigger_previous_;
 };
 
 } // namespace microlind::gui

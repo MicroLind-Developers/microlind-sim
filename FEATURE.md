@@ -68,7 +68,9 @@ The simulator GUI is an ImGui/SDL application that runs beside the CLI and provi
   the normal bus/device path.
 - CompactFlash panel showing image path, sector count, status/error registers, selected LBA, command state, and transfer progress.
 - Parallel I/O panel showing W65C22 port pins, output latches, data direction
-  registers, control registers, interrupt flags, and IRQ state.
+  registers, Timer 1 state, control registers, interrupt flags, and IRQ state.
+- Audible and visual PC-speaker simulation connected to W65C22 PB7, including
+  Timer 1 one-shot/free-run output, mute, and volume controls.
 - VDC Display panel composing the MOS 8563/8568 text and attribute RAM through
   its character-generator RAM into a native-pixel framebuffer at 25 Hz, with
   fit-to-panel, integer zoom, and CRT pixel-aspect display options.

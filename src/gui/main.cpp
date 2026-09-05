@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <string>
 
 #include <SDL.h>
 #include "imgui.h"
@@ -9,12 +10,14 @@
 #include "imgui_impl_sdlrenderer2.h"
 
 #include "gui_panels.hpp"
+#include "gui_speaker.hpp"
 #include "gui_state.hpp"
 #include "gui_thread_names.hpp"
 
 namespace {
 
 using microlind::gui::GuiState;
+using microlind::gui::PcSpeakerAudio;
 using microlind::gui::draw_workbench;
 using microlind::gui::handle_shortcut;
 using microlind::gui::load_png_surface;
@@ -37,6 +40,52 @@ SDL_Color clear_color(microlind::app::GuiTheme theme) {
     case microlind::app::GuiTheme::Light: return SDL_Color{240, 240, 240, 255};
     }
     return SDL_Color{20, 22, 24, 255};
+}
+
+bool execution_active(microlind::gui::RuntimeMode mode) {
+    using microlind::gui::RuntimeMode;
+    switch (mode) {
+    case RuntimeMode::DebugRun:
+    case RuntimeMode::DebugMicroRun:
+    case RuntimeMode::RunUntilAddress:
+    case RuntimeMode::RunUntilReturn:
+    case RuntimeMode::StepOverPending:
+    case RuntimeMode::TrueRun:
+        return true;
+    default:
+        return false;
+    }
+}
+
+void update_pc_speaker(GuiState& state, PcSpeakerAudio& audio, double elapsed_seconds) {
+    const auto status = state.runtime.status_snapshot();
+    const auto parallel = state.runtime.parallel_snapshot();
+
+    double frequency_hz = 0.0;
+    const bool running = execution_active(status.mode);
+    const bool timer_square_wave =
+        parallel.present && parallel.pb7_timer_output_enabled && parallel.timer1_free_running &&
+        parallel.timer1_running && (parallel.ddr_b & 0x80) != 0;
+
+    if (running && status.mode == microlind::gui::RuntimeMode::TrueRun && timer_square_wave) {
+        const double half_period_cycles = static_cast<double>(parallel.timer1_latch) + 1.0;
+        frequency_hz = static_cast<double>(status.true_target_hz) / (2.0 * half_period_cycles);
+    } else if (
+        running && elapsed_seconds > 0.0 && status.total_cycles >= state.speaker_last_cycles &&
+        parallel.pb7_transition_count >= state.speaker_last_transitions) {
+        const uint64_t transitions = parallel.pb7_transition_count - state.speaker_last_transitions;
+        frequency_hz = static_cast<double>(transitions) / (2.0 * elapsed_seconds);
+    }
+
+    state.speaker_frequency_hz = frequency_hz;
+    state.speaker_signal_active = running && frequency_hz >= 20.0;
+    state.speaker_last_cycles = status.total_cycles;
+    state.speaker_last_transitions = parallel.pb7_transition_count;
+
+    audio.set_tone(
+        frequency_hz,
+        state.speaker_volume,
+        state.speaker_audio_available && state.speaker_signal_active && !state.speaker_muted);
 }
 
 void load_gui_fonts(ImGuiIO& io) {
@@ -118,6 +167,17 @@ int run_gui() {
 
     GuiState state;
     state.renderer = renderer;
+    PcSpeakerAudio speaker_audio;
+    const bool audio_subsystem_initialized = SDL_InitSubSystem(SDL_INIT_AUDIO) == 0;
+    if (audio_subsystem_initialized) {
+        std::string error;
+        state.speaker_audio_available = speaker_audio.start(error);
+        if (!state.speaker_audio_available) {
+            state.runtime.add_log("PC speaker audio unavailable: " + error);
+        }
+    } else {
+        state.runtime.add_log(std::string("PC speaker audio unavailable: ") + SDL_GetError());
+    }
     auto applied_theme = state.theme;
     apply_gui_theme(applied_theme);
     state.about_logo = load_png_texture(renderer, "resources/mlsim_logo.png");
@@ -178,6 +238,8 @@ int run_gui() {
             apply_gui_theme(applied_theme);
         }
 
+        update_pc_speaker(state, speaker_audio, elapsed_seconds);
+
         ImGui_ImplSDLRenderer2_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
@@ -201,6 +263,10 @@ int run_gui() {
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
+    speaker_audio.shutdown();
+    if (audio_subsystem_initialized) {
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+    }
 
     if (state.about_logo.texture != nullptr) {
         SDL_DestroyTexture(state.about_logo.texture);

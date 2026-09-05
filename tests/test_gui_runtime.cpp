@@ -11,6 +11,9 @@
 namespace {
 
 using microlind::gui::GuiRuntime;
+using microlind::gui::LogicCaptureState;
+using microlind::gui::LogicSignal;
+using microlind::gui::LogicTriggerMode;
 using microlind::gui::RuntimeMode;
 
 TEST(GuiRuntimeTest, TrueRunWorkerAdvancesCyclesAndStopsCleanly) {
@@ -155,6 +158,45 @@ TEST(GuiRuntimeTest, OwnsRunPreferences) {
     runtime.start_debug_run(false);
     EXPECT_FALSE(runtime.run_micro_steps());
     EXPECT_EQ(RuntimeMode::DebugRun, runtime.status_snapshot().mode);
+}
+
+TEST(GuiRuntimeTest, LogicAnalyserCapturesAndClearsInstructionSamples) {
+    GuiRuntime runtime(microlind::CpuMode::HD6309);
+    runtime.write_memory(0x0000, 0x12); // NOP
+    runtime.write_memory(0x0001, 0x12); // NOP
+
+    runtime.start_logic_analyser(false);
+    runtime.run_instructions(2);
+
+    const auto capture = runtime.logic_analyser_snapshot();
+    EXPECT_EQ(LogicCaptureState::Capturing, capture.state);
+    ASSERT_EQ(2u, capture.samples.size());
+    EXPECT_LT(capture.samples[0].cycle, capture.samples[1].cycle);
+
+    runtime.stop_logic_analyser();
+    EXPECT_EQ(LogicCaptureState::Stopped, runtime.logic_analyser_snapshot().state);
+    runtime.clear_logic_analyser();
+    EXPECT_TRUE(runtime.logic_analyser_snapshot().samples.empty());
+}
+
+TEST(GuiRuntimeTest, LogicAnalyserWaitsForAndCapturesTriggerEdge) {
+    GuiRuntime runtime(microlind::CpuMode::HD6309);
+    ASSERT_TRUE(runtime.load_hardware_config("tests/data/hw_test.cfg"));
+    runtime.write_memory(0x0000, 0x12); // NOP
+    runtime.write_memory(0x0001, 0x12); // NOP
+
+    runtime.start_logic_analyser(false, LogicSignal::ViaTimer1Running, LogicTriggerMode::Rising);
+    runtime.run_instructions(1); // Establish the low trigger level.
+    EXPECT_EQ(LogicCaptureState::WaitingForTrigger, runtime.logic_analyser_snapshot().state);
+
+    runtime.write_memory(0xF424, 0x00);
+    runtime.write_memory(0xF425, 0x10); // Start Timer 1.
+    runtime.run_instructions(1);
+
+    const auto capture = runtime.logic_analyser_snapshot();
+    EXPECT_EQ(LogicCaptureState::Capturing, capture.state);
+    ASSERT_FALSE(capture.samples.empty());
+    EXPECT_TRUE(capture.samples.front().values[static_cast<std::size_t>(LogicSignal::ViaTimer1Running)]);
 }
 
 } // namespace

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -142,6 +143,14 @@ struct ParallelSnapshot {
     uint8_t ifr{};
     uint8_t ier{};
     bool irq_asserted{};
+    uint16_t timer1_counter{};
+    uint16_t timer1_latch{};
+    bool timer1_running{};
+    bool timer1_free_running{};
+    bool pb7_timer_output_enabled{};
+    bool pb7_timer_level{};
+    bool pb7_pin_level{};
+    uint64_t pb7_transition_count{};
 };
 
 struct VdcSnapshot {
@@ -213,11 +222,13 @@ public:
     void reset();
     CpuTickResult step_instruction();
     SimulatorMicrocycleResult step_microcycle();
-    RunResult run_instructions(uint32_t count);
-    RunResult run_microcycles(uint32_t count);
-    RealtimeRunResult run_realtime_cycles(uint64_t cycle_budget);
-    RunResult run_until_address(uint16_t address, uint32_t max_instructions);
-    RunResult run_until_return(uint32_t max_instructions);
+    using StepObserver = std::function<void()>;
+
+    RunResult run_instructions(uint32_t count, StepObserver after_step = {});
+    RunResult run_microcycles(uint32_t count, StepObserver after_step = {});
+    RealtimeRunResult run_realtime_cycles(uint64_t cycle_budget, StepObserver after_step = {});
+    RunResult run_until_address(uint16_t address, uint32_t max_instructions, StepObserver after_step = {});
+    RunResult run_until_return(uint32_t max_instructions, StepObserver after_step = {});
     void tick_cycles(uint64_t cycles);
 
     [[nodiscard]] std::optional<uint16_t> step_over_target();

@@ -503,10 +503,9 @@ void draw_compact_flash(GuiState& state) {
 }
 
 void draw_parallel(GuiState& state) {
-    set_next_window_defaults(480.0f, 706.0f, 456.0f, 180.0f);
+    set_next_window_defaults(480.0f, 706.0f, 456.0f, 390.0f);
     ImGui::Begin("Parallel I/O", &state.show_parallel);
-    const auto snapshot = state.runtime.debugger_snapshot();
-    const auto& parallel = snapshot.parallel;
+    const auto parallel = state.runtime.parallel_snapshot();
     if (!parallel.present) {
         ImGui::TextDisabled("No W65C22 parallel device configured.");
         ImGui::End();
@@ -563,6 +562,58 @@ void draw_parallel(GuiState& state) {
         row("IER", parallel.ier);
 
         ImGui::EndTable();
+    }
+
+    ImGui::SeparatorText("PC speaker (PB7)");
+    const ImU32 speaker_color = state.speaker_signal_active && !state.speaker_muted
+        ? IM_COL32(64, 200, 112, 255)
+        : ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    const ImVec2 top_left = ImGui::GetCursorScreenPos();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(
+        ImVec2(top_left.x, top_left.y + 17.0f),
+        ImVec2(top_left.x + 12.0f, top_left.y + 35.0f),
+        speaker_color,
+        2.0f);
+    const ImVec2 cone[] = {
+        ImVec2(top_left.x + 12.0f, top_left.y + 17.0f),
+        ImVec2(top_left.x + 31.0f, top_left.y + 7.0f),
+        ImVec2(top_left.x + 31.0f, top_left.y + 45.0f),
+        ImVec2(top_left.x + 12.0f, top_left.y + 35.0f),
+    };
+    draw->AddConvexPolyFilled(cone, 4, speaker_color);
+    if (state.speaker_signal_active && !state.speaker_muted) {
+        draw->PathArcTo(ImVec2(top_left.x + 31.0f, top_left.y + 26.0f), 13.0f, -0.8f, 0.8f, 12);
+        draw->PathStroke(speaker_color, 0, 2.0f);
+        draw->PathArcTo(ImVec2(top_left.x + 31.0f, top_left.y + 26.0f), 22.0f, -0.8f, 0.8f, 16);
+        draw->PathStroke(speaker_color, 0, 2.0f);
+    }
+    ImGui::Dummy(ImVec2(62.0f, 52.0f));
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    ImGui::Text("PB7 pin: %s", parallel.pb7_pin_level ? "HIGH" : "LOW");
+    if (parallel.pb7_timer_output_enabled) {
+        ImGui::Text(
+            "Source: Timer 1 (%s)%s",
+            parallel.timer1_free_running ? "square wave" : "one-shot",
+            (parallel.ddr_b & 0x80) != 0 ? "" : ", DDRB7=input");
+    } else {
+        ImGui::Text("Source: ORB7%s", (parallel.ddr_b & 0x80) != 0 ? "" : ", DDRB7=input");
+    }
+    if (state.speaker_frequency_hz > 0.0) {
+        ImGui::Text("Output: %.1f Hz", state.speaker_frequency_hz);
+    } else {
+        ImGui::TextDisabled("Output: idle");
+    }
+    ImGui::EndGroup();
+
+    ImGui::Text("T1 counter: %04X    T1 latch: %04X", parallel.timer1_counter, parallel.timer1_latch);
+    ImGui::Checkbox("Mute PC speaker", &state.speaker_muted);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(120.0f);
+    ImGui::SliderFloat("Volume", &state.speaker_volume, 0.0f, 0.25f, "%.2f");
+    if (!state.speaker_audio_available) {
+        ImGui::TextDisabled("SDL audio output is unavailable; PB7 visualization remains active.");
     }
 
     ImGui::End();

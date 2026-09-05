@@ -17,6 +17,7 @@ void draw_mapper(GuiState& state);
 void draw_pld_logic(GuiState& state);
 void draw_compact_flash(GuiState& state);
 void draw_parallel(GuiState& state);
+void draw_logic_analyser(GuiState& state);
 void draw_vdc_display(GuiState& state);
 void draw_trace(GuiState& state);
 void draw_serial(GuiState& state);

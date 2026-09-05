@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <deque>
 #include <iomanip>
 #include <memory>
@@ -19,6 +20,11 @@ namespace {
 constexpr double kMaxTrueRunCatchupSeconds = 0.02;
 constexpr double kMaxTrueRunWorkSeconds = 0.004;
 constexpr uint64_t kMaxTrueRunBatchCycles = 4096;
+constexpr std::size_t kLogicAnalyserCapacity = 8192;
+
+constexpr std::size_t logic_signal_index(LogicSignal signal) {
+    return static_cast<std::size_t>(signal);
+}
 
 bool is_debug_run_mode(RuntimeMode mode) {
     switch (mode) {
@@ -55,6 +61,28 @@ std::string instruction_bytes(Bus& bus, uint16_t pc, uint8_t length) {
 }
 
 } // namespace
+
+const char* logic_signal_name(LogicSignal signal) {
+    switch (signal) {
+    case LogicSignal::ClockE: return "Clock E";
+    case LogicSignal::ClockQ: return "Clock Q";
+    case LogicSignal::ReadWrite: return "R/W";
+    case LogicSignal::BusAvailable: return "BA";
+    case LogicSignal::BusStatus: return "BS";
+    case LogicSignal::CpuIrq: return "CPU IRQ";
+    case LogicSignal::CpuFirq: return "CPU FIRQ";
+    case LogicSignal::ViaIrq: return "VIA IRQ";
+    case LogicSignal::ViaTimer1Running: return "VIA T1 running";
+    case LogicSignal::ViaPb7: return "VIA PB7";
+    case LogicSignal::ViaTimer1Flag: return "VIA IFR6 (T1)";
+    case LogicSignal::ViaTimer2Flag: return "VIA IFR5 (T2)";
+    case LogicSignal::ParallelSelected: return "VIA selected";
+    case LogicSignal::BusRead: return "Bus read";
+    case LogicSignal::BusWrite: return "Bus write";
+    case LogicSignal::Count: break;
+    }
+    return "Unknown";
+}
 
 GuiRuntime::GuiRuntime(CpuMode mode) : session_(mode) {}
 
@@ -142,6 +170,11 @@ RuntimeDebuggerSnapshot GuiRuntime::debugger_snapshot() const {
     };
 }
 
+app::ParallelSnapshot GuiRuntime::parallel_snapshot() const {
+    std::lock_guard lock(mutex_);
+    return session_.parallel_snapshot();
+}
+
 app::VdcSnapshot GuiRuntime::vdc_snapshot() const {
     std::lock_guard lock(mutex_);
     return session_.vdc_snapshot();
@@ -224,6 +257,87 @@ app::LogicDecodeSnapshot GuiRuntime::logic_snapshot(bool live_bus, uint16_t addr
         return session_.logic_decode_snapshot(session_.simulator().bus().last_signals());
     }
     return session_.logic_decode_snapshot(address, read);
+}
+
+LogicAnalyserSnapshot GuiRuntime::logic_analyser_snapshot() const {
+    std::lock_guard lock(mutex_);
+    return logic_analyser_;
+}
+
+void GuiRuntime::start_logic_analyser(
+    bool microcycle_resolution,
+    std::optional<LogicSignal> trigger,
+    LogicTriggerMode trigger_mode) {
+    std::lock_guard lock(mutex_);
+    logic_analyser_.samples.clear();
+    logic_analyser_.microcycle_resolution = microcycle_resolution;
+    logic_analyser_.trigger = trigger;
+    logic_analyser_.trigger_mode = trigger_mode;
+    logic_analyser_.state = trigger ? LogicCaptureState::WaitingForTrigger : LogicCaptureState::Capturing;
+    logic_trigger_previous_.reset();
+}
+
+void GuiRuntime::stop_logic_analyser() {
+    std::lock_guard lock(mutex_);
+    logic_analyser_.state = LogicCaptureState::Stopped;
+    logic_trigger_previous_.reset();
+}
+
+void GuiRuntime::clear_logic_analyser() {
+    std::lock_guard lock(mutex_);
+    logic_analyser_.samples.clear();
+    logic_trigger_previous_.reset();
+}
+
+void GuiRuntime::capture_logic_analyser_sample() {
+    if (logic_analyser_.state == LogicCaptureState::Stopped) return;
+
+    const auto& sim = session_.simulator();
+    const auto& bus = sim.bus();
+    const auto& signals = bus.last_signals();
+    const auto parallel = session_.parallel_snapshot();
+
+    LogicAnalyserSample sample;
+    sample.cycle = sim.clock().total_cycles();
+    sample.pc = sim.cpu().regs().pc;
+    auto& values = sample.values;
+    values[logic_signal_index(LogicSignal::ClockE)] = signals.e;
+    values[logic_signal_index(LogicSignal::ClockQ)] = signals.q;
+    values[logic_signal_index(LogicSignal::ReadWrite)] = signals.rw;
+    values[logic_signal_index(LogicSignal::BusAvailable)] = signals.ba;
+    values[logic_signal_index(LogicSignal::BusStatus)] = signals.bs;
+    values[logic_signal_index(LogicSignal::CpuIrq)] = sim.cpu().irq_line_asserted();
+    values[logic_signal_index(LogicSignal::CpuFirq)] = sim.cpu().firq_line_asserted();
+    values[logic_signal_index(LogicSignal::ViaIrq)] = parallel.irq_asserted;
+    values[logic_signal_index(LogicSignal::ViaTimer1Running)] = parallel.timer1_running;
+    values[logic_signal_index(LogicSignal::ViaPb7)] = parallel.pb7_pin_level;
+    values[logic_signal_index(LogicSignal::ViaTimer1Flag)] = (parallel.ifr & 0x40) != 0;
+    values[logic_signal_index(LogicSignal::ViaTimer2Flag)] = (parallel.ifr & 0x20) != 0;
+    values[logic_signal_index(LogicSignal::ParallelSelected)] = signals.mapped_select == BusDeviceSelect::Parallel;
+    values[logic_signal_index(LogicSignal::BusRead)] = signals.apply_read;
+    values[logic_signal_index(LogicSignal::BusWrite)] = signals.apply_write;
+
+    if (logic_analyser_.state == LogicCaptureState::WaitingForTrigger) {
+        const bool current = values[logic_signal_index(*logic_analyser_.trigger)];
+        bool triggered = false;
+        if (logic_trigger_previous_) {
+            switch (logic_analyser_.trigger_mode) {
+            case LogicTriggerMode::Rising: triggered = !*logic_trigger_previous_ && current; break;
+            case LogicTriggerMode::Falling: triggered = *logic_trigger_previous_ && !current; break;
+            case LogicTriggerMode::Either: triggered = *logic_trigger_previous_ != current; break;
+            }
+        }
+        logic_trigger_previous_ = current;
+        if (!triggered) return;
+        logic_analyser_.state = LogicCaptureState::Capturing;
+    }
+
+    if (logic_analyser_.samples.size() == kLogicAnalyserCapacity) {
+        logic_analyser_.samples.erase(
+            logic_analyser_.samples.begin(),
+            logic_analyser_.samples.begin() + static_cast<std::ptrdiff_t>(kLogicAnalyserCapacity / 4));
+    }
+    logic_analyser_.samples.push_back(sample);
 }
 
 void GuiRuntime::stop() {
@@ -367,13 +481,17 @@ app::RunResult GuiRuntime::run_debug_batch(uint32_t max_operations) {
     app::RunResult result;
     switch (mode_) {
     case RuntimeMode::DebugRun:
-        result = session_.run_instructions(max_operations);
+        if (logic_analyser_.state != LogicCaptureState::Stopped && logic_analyser_.microcycle_resolution) {
+            result = session_.run_microcycles(max_operations, [this] { capture_logic_analyser_sample(); });
+        } else {
+            result = session_.run_instructions(max_operations, [this] { capture_logic_analyser_sample(); });
+        }
         if (result.hit_breakpoint || result.hit_watchpoint || max_operations == 0) {
             mode_ = RuntimeMode::Paused;
         }
         break;
     case RuntimeMode::DebugMicroRun:
-        result = session_.run_microcycles(max_operations);
+        result = session_.run_microcycles(max_operations, [this] { capture_logic_analyser_sample(); });
         if (result.hit_breakpoint || result.hit_watchpoint || max_operations == 0) {
             mode_ = RuntimeMode::Paused;
         }
@@ -381,7 +499,8 @@ app::RunResult GuiRuntime::run_debug_batch(uint32_t max_operations) {
     case RuntimeMode::RunUntilAddress:
     case RuntimeMode::RunUntilReturn:
     case RuntimeMode::StepOverPending:
-        result = session_.run_until_address(debug_target_address_, max_operations);
+        result = session_.run_until_address(
+            debug_target_address_, max_operations, [this] { capture_logic_analyser_sample(); });
         if (result.hit_target || result.hit_breakpoint || result.hit_watchpoint || max_operations == 0) {
             mode_ = RuntimeMode::Paused;
         }
@@ -588,7 +707,7 @@ app::RunResult GuiRuntime::run_instructions(uint32_t count) {
     stop_true_run();
     std::lock_guard lock(mutex_);
     mode_ = RuntimeMode::DebugRun;
-    auto result = session_.run_instructions(count);
+    auto result = session_.run_instructions(count, [this] { capture_logic_analyser_sample(); });
     if (result.hit_breakpoint || result.hit_watchpoint || count == 0) {
         mode_ = RuntimeMode::Paused;
     }
@@ -599,7 +718,7 @@ app::RunResult GuiRuntime::run_microcycles(uint32_t count) {
     stop_true_run();
     std::lock_guard lock(mutex_);
     mode_ = RuntimeMode::DebugMicroRun;
-    auto result = session_.run_microcycles(count);
+    auto result = session_.run_microcycles(count, [this] { capture_logic_analyser_sample(); });
     if (result.hit_breakpoint || result.hit_watchpoint || count == 0) {
         mode_ = RuntimeMode::Paused;
     }
@@ -609,14 +728,14 @@ app::RunResult GuiRuntime::run_microcycles(uint32_t count) {
 app::RealtimeRunResult GuiRuntime::run_realtime_cycles(uint64_t cycle_budget) {
     std::lock_guard lock(mutex_);
     mode_ = RuntimeMode::TrueRun;
-    return session_.run_realtime_cycles(cycle_budget);
+    return session_.run_realtime_cycles(cycle_budget, [this] { capture_logic_analyser_sample(); });
 }
 
 app::RunResult GuiRuntime::run_until_address(uint16_t address, uint32_t max_instructions) {
     stop_true_run();
     std::lock_guard lock(mutex_);
     mode_ = RuntimeMode::RunUntilAddress;
-    auto result = session_.run_until_address(address, max_instructions);
+    auto result = session_.run_until_address(address, max_instructions, [this] { capture_logic_analyser_sample(); });
     if (result.hit_target || result.hit_breakpoint || result.hit_watchpoint || max_instructions == 0) {
         mode_ = RuntimeMode::Paused;
     }
@@ -627,7 +746,7 @@ app::RunResult GuiRuntime::run_until_return(uint32_t max_instructions) {
     stop_true_run();
     std::lock_guard lock(mutex_);
     mode_ = RuntimeMode::RunUntilReturn;
-    auto result = session_.run_until_return(max_instructions);
+    auto result = session_.run_until_return(max_instructions, [this] { capture_logic_analyser_sample(); });
     if (result.hit_target || result.hit_breakpoint || result.hit_watchpoint || max_instructions == 0) {
         mode_ = RuntimeMode::Paused;
     }
@@ -639,6 +758,7 @@ CpuTickResult GuiRuntime::step_instruction() {
     std::lock_guard lock(mutex_);
     mode_ = RuntimeMode::StepPending;
     auto result = session_.step_instruction();
+    capture_logic_analyser_sample();
     mode_ = RuntimeMode::Paused;
     return result;
 }
@@ -648,6 +768,7 @@ SimulatorMicrocycleResult GuiRuntime::step_microcycle() {
     std::lock_guard lock(mutex_);
     mode_ = RuntimeMode::MicroStepPending;
     auto result = session_.step_microcycle();
+    capture_logic_analyser_sample();
     mode_ = RuntimeMode::Paused;
     return result;
 }
@@ -766,7 +887,7 @@ void GuiRuntime::true_run_worker() {
             app::RealtimeRunResult result;
             {
                 std::lock_guard lock(mutex_);
-                result = session_.run_realtime_cycles(cycles_to_run);
+                result = session_.run_realtime_cycles(cycles_to_run, [this] { capture_logic_analyser_sample(); });
             }
             drain_commands();
 

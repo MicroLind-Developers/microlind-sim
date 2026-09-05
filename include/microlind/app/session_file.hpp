@@ -46,6 +46,7 @@ struct GuiSessionState {
     bool show_pld_logic{true};
     bool show_compact_flash{true};
     bool show_parallel{true};
+    bool show_logic_analyser{true};
     bool show_video{true};
     bool show_breakpoints{true};
     bool show_watchpoints{true};

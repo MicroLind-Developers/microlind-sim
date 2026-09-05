@@ -39,8 +39,25 @@ uint8_t W65C22::read_port_a() const {
     return static_cast<uint8_t>((output_a_ & ddr_a_) | (input_a_ & ~ddr_a_));
 }
 
+uint8_t W65C22::effective_output_b() const {
+    if ((acr_ & 0x80) == 0) return output_b_;
+    return static_cast<uint8_t>((output_b_ & 0x7F) | (timer1_pb7_level_ ? 0x80 : 0x00));
+}
+
 uint8_t W65C22::read_port_b() const {
-    return static_cast<uint8_t>((output_b_ & ddr_b_) | (input_b_ & ~ddr_b_));
+    return static_cast<uint8_t>((effective_output_b() & ddr_b_) | (input_b_ & ~ddr_b_));
+}
+
+void W65C22::set_port_b_input(uint8_t value) {
+    const bool previous_pb7 = pb7_pin_level();
+    input_b_ = value;
+    record_pb7_transition(previous_pb7);
+}
+
+void W65C22::record_pb7_transition(bool previous_level) {
+    if (previous_level != pb7_pin_level()) {
+        ++pb7_transition_count_;
+    }
 }
 
 uint8_t W65C22::ifr() const {
@@ -105,35 +122,48 @@ uint8_t W65C22::peek8(uint16_t offset) {
 void W65C22::write8(uint16_t offset, uint8_t value) {
     const uint16_t reg = static_cast<uint16_t>(offset & 0x0F);
     switch (reg) {
-    case ORB_IRB:
+    case ORB_IRB: {
+        const bool previous_pb7 = pb7_pin_level();
         output_b_ = value;
         clear_ifr(0x18);
+        record_pb7_transition(previous_pb7);
         break;
+    }
     case ORA_IRA:
     case ORA_NO_HANDSHAKE:
         output_a_ = value;
         clear_ifr(0x03);
         break;
-    case DDRB:
+    case DDRB: {
+        const bool previous_pb7 = pb7_pin_level();
         ddr_b_ = value;
+        record_pb7_transition(previous_pb7);
         break;
+    }
     case DDRA:
         ddr_a_ = value;
         break;
     case T1CL:
         timer1_latch_ = static_cast<uint16_t>((timer1_latch_ & 0xFF00) | value);
         break;
-    case T1CH:
+    case T1CH: {
+        const bool previous_pb7 = pb7_pin_level();
         timer1_latch_ = static_cast<uint16_t>((static_cast<uint16_t>(value) << 8) | (timer1_latch_ & 0x00FF));
         timer1_counter_ = timer1_latch_;
         timer1_running_ = true;
+        if ((acr_ & 0x80) != 0) {
+            timer1_pb7_level_ = false;
+        }
         clear_ifr(IfrTimer1);
+        record_pb7_transition(previous_pb7);
         break;
+    }
     case T1LL:
         timer1_latch_ = static_cast<uint16_t>((timer1_latch_ & 0xFF00) | value);
         break;
     case T1LH:
         timer1_latch_ = static_cast<uint16_t>((static_cast<uint16_t>(value) << 8) | (timer1_latch_ & 0x00FF));
+        clear_ifr(IfrTimer1);
         break;
     case T2CL:
         timer2_latch_ = static_cast<uint16_t>((timer2_latch_ & 0xFF00) | value);
@@ -148,9 +178,12 @@ void W65C22::write8(uint16_t offset, uint8_t value) {
         shift_ = value;
         clear_ifr(0x04);
         break;
-    case ACR:
+    case ACR: {
+        const bool previous_pb7 = pb7_pin_level();
         acr_ = value;
+        record_pb7_transition(previous_pb7);
         break;
+    }
     case PCR:
         pcr_ = value;
         break;
@@ -206,7 +239,12 @@ void W65C22::tick_timer(uint32_t cycles, uint16_t& counter, uint16_t latch, uint
             return;
         }
         remaining -= static_cast<uint32_t>(counter) + 1u;
+        const bool previous_pb7 = pb7_pin_level();
         set_ifr(flag);
+        if (flag == IfrTimer1 && (acr_ & 0x80) != 0) {
+            timer1_pb7_level_ = continuous ? !timer1_pb7_level_ : true;
+        }
+        record_pb7_transition(previous_pb7);
         if (continuous) {
             counter = latch;
         } else {

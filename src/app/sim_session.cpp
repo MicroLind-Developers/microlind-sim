@@ -243,7 +243,7 @@ SimulatorMicrocycleResult SimSession::step_microcycle() {
     return result;
 }
 
-RunResult SimSession::run_instructions(uint32_t count) {
+RunResult SimSession::run_instructions(uint32_t count, StepObserver after_step) {
     RunResult result;
     for (uint32_t i = 0; i < count; ++i) {
         if (check_breakpoint(result.executed, result)) {
@@ -251,6 +251,7 @@ RunResult SimSession::run_instructions(uint32_t count) {
         }
         step_instruction();
         ++result.executed;
+        if (after_step) after_step();
         if (check_watchpoints(result)) {
             return result;
         }
@@ -261,7 +262,7 @@ RunResult SimSession::run_instructions(uint32_t count) {
     return result;
 }
 
-RunResult SimSession::run_microcycles(uint32_t count) {
+RunResult SimSession::run_microcycles(uint32_t count, StepObserver after_step) {
     RunResult result;
     for (uint32_t i = 0; i < count; ++i) {
         if (!sim_.has_pending_microcycles() && check_breakpoint(result.executed, result)) {
@@ -270,6 +271,7 @@ RunResult SimSession::run_microcycles(uint32_t count) {
 
         const auto step = step_microcycle();
         ++result.executed;
+        if (after_step) after_step();
         if (check_watchpoints(result)) {
             return result;
         }
@@ -280,7 +282,7 @@ RunResult SimSession::run_microcycles(uint32_t count) {
     return result;
 }
 
-RealtimeRunResult SimSession::run_realtime_cycles(uint64_t cycle_budget) {
+RealtimeRunResult SimSession::run_realtime_cycles(uint64_t cycle_budget, StepObserver after_step) {
     RealtimeRunResult result;
     if (cycle_budget == 0) return result;
 
@@ -290,6 +292,7 @@ RealtimeRunResult SimSession::run_realtime_cycles(uint64_t cycle_budget) {
     while (result.cycles < cycle_budget) {
         const CpuTickResult tick = sim_.tick();
         ++result.instructions;
+        if (after_step) after_step();
         if (tick.cycles == 0) break;
         result.cycles += tick.cycles;
     }
@@ -298,7 +301,7 @@ RealtimeRunResult SimSession::run_realtime_cycles(uint64_t cycle_budget) {
     return result;
 }
 
-RunResult SimSession::run_until_address(uint16_t address, uint32_t max_instructions) {
+RunResult SimSession::run_until_address(uint16_t address, uint32_t max_instructions, StepObserver after_step) {
     RunResult result;
     for (uint32_t i = 0; i < max_instructions; ++i) {
         if (check_target(address, result.executed, result)) {
@@ -309,6 +312,7 @@ RunResult SimSession::run_until_address(uint16_t address, uint32_t max_instructi
         }
         step_instruction();
         ++result.executed;
+        if (after_step) after_step();
         if (check_watchpoints(result)) {
             return result;
         }
@@ -322,13 +326,13 @@ RunResult SimSession::run_until_address(uint16_t address, uint32_t max_instructi
     return result;
 }
 
-RunResult SimSession::run_until_return(uint32_t max_instructions) {
+RunResult SimSession::run_until_return(uint32_t max_instructions, StepObserver after_step) {
     const auto target = return_address_from_stack();
     if (!target) {
         add_log("No return address is available on S.");
         return {};
     }
-    return run_until_address(*target, max_instructions);
+    return run_until_address(*target, max_instructions, std::move(after_step));
 }
 
 void SimSession::tick_cycles(uint64_t cycles) {
@@ -419,13 +423,21 @@ ParallelSnapshot SimSession::parallel_snapshot() const {
     snapshot.output_b = parallel_dev_->output_b();
     snapshot.ddr_a = parallel_dev_->ddr_a();
     snapshot.ddr_b = parallel_dev_->ddr_b();
-    snapshot.port_a = static_cast<uint8_t>((snapshot.output_a & snapshot.ddr_a) | (snapshot.input_a & ~snapshot.ddr_a));
-    snapshot.port_b = static_cast<uint8_t>((snapshot.output_b & snapshot.ddr_b) | (snapshot.input_b & ~snapshot.ddr_b));
+    snapshot.port_a = parallel_dev_->port_a();
+    snapshot.port_b = parallel_dev_->port_b();
     snapshot.acr = parallel_dev_->acr();
     snapshot.pcr = parallel_dev_->pcr();
     snapshot.ifr = parallel_dev_->ifr();
     snapshot.ier = parallel_dev_->ier();
     snapshot.irq_asserted = parallel_dev_->irq_asserted();
+    snapshot.timer1_counter = parallel_dev_->timer1_counter();
+    snapshot.timer1_latch = parallel_dev_->timer1_latch();
+    snapshot.timer1_running = parallel_dev_->timer1_running();
+    snapshot.timer1_free_running = parallel_dev_->timer1_free_running();
+    snapshot.pb7_timer_output_enabled = parallel_dev_->timer1_pb7_output_enabled();
+    snapshot.pb7_timer_level = parallel_dev_->timer1_pb7_level();
+    snapshot.pb7_pin_level = parallel_dev_->pb7_pin_level();
+    snapshot.pb7_transition_count = parallel_dev_->pb7_transition_count();
     return snapshot;
 }
 

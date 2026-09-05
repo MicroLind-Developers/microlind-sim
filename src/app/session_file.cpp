@@ -511,6 +511,8 @@ std::optional<SessionDefinition> load_session_definition(const std::filesystem::
             if (!parse_named_bool(key, value, session.gui.show_compact_flash, error, lineno)) return std::nullopt;
         } else if (cli::iequals(key, "SHOW_PARALLEL")) {
             if (!parse_named_bool(key, value, session.gui.show_parallel, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_LOGIC_ANALYSER")) {
+            if (!parse_named_bool(key, value, session.gui.show_logic_analyser, error, lineno)) return std::nullopt;
         } else if (cli::iequals(key, "SHOW_VIDEO")) {
             if (!parse_named_bool(key, value, session.gui.show_video, error, lineno)) return std::nullopt;
         } else if (cli::iequals(key, "SHOW_BREAKPOINTS")) {
@@ -598,6 +600,7 @@ bool save_session_definition(const std::filesystem::path& path, const SessionDef
     write_bool(file, "SHOW_PLD_LOGIC", session.gui.show_pld_logic);
     write_bool(file, "SHOW_COMPACT_FLASH", session.gui.show_compact_flash);
     write_bool(file, "SHOW_PARALLEL", session.gui.show_parallel);
+    write_bool(file, "SHOW_LOGIC_ANALYSER", session.gui.show_logic_analyser);
     write_bool(file, "SHOW_VIDEO", session.gui.show_video);
     write_bool(file, "SHOW_BREAKPOINTS", session.gui.show_breakpoints);
     write_bool(file, "SHOW_WATCHPOINTS", session.gui.show_watchpoints);

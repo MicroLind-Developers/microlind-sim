@@ -65,6 +65,9 @@ TEST(SimSessionTest, ReportsExplicitMapperWindowsAndCompactFlashSnapshot) {
     EXPECT_EQ(parallel.end, 0xF42F);
     EXPECT_EQ(parallel.port_a, 0xFF);
     EXPECT_EQ(parallel.port_b, 0xFF);
+    EXPECT_FALSE(parallel.pb7_timer_output_enabled);
+    EXPECT_TRUE(parallel.pb7_pin_level);
+    EXPECT_EQ(parallel.pb7_transition_count, 0u);
 
     const auto vdc = session.vdc_snapshot();
     ASSERT_TRUE(vdc.present);

@@ -277,6 +277,87 @@ TEST(ParallelDeviceTest, TimerInterruptFollowsIerAndIfr) {
     EXPECT_EQ(via.ifr() & 0x40, 0x00);
 }
 
+TEST(ParallelDeviceTest, Timer1OneShotDrivesPb7LowThenHigh) {
+    microlind::devices::W65C22 via;
+
+    via.write8(0x02, 0x80); // DDRB: PB7 is an output
+    via.write8(0x00, 0x80); // ORB: PB7 latch starts high
+    via.write8(0x0B, 0x80); // ACR: T1 one-shot output on PB7
+    const uint64_t transitions_before_pulse = via.pb7_transition_count();
+    via.write8(0x04, 0x02); // T1 low latch
+    via.write8(0x05, 0x00); // T1 high/counter load starts the pulse
+
+    EXPECT_TRUE(via.timer1_pb7_output_enabled());
+    EXPECT_FALSE(via.timer1_free_running());
+    EXPECT_FALSE(via.pb7_pin_level());
+    EXPECT_EQ(via.peek8(0x00) & 0x80, 0x00);
+
+    via.tick(2);
+    EXPECT_FALSE(via.pb7_pin_level());
+    via.tick(1);
+    EXPECT_TRUE(via.pb7_pin_level());
+    EXPECT_FALSE(via.timer1_running());
+    EXPECT_EQ(via.ifr() & 0x40, 0x40);
+    EXPECT_EQ(via.pb7_transition_count(), transitions_before_pulse + 2u);
+
+    via.write8(0x0B, 0x00); // Return PB7 to the ORB latch.
+    EXPECT_TRUE(via.pb7_pin_level());
+    EXPECT_EQ(via.output_b() & 0x80, 0x80);
+}
+
+TEST(ParallelDeviceTest, Timer1FreeRunTogglesPb7AtEveryTimeout) {
+    microlind::devices::W65C22 via;
+
+    via.write8(0x00, 0x80); // Keep PB7 high while output control is configured.
+    via.write8(0x02, 0x80); // DDRB
+    via.write8(0x0B, 0xC0); // ACR: T1 free-run square wave on PB7
+    via.write8(0x04, 0x01);
+    via.write8(0x05, 0x00);
+
+    EXPECT_FALSE(via.pb7_pin_level());
+    EXPECT_EQ(via.timer1_counter(), 1u);
+    EXPECT_EQ(via.timer1_latch(), 1u);
+
+    via.tick(2);
+    EXPECT_TRUE(via.pb7_pin_level());
+    EXPECT_TRUE(via.timer1_running());
+    EXPECT_EQ(via.timer1_counter(), 1u);
+
+    via.tick(2);
+    EXPECT_FALSE(via.pb7_pin_level());
+    EXPECT_EQ(via.pb7_transition_count(), 3u); // Load, then two timeouts
+}
+
+TEST(ParallelDeviceTest, Pb7TimerOutputStillHonorsDdrb) {
+    microlind::devices::W65C22 via;
+
+    via.set_port_b_input(0x80);
+    via.write8(0x0B, 0xC0);
+    via.write8(0x04, 0x00);
+    via.write8(0x05, 0x00);
+
+    EXPECT_FALSE(via.timer1_pb7_level());
+    EXPECT_TRUE(via.pb7_pin_level());
+    EXPECT_EQ(via.pb7_transition_count(), 0u);
+
+    via.write8(0x02, 0x80);
+    EXPECT_FALSE(via.pb7_pin_level());
+    EXPECT_EQ(via.pb7_transition_count(), 1u);
+}
+
+TEST(ParallelDeviceTest, WritingTimer1HighLatchClearsInterruptFlag) {
+    microlind::devices::W65C22 via;
+
+    via.write8(0x04, 0x00);
+    via.write8(0x05, 0x00);
+    via.tick(1);
+    ASSERT_EQ(via.ifr() & 0x40, 0x40);
+
+    via.write8(0x07, 0x12);
+    EXPECT_EQ(via.ifr() & 0x40, 0x00);
+    EXPECT_EQ(via.timer1_latch(), 0x1200);
+}
+
 TEST(VdcDeviceTest, SelectsAndReadsWritableRegistersThroughTwoByteWindow) {
     microlind::devices::Vdc8568 vdc;
 

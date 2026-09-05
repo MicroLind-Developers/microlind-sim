@@ -117,12 +117,28 @@ struct GuiState {
     bool show_pld_logic{true};
     bool show_compact_flash{true};
     bool show_parallel{true};
+    bool show_logic_analyser{true};
     bool show_video{true};
     bool show_breakpoints{true};
     bool show_watchpoints{true};
     bool show_trace{true};
     bool show_serial{true};
     bool show_log{true};
+    bool logic_analyser_microcycle{};
+    bool logic_analyser_use_trigger{};
+    int logic_analyser_trigger_signal{static_cast<int>(LogicSignal::ViaTimer2Flag)};
+    int logic_analyser_trigger_mode{static_cast<int>(LogicTriggerMode::Rising)};
+    int logic_analyser_samples_visible{160};
+    int logic_analyser_history_offset{};
+    std::array<bool, kLogicSignalCount> logic_analyser_signals{};
+    std::array<ImVec4, kLogicSignalCount> logic_analyser_colors{};
+    bool speaker_muted{false};
+    bool speaker_audio_available{false};
+    bool speaker_signal_active{false};
+    float speaker_volume{0.12f};
+    double speaker_frequency_hz{};
+    uint64_t speaker_last_cycles{};
+    uint64_t speaker_last_transitions{};
     TextureResource about_logo{};
     TextureResource vdc_display{};
     SDL_Renderer* renderer{};
@@ -134,6 +150,19 @@ struct GuiState {
         set_buffer(rom_path, "examples/bios.ihex");
         set_buffer(config_path, "examples/hw.cfg");
         set_buffer(cf_path, "examples/sim.img");
+        logic_analyser_signals[static_cast<std::size_t>(LogicSignal::ClockE)] = true;
+        logic_analyser_signals[static_cast<std::size_t>(LogicSignal::ClockQ)] = true;
+        logic_analyser_signals[static_cast<std::size_t>(LogicSignal::CpuIrq)] = true;
+        logic_analyser_signals[static_cast<std::size_t>(LogicSignal::ViaTimer2Flag)] = true;
+        logic_analyser_signals[static_cast<std::size_t>(LogicSignal::ViaPb7)] = true;
+        const std::array<ImVec4, kLogicSignalCount> default_colors{{
+            {0.35f, 0.75f, 1.00f, 1.00f}, {0.80f, 0.45f, 1.00f, 1.00f}, {0.45f, 0.90f, 0.60f, 1.00f},
+            {1.00f, 0.75f, 0.30f, 1.00f}, {0.95f, 0.50f, 0.35f, 1.00f}, {1.00f, 0.35f, 0.35f, 1.00f},
+            {1.00f, 0.55f, 0.25f, 1.00f}, {1.00f, 0.65f, 0.20f, 1.00f}, {0.30f, 0.90f, 0.85f, 1.00f},
+            {0.95f, 0.85f, 0.25f, 1.00f}, {0.45f, 0.65f, 1.00f, 1.00f}, {0.95f, 0.45f, 0.75f, 1.00f},
+            {0.60f, 0.90f, 0.35f, 1.00f}, {0.65f, 0.65f, 0.65f, 1.00f}, {0.85f, 0.85f, 0.85f, 1.00f},
+        }};
+        logic_analyser_colors = default_colors;
         runtime.add_log("GUI ready.");
     }
 
@@ -225,6 +254,7 @@ struct GuiState {
         show_pld_logic = loaded->gui.show_pld_logic;
         show_compact_flash = loaded->gui.show_compact_flash;
         show_parallel = loaded->gui.show_parallel;
+        show_logic_analyser = loaded->gui.show_logic_analyser;
         show_video = loaded->gui.show_video;
         show_breakpoints = loaded->gui.show_breakpoints;
         show_watchpoints = loaded->gui.show_watchpoints;
@@ -297,6 +327,7 @@ struct GuiState {
         definition.gui.show_pld_logic = show_pld_logic;
         definition.gui.show_compact_flash = show_compact_flash;
         definition.gui.show_parallel = show_parallel;
+        definition.gui.show_logic_analyser = show_logic_analyser;
         definition.gui.show_video = show_video;
         definition.gui.show_breakpoints = show_breakpoints;
         definition.gui.show_watchpoints = show_watchpoints;
@@ -402,6 +433,7 @@ struct GuiState {
         show_pld_logic = visible;
         show_compact_flash = visible;
         show_parallel = visible;
+        show_logic_analyser = visible;
         show_video = visible;
         show_breakpoints = visible;
         show_watchpoints = visible;

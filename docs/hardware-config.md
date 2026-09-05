@@ -135,9 +135,12 @@ Keys:
 - `IRQ_LEVEL`: optional microLind IRQ controller level asserted by the
   parallel device when an enabled W65C22 interrupt is pending. Defaults to `2`.
 
-The initial W65C22 model exposes port A/B output latches, input pins, data
-direction registers, ACR/PCR, IFR/IER, shift register storage, and basic
-timer-driven interrupt flags.
+The W65C22 model exposes port A/B output latches, input pins, data direction
+registers, ACR/PCR, IFR/IER, shift register storage, and timer-driven interrupt
+flags. Timer 1 also implements the ACR-controlled PB7 output described in the
+W65C22 data sheet: ACR7 enables PB7 timer output, ACR6 selects one-shot or
+free-run operation, and DDRB7 must select output for the signal to reach the
+pin. The desktop GUI connects its simulated PC speaker to this PB7 pin.
 
 ## Video / VDC
 
