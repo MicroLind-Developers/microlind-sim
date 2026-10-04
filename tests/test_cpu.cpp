@@ -872,6 +872,37 @@ TEST(CpuExecutionTest, HD6309ExecutesHD6309SingleByteOpcode) {
     EXPECT_EQ(cpu.regs().f, 0x78);
 }
 
+TEST(CpuExecutionTest, SexSignExtendsBIntoD) {
+    struct Case {
+        uint8_t initial_b;
+        uint16_t expected_d;
+        uint8_t expected_cc;
+    };
+
+    const Case cases[] = {
+        {0x80, 0xFF80, static_cast<uint8_t>(microlind::CC_N | microlind::CC_V | microlind::CC_C)},
+        {0x7F, 0x007F, static_cast<uint8_t>(microlind::CC_V | microlind::CC_C)},
+        {0x00, 0x0000, static_cast<uint8_t>(microlind::CC_Z | microlind::CC_V | microlind::CC_C)},
+    };
+
+    for (const auto& test : cases) {
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, {0x1D});
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().a = 0x12;
+        cpu.regs().b = test.initial_b;
+        cpu.regs().cc = static_cast<uint8_t>(microlind::CC_V | microlind::CC_C);
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, 2u);
+        EXPECT_EQ(static_cast<uint16_t>((cpu.regs().a << 8) | cpu.regs().b), test.expected_d);
+        EXPECT_EQ(cpu.regs().cc, test.expected_cc);
+    }
+}
+
 TEST(CpuExecutionTest, LbraUsesSignedSixteenBitOffsetAndWraps) {
     microlind::Bus bus;
     microlind::test::map_flat_ram(bus);
