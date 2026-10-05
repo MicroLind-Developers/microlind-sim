@@ -204,8 +204,19 @@ int run_gui() {
                 event.window.windowID == SDL_GetWindowID(window)) {
                 done = true;
             }
-            if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && !io.WantCaptureKeyboard) {
-                handle_shortcut(state, event.key.keysym.sym, static_cast<SDL_Keymod>(event.key.keysym.mod));
+            if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
+                const bool joystick_consumed = state.handle_joystick_key(
+                    event.key.keysym.sym, true, io.WantCaptureKeyboard || io.WantTextInput);
+                if (!joystick_consumed && !io.WantCaptureKeyboard) {
+                    handle_shortcut(state, event.key.keysym.sym, static_cast<SDL_Keymod>(event.key.keysym.mod));
+                }
+            }
+            if (event.type == SDL_KEYUP) {
+                // Always process releases so a key held before a text field gained focus cannot stick.
+                state.handle_joystick_key(event.key.keysym.sym, false, false);
+            }
+            if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+                state.release_joystick();
             }
         }
 

@@ -264,6 +264,8 @@ public:
     void clear_trace();
 
     [[nodiscard]] bool serial_mapped() const { return serial_dev_ != nullptr; }
+    // Drive selected external VIA input pins without changing pins owned by other devices.
+    bool set_parallel_input_bits(bool port_a, uint8_t mask, uint8_t value);
     [[nodiscard]] SerialSnapshot serial_snapshot() const;
     [[nodiscard]] ParallelSnapshot parallel_snapshot() const;
     [[nodiscard]] VdcSnapshot vdc_snapshot() const;

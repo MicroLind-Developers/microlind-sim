@@ -97,6 +97,11 @@ struct GuiState {
     bool stack_follow_pointer{true};
     bool serial_hex_view{false};
     bool serial_rx_hex{false};
+    std::array<SDL_Keycode, 5> joystick_keys{{SDLK_UP, SDLK_DOWN, SDLK_LEFT, SDLK_RIGHT, SDLK_SPACE}};
+    std::array<int, 5> joystick_bits{{0, 1, 2, 3, 4}};
+    std::array<bool, 5> joystick_pressed{};
+    bool joystick_port_a{};
+    int joystick_rebinding{-1};
     int vdc_scale_mode{};
     bool vdc_crt_aspect{true};
     bool pld_live_bus{false};
@@ -239,6 +244,20 @@ struct GuiState {
         stack_follow_pointer = loaded->gui.stack_follow_pointer;
         serial_hex_view = loaded->gui.serial_hex_view;
         serial_rx_hex = loaded->gui.serial_rx_hex;
+        release_joystick();
+        joystick_keys = {
+            static_cast<SDL_Keycode>(loaded->gui.joystick_keys[0]),
+            static_cast<SDL_Keycode>(loaded->gui.joystick_keys[1]),
+            static_cast<SDL_Keycode>(loaded->gui.joystick_keys[2]),
+            static_cast<SDL_Keycode>(loaded->gui.joystick_keys[3]),
+            static_cast<SDL_Keycode>(loaded->gui.joystick_keys[4]),
+        };
+        for (std::size_t i = 0; i < joystick_bits.size(); ++i) {
+            joystick_bits[i] = loaded->gui.joystick_bits[i];
+        }
+        joystick_port_a = loaded->gui.joystick_port_a;
+        joystick_pressed.fill(false);
+        joystick_rebinding = -1;
         vdc_scale_mode = std::clamp(loaded->gui.vdc_scale_mode, 0, 4);
         vdc_crt_aspect = loaded->gui.vdc_crt_aspect;
         runtime.set_run_micro_steps(loaded->gui.run_micro_steps);
@@ -313,6 +332,11 @@ struct GuiState {
         definition.gui.stack_follow_pointer = stack_follow_pointer;
         definition.gui.serial_hex_view = serial_hex_view;
         definition.gui.serial_rx_hex = serial_rx_hex;
+        for (std::size_t i = 0; i < joystick_keys.size(); ++i) {
+            definition.gui.joystick_keys[i] = static_cast<uint32_t>(joystick_keys[i]);
+            definition.gui.joystick_bits[i] = static_cast<uint8_t>(joystick_bits[i]);
+        }
+        definition.gui.joystick_port_a = joystick_port_a;
         definition.gui.vdc_scale_mode = vdc_scale_mode;
         definition.gui.vdc_crt_aspect = vdc_crt_aspect;
         definition.gui.theme = theme;
@@ -440,6 +464,47 @@ struct GuiState {
         show_trace = visible;
         show_serial = visible;
         show_log = visible;
+    }
+
+    void sync_joystick() {
+        uint8_t mask = 0;
+        uint8_t value = 0;
+        for (std::size_t i = 0; i < joystick_bits.size(); ++i) {
+            const uint8_t bit = static_cast<uint8_t>(std::clamp(joystick_bits[i], 0, 7));
+            const uint8_t bit_mask = static_cast<uint8_t>(1u << bit);
+            mask = static_cast<uint8_t>(mask | bit_mask);
+            if (!joystick_pressed[i]) value = static_cast<uint8_t>(value | bit_mask);
+        }
+        runtime.set_parallel_input_bits(joystick_port_a, mask, value);
+    }
+
+    void release_joystick() {
+        if (std::none_of(joystick_pressed.begin(), joystick_pressed.end(), [](bool pressed) { return pressed; })) return;
+        joystick_pressed.fill(false);
+        sync_joystick();
+    }
+
+    bool handle_joystick_key(SDL_Keycode key, bool pressed, bool keyboard_captured) {
+        if (joystick_rebinding >= 0 && pressed) {
+            if (key == SDLK_ESCAPE) {
+                joystick_rebinding = -1;
+            } else {
+                joystick_keys[static_cast<std::size_t>(joystick_rebinding)] = key;
+                joystick_rebinding = -1;
+            }
+            return true;
+        }
+        if (keyboard_captured && pressed) return false;
+
+        bool matched = false;
+        for (std::size_t i = 0; i < joystick_keys.size(); ++i) {
+            if (joystick_keys[i] == key && joystick_pressed[i] != pressed) {
+                joystick_pressed[i] = pressed;
+                matched = true;
+            }
+        }
+        if (matched) sync_joystick();
+        return matched;
     }
 
     static uint64_t true_hz_for_index(int index) {

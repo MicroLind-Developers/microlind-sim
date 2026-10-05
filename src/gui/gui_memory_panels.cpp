@@ -564,6 +564,55 @@ void draw_parallel(GuiState& state) {
         ImGui::EndTable();
     }
 
+    ImGui::SeparatorText("Joystick input");
+    ImGui::TextDisabled("Active-low external input pins; controls are inactive while typing in a text field.");
+    if (ImGui::RadioButton("Port A", state.joystick_port_a)) {
+        state.release_joystick();
+        state.joystick_port_a = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Port B", !state.joystick_port_a)) {
+        state.release_joystick();
+        state.joystick_port_a = false;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Defaults")) {
+        state.release_joystick();
+        state.joystick_port_a = false;
+        state.joystick_keys = {{SDLK_UP, SDLK_DOWN, SDLK_LEFT, SDLK_RIGHT, SDLK_SPACE}};
+        state.joystick_bits = {{0, 1, 2, 3, 4}};
+        state.joystick_rebinding = -1;
+    }
+
+    constexpr std::array<const char*, 5> joystick_actions{{"Up", "Down", "Left", "Right", "Fire"}};
+    if (ImGui::BeginTable("joystick_bindings", 3, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Action");
+        ImGui::TableSetupColumn("Key");
+        ImGui::TableSetupColumn("Input bit");
+        ImGui::TableHeadersRow();
+        for (std::size_t i = 0; i < joystick_actions.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i));
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(joystick_actions[i]);
+            ImGui::TableNextColumn();
+            const char* key_name = state.joystick_rebinding == static_cast<int>(i)
+                ? "Press a key (Esc cancels)"
+                : SDL_GetKeyName(state.joystick_keys[i]);
+            if (ImGui::Button(key_name != nullptr && key_name[0] != '\0' ? key_name : "Unknown")) {
+                state.joystick_rebinding = static_cast<int>(i);
+            }
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(58.0f);
+            if (ImGui::InputInt("##bit", &state.joystick_bits[i], 0, 1)) {
+                state.joystick_bits[i] = std::clamp(state.joystick_bits[i], 0, 7);
+                state.sync_joystick();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
     ImGui::SeparatorText("PC speaker (PB7)");
     const ImU32 speaker_color = state.speaker_signal_active && !state.speaker_muted
         ? IM_COL32(64, 200, 112, 255)

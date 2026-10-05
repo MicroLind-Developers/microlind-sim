@@ -605,6 +605,9 @@ TEST(SessionFileTest, SavesAndReloadsPersistedDebuggerState) {
     session.gui.stack_follow_pointer = true;
     session.gui.serial_hex_view = true;
     session.gui.serial_rx_hex = false;
+    session.gui.joystick_port_a = true;
+    session.gui.joystick_keys = {{119u, 115u, 97u, 100u, 1073742049u}};
+    session.gui.joystick_bits = {{7, 6, 5, 4, 3}};
     session.gui.vdc_scale_mode = 2;
     session.gui.vdc_crt_aspect = false;
     session.gui.operations_per_minute = 123;
@@ -648,6 +651,9 @@ TEST(SessionFileTest, SavesAndReloadsPersistedDebuggerState) {
     EXPECT_EQ(loaded->gui.operations_per_minute, session.gui.operations_per_minute);
     EXPECT_EQ(loaded->gui.run_micro_steps, session.gui.run_micro_steps);
     EXPECT_EQ(loaded->gui.true_clock_hz, session.gui.true_clock_hz);
+    EXPECT_EQ(loaded->gui.joystick_port_a, session.gui.joystick_port_a);
+    EXPECT_EQ(loaded->gui.joystick_keys, session.gui.joystick_keys);
+    EXPECT_EQ(loaded->gui.joystick_bits, session.gui.joystick_bits);
     EXPECT_EQ(loaded->gui.theme, session.gui.theme);
     EXPECT_EQ(loaded->gui.show_file_panel, session.gui.show_file_panel);
     EXPECT_EQ(loaded->gui.show_control_panel, session.gui.show_control_panel);

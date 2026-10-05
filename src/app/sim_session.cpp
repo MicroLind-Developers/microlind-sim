@@ -408,6 +408,19 @@ SerialSnapshot SimSession::serial_snapshot() const {
     return snapshot;
 }
 
+bool SimSession::set_parallel_input_bits(bool port_a, uint8_t mask, uint8_t value) {
+    if (!parallel_dev_) return false;
+
+    const uint8_t current = port_a ? parallel_dev_->input_a() : parallel_dev_->input_b();
+    const uint8_t updated = static_cast<uint8_t>((current & ~mask) | (value & mask));
+    if (port_a) {
+        parallel_dev_->set_port_a_input(updated);
+    } else {
+        parallel_dev_->set_port_b_input(updated);
+    }
+    return true;
+}
+
 ParallelSnapshot SimSession::parallel_snapshot() const {
     ParallelSnapshot snapshot;
     snapshot.present = parallel_dev_ != nullptr;

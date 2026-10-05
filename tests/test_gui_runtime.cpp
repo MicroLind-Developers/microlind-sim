@@ -73,6 +73,21 @@ TEST(GuiRuntimeTest, SerialInjectionDuringTrueRunReachesDevice) {
     EXPECT_EQ(runtime.peek_memory(0xF433), 'A');
 }
 
+TEST(GuiRuntimeTest, ParallelInputBitsCanBeChangedDuringTrueRun) {
+    GuiRuntime runtime(microlind::CpuMode::HD6309);
+    ASSERT_TRUE(runtime.load_hardware_config("tests/data/hw_test.cfg"));
+    runtime.write_memory(0x0000, 0x12); // NOP
+    runtime.write_memory(0x0001, 0x20); // BRA -3
+    runtime.write_memory(0x0002, 0xFD);
+
+    runtime.start_true_run(1000000);
+    ASSERT_TRUE(runtime.set_parallel_input_bits(false, 0x03, 0x02));
+    runtime.stop_true_run();
+
+    const auto parallel = runtime.parallel_snapshot();
+    EXPECT_EQ(parallel.input_b, 0xFE); // PB0 active, PB1 inactive
+}
+
 TEST(GuiRuntimeTest, VdcSnapshotUpdatesDuringTrueRun) {
     GuiRuntime runtime(microlind::CpuMode::HD6309);
     ASSERT_TRUE(runtime.load_hardware_config("tests/data/hw_test.cfg"));

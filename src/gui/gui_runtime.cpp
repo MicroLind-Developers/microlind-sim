@@ -91,6 +91,7 @@ struct GuiRuntime::RuntimeCommand {
         SetTrueClockHz,
         AddLog,
         InjectSerialBytes,
+        SetParallelInputBits,
         ClearSerialTx,
         ClearLog,
     };
@@ -101,6 +102,9 @@ struct GuiRuntime::RuntimeCommand {
     uint64_t target_hz{};
     std::string message;
     std::vector<uint8_t> bytes;
+    bool port_a{};
+    uint8_t mask{};
+    uint8_t value{};
     bool ok{true};
     bool completed{false};
     std::mutex completion_mutex;
@@ -544,6 +548,19 @@ bool GuiRuntime::inject_serial_bytes(const std::vector<uint8_t>& bytes) {
     return session_.inject_serial_bytes(bytes);
 }
 
+bool GuiRuntime::set_parallel_input_bits(bool port_a, uint8_t mask, uint8_t value) {
+    if (true_run_active()) {
+        auto command = std::make_shared<RuntimeCommand>(RuntimeCommand::Kind::SetParallelInputBits);
+        command->port_a = port_a;
+        command->mask = mask;
+        command->value = value;
+        return enqueue_command_and_wait(command);
+    }
+
+    std::lock_guard lock(mutex_);
+    return session_.set_parallel_input_bits(port_a, mask, value);
+}
+
 void GuiRuntime::clear_serial_tx() {
     if (true_run_active()) {
         auto command = std::make_shared<RuntimeCommand>(RuntimeCommand::Kind::ClearSerialTx);
@@ -806,6 +823,9 @@ void GuiRuntime::drain_commands() {
                 break;
             case RuntimeCommand::Kind::InjectSerialBytes:
                 command->ok = session_.inject_serial_bytes(command->bytes);
+                break;
+            case RuntimeCommand::Kind::SetParallelInputBits:
+                command->ok = session_.set_parallel_input_bits(command->port_a, command->mask, command->value);
                 break;
             case RuntimeCommand::Kind::ClearSerialTx:
                 session_.clear_serial_tx();

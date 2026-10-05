@@ -443,6 +443,39 @@ std::optional<SessionDefinition> load_session_definition(const std::filesystem::
                 return std::nullopt;
             }
             session.gui.serial_rx_hex = *parsed;
+        } else if (cli::iequals(key, "JOYSTICK_PORT")) {
+            if (cli::iequals(value, "A")) {
+                session.gui.joystick_port_a = true;
+            } else if (cli::iequals(value, "B")) {
+                session.gui.joystick_port_a = false;
+            } else {
+                error = "Bad JOYSTICK_PORT at line " + std::to_string(lineno);
+                return std::nullopt;
+            }
+        } else if (cli::iequals(key, "JOYSTICK_KEY_UP") || cli::iequals(key, "JOYSTICK_KEY_DOWN") ||
+                   cli::iequals(key, "JOYSTICK_KEY_LEFT") || cli::iequals(key, "JOYSTICK_KEY_RIGHT") ||
+                   cli::iequals(key, "JOYSTICK_KEY_FIRE")) {
+            const auto parsed = cli::parse_number(value);
+            if (!parsed) {
+                error = "Bad " + key + " at line " + std::to_string(lineno);
+                return std::nullopt;
+            }
+            const std::size_t index = cli::iequals(key, "JOYSTICK_KEY_UP") ? 0 :
+                cli::iequals(key, "JOYSTICK_KEY_DOWN") ? 1 : cli::iequals(key, "JOYSTICK_KEY_LEFT") ? 2 :
+                cli::iequals(key, "JOYSTICK_KEY_RIGHT") ? 3 : 4;
+            session.gui.joystick_keys[index] = *parsed;
+        } else if (cli::iequals(key, "JOYSTICK_BIT_UP") || cli::iequals(key, "JOYSTICK_BIT_DOWN") ||
+                   cli::iequals(key, "JOYSTICK_BIT_LEFT") || cli::iequals(key, "JOYSTICK_BIT_RIGHT") ||
+                   cli::iequals(key, "JOYSTICK_BIT_FIRE")) {
+            const auto parsed = cli::parse_number(value);
+            if (!parsed || *parsed > 7) {
+                error = "Bad " + key + " at line " + std::to_string(lineno);
+                return std::nullopt;
+            }
+            const std::size_t index = cli::iequals(key, "JOYSTICK_BIT_UP") ? 0 :
+                cli::iequals(key, "JOYSTICK_BIT_DOWN") ? 1 : cli::iequals(key, "JOYSTICK_BIT_LEFT") ? 2 :
+                cli::iequals(key, "JOYSTICK_BIT_RIGHT") ? 3 : 4;
+            session.gui.joystick_bits[index] = static_cast<uint8_t>(*parsed);
         } else if (cli::iequals(key, "VDC_SCALE")) {
             if (cli::iequals(value, "fit")) {
                 session.gui.vdc_scale_mode = 0;
@@ -583,6 +616,12 @@ bool save_session_definition(const std::filesystem::path& path, const SessionDef
     file << "STACK_FOLLOW=" << (session.gui.stack_follow_pointer ? "true" : "false") << '\n';
     file << "SERIAL_HEX_VIEW=" << (session.gui.serial_hex_view ? "true" : "false") << '\n';
     file << "SERIAL_RX_HEX=" << (session.gui.serial_rx_hex ? "true" : "false") << '\n';
+    file << "JOYSTICK_PORT=" << (session.gui.joystick_port_a ? "A" : "B") << '\n';
+    constexpr std::array<const char*, 5> joystick_names{{"UP", "DOWN", "LEFT", "RIGHT", "FIRE"}};
+    for (std::size_t i = 0; i < joystick_names.size(); ++i) {
+        file << "JOYSTICK_KEY_" << joystick_names[i] << '=' << session.gui.joystick_keys[i] << '\n';
+        file << "JOYSTICK_BIT_" << joystick_names[i] << '=' << static_cast<unsigned>(session.gui.joystick_bits[i]) << '\n';
+    }
     file << "VDC_SCALE=" << (session.gui.vdc_scale_mode == 0 ? "fit" : std::to_string(session.gui.vdc_scale_mode)) << '\n';
     file << "VDC_CRT_ASPECT=" << (session.gui.vdc_crt_aspect ? "true" : "false") << '\n';
     file << "OPERATIONS_PER_MINUTE=" << session.gui.operations_per_minute << '\n';

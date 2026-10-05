@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -29,6 +30,10 @@ struct GuiSessionState {
     bool stack_follow_pointer{true};
     bool serial_hex_view{};
     bool serial_rx_hex{};
+    // SDL keycodes for Up, Down, Left, Right and Fire. Inputs are active low.
+    std::array<uint32_t, 5> joystick_keys{{1073741906u, 1073741905u, 1073741904u, 1073741903u, 32u}};
+    std::array<uint8_t, 5> joystick_bits{{0, 1, 2, 3, 4}};
+    bool joystick_port_a{};
     int vdc_scale_mode{};
     bool vdc_crt_aspect{true};
     int operations_per_minute{600};
