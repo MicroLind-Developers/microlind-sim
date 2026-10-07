@@ -730,11 +730,13 @@ void draw_vdc_display(GuiState& state) {
         vdc.character_start,
         vdc.update_address,
         static_cast<unsigned long long>(vdc.frame_version));
+    const auto geometry = microlind::app::vdc_frame_geometry(vdc);
+    ImGui::Text("Mode: %s    Pixels: %dx%d",
+        microlind::app::vdc_bitmap_enabled(vdc) ? "Bitmap" : "Text", geometry.width, geometry.height);
     ImGui::Separator();
 
-    const std::size_t cell_count = static_cast<std::size_t>(vdc.columns) * vdc.rows;
-    if (vdc.columns == 0 || vdc.rows == 0 || cell_count > vdc.chars.size()) {
-        ImGui::TextDisabled("Invalid VDC display dimensions.");
+    if (const char* error = microlind::app::vdc_frame_error(vdc)) {
+        ImGui::TextDisabled("%s", error);
         ImGui::End();
         return;
     }

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -8,6 +9,7 @@
 #include "microlind/app/disassembler.hpp"
 #include "microlind/app/session_file.hpp"
 #include "microlind/app/sim_session.hpp"
+#include "microlind/app/vdc_render.hpp"
 #include "microlind/bus.hpp"
 #include "microlind/cpu.hpp"
 
@@ -77,6 +79,96 @@ TEST(SimSessionTest, ReportsExplicitMapperWindowsAndCompactFlashSnapshot) {
     EXPECT_EQ(vdc.columns, 80);
     EXPECT_EQ(vdc.rows, 25);
     EXPECT_EQ(vdc.chars[0], ' ');
+}
+
+TEST(SimSessionTest, BitmapSnapshotPacksWrappedScanLinesAndIndependentColorRows) {
+    auto session = loaded_session();
+    const auto reg = [&session](uint8_t number, uint8_t value) {
+        session.write_memory(0xF440, number);
+        session.write_memory(0xF441, value);
+    };
+    const auto address = [&reg](uint8_t high, uint16_t value) {
+        reg(high, static_cast<uint8_t>(value >> 8));
+        reg(high + 1, static_cast<uint8_t>(value));
+    };
+    const auto byte = [&reg, &address](uint16_t target, uint8_t value) {
+        address(0x12, target);
+        reg(0x1F, value);
+    };
+    reg(0x01, 2);
+    reg(0x06, 2);
+    reg(0x09, 1);
+    reg(0x16, 0x78);
+    reg(0x17, 2);
+    reg(0x1B, 1);
+    address(0x0C, 0xFFFF);
+    address(0x14, 0x40FF);
+    // Two displayed bytes and one skipped byte per scan line / color row.
+    for (int y = 0; y < 4; ++y) {
+        byte(static_cast<uint16_t>(0xFFFF + y * 3), static_cast<uint8_t>(0x80 >> y));
+        byte(static_cast<uint16_t>(y * 3), 0x01);
+        byte(static_cast<uint16_t>(y * 3 + 1), 0xEE);
+    }
+    byte(0x40FF, 0x2F);
+    byte(0x4100, 0xF2);
+    byte(0x4101, 0xEE);
+    byte(0x4102, 0x49);
+    byte(0x4103, 0x94);
+    reg(0x19, 0xC0);
+    reg(0x1F, 0x42); // leaves data register selected for the side-effect check
+    const auto before = session.vdc_snapshot();
+    ASSERT_EQ(before.bitmap_data, (std::vector<uint8_t>{0x80, 1, 0x40, 1, 0x20, 1, 0x10, 1}));
+    ASSERT_EQ(before.bitmap_attrs, (std::vector<uint8_t>{0x2F, 0xF2, 0x49, 0x94}));
+    EXPECT_TRUE(std::all_of(before.character_data.begin(), before.character_data.end(), [](auto value) { return value == 0; }));
+    EXPECT_EQ(before.selected_register, 0x1F);
+    const auto after = session.vdc_snapshot();
+    EXPECT_EQ(after.registers, before.registers);
+    EXPECT_EQ(after.update_address, before.update_address);
+    EXPECT_EQ(after.frame_version, before.frame_version);
+
+    const auto original_frame = microlind::app::render_vdc_framebuffer(before, 0.0);
+    byte(0xFFFF, 0x00);
+    EXPECT_EQ(microlind::app::render_vdc_framebuffer(before, 0.0).rgba, original_frame.rgba);
+    EXPECT_NE(microlind::app::render_vdc_framebuffer(session.vdc_snapshot(), 0.0).rgba, original_frame.rgba);
+
+    reg(0x19, 0x80);
+    EXPECT_TRUE(session.vdc_snapshot().bitmap_attrs.empty());
+    reg(0x19, 0x81); // unsupported scrolling: no payload is allocated
+    EXPECT_TRUE(session.vdc_snapshot().bitmap_data.empty());
+    reg(0x19, 0);
+    const auto text = session.vdc_snapshot();
+    EXPECT_TRUE(text.bitmap_data.empty());
+    EXPECT_EQ(text.chars[0], 0x00);
+    EXPECT_EQ(text.chars[1], 0x01);
+}
+
+TEST(SimSessionTest, BitmapFillAndCopyUpdatePackedSnapshot) {
+    auto session = loaded_session();
+    const auto reg = [&session](uint8_t number, uint8_t value) {
+        session.write_memory(0xF440, number);
+        session.write_memory(0xF441, value);
+    };
+    reg(0x01, 2);
+    reg(0x06, 2);
+    reg(0x09, 0);
+    reg(0x17, 1);
+    reg(0x0C, 0x20);
+    reg(0x0D, 0);
+    reg(0x12, 0x20);
+    reg(0x13, 0);
+    reg(0x19, 0x80);
+    reg(0x18, 0);
+    reg(0x1F, 0xAA);
+    reg(0x1E, 1);
+    reg(0x20, 0x20);
+    reg(0x21, 0);
+    reg(0x18, 0x80);
+    const auto version = session.vdc_snapshot().frame_version;
+    reg(0x1E, 2);
+    const auto snapshot = session.vdc_snapshot();
+    EXPECT_EQ(snapshot.bitmap_data, (std::vector<uint8_t>{0xAA, 0xAA, 0xAA, 0xAA}));
+    EXPECT_EQ(snapshot.update_address, 0x2004);
+    EXPECT_EQ(snapshot.frame_version, version + 1);
 }
 
 TEST(SimSessionTest, CompactFlashReturnsFFWhenNoImageIsLoaded) {

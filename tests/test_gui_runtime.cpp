@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include "microlind/app/vdc_render.hpp"
+
 namespace {
 
 using microlind::gui::GuiRuntime;
@@ -121,6 +123,68 @@ TEST(GuiRuntimeTest, VdcSnapshotUpdatesDuringTrueRun) {
     EXPECT_TRUE(runtime.true_run_active());
     EXPECT_TRUE(updated);
     runtime.stop_true_run();
+}
+
+TEST(GuiRuntimeTest, BitmapFirmwareWorksInDebugRunAndTrueRunAndSwitchesModes) {
+    for (bool true_run : {false, true}) {
+        SCOPED_TRACE(true_run);
+        GuiRuntime runtime(microlind::CpuMode::HD6309);
+        ASSERT_TRUE(runtime.load_hardware_config("tests/data/hw_test.cfg"));
+        std::vector<uint8_t> program;
+        const auto write_register = [&program](uint8_t reg, uint8_t value) {
+            const std::vector<uint8_t> instructions{
+                0x86, reg, 0xB7, 0xF4, 0x40, // LDA #reg; STA $F440
+                0x86, value, 0xB7, 0xF4, 0x41}; // LDA #value; STA $F441
+            program.insert(program.end(), instructions.begin(), instructions.end());
+        };
+        write_register(0x01, 80);
+        write_register(0x06, 25);
+        write_register(0x09, 7);
+        write_register(0x16, 0x78);
+        write_register(0x17, 8);
+        write_register(0x1B, 0);
+        write_register(0x0C, 0x20);
+        write_register(0x0D, 0);
+        write_register(0x12, 0x20);
+        write_register(0x13, 0);
+        write_register(0x1F, 0x81);
+        write_register(0x19, 0x80);
+        write_register(0x19, 0);
+        write_register(0x19, 0x80);
+        program.insert(program.end(), {0x20, 0xFE}); // BRA *
+        for (std::size_t i = 0; i < program.size(); ++i) runtime.write_memory(static_cast<uint16_t>(i), program[i]);
+        if (true_run) {
+            runtime.start_true_run(1000000);
+        } else {
+            runtime.start_debug_run(false);
+            runtime.run_debug_batch(100);
+        }
+        bool updated = false;
+        for (int attempt = 0; attempt < 100 && !updated; ++attempt) {
+            const auto snapshot = runtime.vdc_snapshot();
+            updated = snapshot.bitmap_data.size() == 16000 && snapshot.bitmap_data[0] == 0x81;
+            if (!updated) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        EXPECT_TRUE(updated);
+        const auto snapshot = runtime.vdc_snapshot();
+        const auto frame = microlind::app::render_vdc_framebuffer(snapshot, 0.0);
+        EXPECT_EQ(frame.width, 640);
+        EXPECT_EQ(frame.height, 200);
+        if (true_run) {
+            EXPECT_TRUE(runtime.true_run_active());
+        }
+        // Memory editing pauses the worker; changing mode then refreshes the payload.
+        runtime.write_memory(0xF440, 0x19);
+        runtime.write_memory(0xF441, 0);
+        const auto text = runtime.vdc_snapshot();
+        EXPECT_TRUE(text.bitmap_data.empty());
+        EXPECT_EQ(text.chars[0], 0x81);
+        runtime.write_memory(0xF440, 0x19);
+        runtime.write_memory(0xF441, 0x80);
+        EXPECT_EQ(runtime.vdc_snapshot().bitmap_data, snapshot.bitmap_data);
+        if (true_run) runtime.stop_true_run();
+        else runtime.set_mode(RuntimeMode::Paused);
+    }
 }
 
 TEST(GuiRuntimeTest, DebugBatchRunsThroughRuntimeMode) {

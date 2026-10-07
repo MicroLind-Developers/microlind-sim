@@ -31,6 +31,23 @@ struct VdcFramebuffer {
     std::vector<uint8_t> rgba;
 };
 
+struct VdcFrameGeometry {
+    int width{};
+    int height{};
+    int byte_columns{};
+    int row_groups{};
+    int group_height{};
+    int stride{};
+    std::size_t bitmap_bytes{};
+    std::size_t attribute_bytes{};
+    const char* error{};
+};
+
+[[nodiscard]] bool vdc_bitmap_enabled(const VdcSnapshot& snapshot);
+[[nodiscard]] VdcFrameGeometry vdc_frame_geometry(const VdcSnapshot& snapshot);
+// nullptr means that the geometry and the mode-specific payload are valid.
+[[nodiscard]] const char* vdc_frame_error(const VdcSnapshot& snapshot);
+
 [[nodiscard]] VdcRgb vdc_rgb(uint8_t color);
 [[nodiscard]] bool vdc_attributes_enabled(const VdcSnapshot& snapshot);
 [[nodiscard]] VdcCellStyle vdc_cell_style(const VdcSnapshot& snapshot, std::size_t cell);

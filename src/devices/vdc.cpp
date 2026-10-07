@@ -20,6 +20,7 @@ Vdc8568::Vdc8568() {
     vram_.fill(0x00);
     std::fill_n(vram_.begin(), DisplayCells, 0x20);
     std::fill_n(vram_.begin() + 0x0800, DisplayCells, 0x0F);
+    regs_[0x01] = Columns;
     regs_[0x06] = Rows;
     regs_[0x09] = 0x07;
     regs_[0x0B] = 0x07;
@@ -27,7 +28,7 @@ Vdc8568::Vdc8568() {
     regs_[RegAttributeStartLow] = 0x00;
     regs_[RegCharacterHorizontal] = 0x78;
     regs_[RegCharacterVertical] = 0x08;
-    regs_[RegAddressIncrement] = 0x01;
+    regs_[RegAddressIncrement] = 0x00;
     regs_[RegCharacterBase] = 0x20;
     regs_[0x1A] = 0xF0;
 }
@@ -105,6 +106,13 @@ std::array<uint8_t, Vdc8568::CharacterBytes> Vdc8568::character_data() const {
     return data;
 }
 
+void Vdc8568::copy_vram(uint16_t address, std::span<uint8_t> destination) const {
+    for (auto& byte : destination) {
+        byte = vram_[address];
+        address = static_cast<uint16_t>(address + 1);
+    }
+}
+
 uint8_t Vdc8568::read_selected_register(bool side_effects) {
     if (selected_register_ == RegData) {
         const uint8_t value = vram_[update_address()];
@@ -129,18 +137,23 @@ void Vdc8568::write_selected_register(uint8_t value) {
     }
     if (selected_register_ < regs_.size()) {
         regs_[selected_register_] = value;
-        if (selected_register_ == RegWordCount && (regs_[RegBlockControl] & kBlockCopy) == 0) {
-            perform_block_fill();
+        if (selected_register_ == RegWordCount) {
+            if ((regs_[RegBlockControl] & kBlockCopy) != 0) {
+                perform_block_copy();
+            } else {
+                perform_block_fill();
+            }
             return;
         }
         if (selected_register_ == RegDisplayStartHigh || selected_register_ == RegDisplayStartLow ||
             selected_register_ == RegAttributeStartHigh || selected_register_ == RegAttributeStartLow ||
             selected_register_ == RegCursorHigh || selected_register_ == RegCursorLow ||
+            selected_register_ == 0x01 || selected_register_ == 0x06 || selected_register_ == 0x08 ||
             selected_register_ == 0x09 || selected_register_ == 0x0A || selected_register_ == 0x0B ||
             selected_register_ == RegCharacterHorizontal || selected_register_ == RegCharacterVertical ||
             selected_register_ == RegBlockControl || selected_register_ == RegHorizontalScroll ||
             selected_register_ == RegColor || selected_register_ == RegCharacterBase ||
-            selected_register_ == RegUnderlineScan) {
+            selected_register_ == RegUnderlineScan || selected_register_ == RegAddressIncrement) {
             ++frame_version_;
         }
     }
@@ -154,6 +167,22 @@ void Vdc8568::perform_block_fill() {
         address = static_cast<uint16_t>(address + 1);
     }
     set_update_address(address);
+    ++frame_version_;
+}
+
+void Vdc8568::perform_block_copy() {
+    const std::size_t count = regs_[RegWordCount] == 0 ? 256 : regs_[RegWordCount];
+    uint16_t source = word_from_regs(regs_, RegBlockStartHigh, RegBlockStartLow);
+    uint16_t destination = update_address();
+    // Copy forwards byte by byte so overlapping ranges see earlier writes.
+    for (std::size_t i = 0; i < count; ++i) {
+        vram_[destination] = vram_[source];
+        source = static_cast<uint16_t>(source + 1);
+        destination = static_cast<uint16_t>(destination + 1);
+    }
+    regs_[RegBlockStartHigh] = static_cast<uint8_t>(source >> 8);
+    regs_[RegBlockStartLow] = static_cast<uint8_t>(source & 0xFF);
+    set_update_address(destination);
     ++frame_version_;
 }
 

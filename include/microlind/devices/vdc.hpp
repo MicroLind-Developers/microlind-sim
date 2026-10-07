@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 #include "microlind/bus.hpp"
 
@@ -35,6 +36,7 @@ public:
     [[nodiscard]] std::array<uint8_t, DisplayCells> display_chars() const;
     [[nodiscard]] std::array<uint8_t, DisplayCells> display_attrs() const;
     [[nodiscard]] std::array<uint8_t, CharacterBytes> character_data() const;
+    void copy_vram(uint16_t address, std::span<uint8_t> destination) const;
 
 private:
     static constexpr uint8_t RegDisplayStartHigh = 0x0C;
@@ -55,10 +57,13 @@ private:
     static constexpr uint8_t RegUnderlineScan = 0x1D;
     static constexpr uint8_t RegWordCount = 0x1E;
     static constexpr uint8_t RegData = 0x1F;
+    static constexpr uint8_t RegBlockStartHigh = 0x20;
+    static constexpr uint8_t RegBlockStartLow = 0x21;
 
     [[nodiscard]] uint8_t read_selected_register(bool side_effects);
     void write_selected_register(uint8_t value);
     void perform_block_fill();
+    void perform_block_copy();
     void increment_update_address();
     void set_update_address(uint16_t address);
 

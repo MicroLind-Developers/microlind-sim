@@ -148,9 +148,8 @@ bool save_vdc_screenshot_png(
         error = "No VDC is configured.";
         return false;
     }
-    if (vdc.columns == 0 || vdc.rows == 0 ||
-        static_cast<std::size_t>(vdc.columns) * vdc.rows > vdc.chars.size()) {
-        error = "The VDC frame dimensions are invalid.";
+    if (const char* frame_error = microlind::app::vdc_frame_error(vdc)) {
+        error = frame_error;
         return false;
     }
 

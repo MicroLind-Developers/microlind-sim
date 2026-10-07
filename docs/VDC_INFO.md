@@ -91,6 +91,73 @@ start the fill. A value of zero in `$1E` means 256 bytes. Both the normal `$1F`
 write and the block fill advance the update address in registers `$12/$13`, so
 firmware commonly writes `total_length - 1` to `$1E`.
 
+## Block copy
+
+Set bit 7 of register `$18` to select block copy mode. Set the source address in
+`$20/$21` and the destination update address in `$12/$13`, then write the byte
+count to `$1E` to start copying. A count of zero means 256 bytes. Unlike fill,
+copy does not need an initial write to `$1F`.
+
+Bytes are copied forwards, advancing both addresses by one per byte and wrapping
+at 64 KiB. Both address pairs finish pointing just past their respective blocks,
+so another write to `$1E` continues the copy. Overlapping ranges observe earlier
+writes: copying to a higher overlapping address can repeat source bytes. The
+simulator completes the operation immediately and updates the display version.
+
+The register sequence is described in the [Commodore 128 Programmer's Reference
+Guide](https://www.pagetable.com/docs/Commodore%20128%20Programmer%27s%20Reference%20Guide.pdf),
+under “Block Copy” on page 313.
+
+## Bitmap graphics
+
+Set bit 7 of `$19` to render bitmap data from the display base in `$0C/$0D`.
+Each byte contains eight pixels, most significant bit first. `$01` sets byte
+columns; `$06` sets row groups; `($09 & $1F) + 1` sets scan lines per group.
+The bitmap scan-line stride is `$01 + $1B`, including skipped bytes, and all
+addresses wrap at 64 KiB. For 640x200, program `$01 = 80`, `$06 = 25`,
+`$09 = 7`, `$16 = $78`, `$17 = 8`, and `$1B = 0`.
+
+With bit 6 of `$19` clear, `$1A` selects the global foreground (high nibble)
+and background (low nibble). With bit 6 set, fetch colors from `$14/$15`:
+each byte selects foreground in its low nibble and background in its high
+nibble for one byte column across a row group. Color rows have the same
+`$01 + $1B` stride, advancing once per group instead of once per scan line.
+All eight color-byte bits are RGBI color bits; text underline, blink, reverse,
+and alternate-character flags do not apply. `$18` bit 6 reverses the two colors.
+
+The current simulator profile requires `$08 & 3` to be 0 or 2, `$18 & $1F = 0`,
+`$19 & $3F = 0`, `$16 = $78`, and `$17 & $1F` equal to the group height.
+It accepts positive dimensions up to 2048x1024 pixels, with at most 8 MiB of
+RGBA framebuffer storage. Unsupported profiles show a diagnostic and cannot
+export a PNG. Interlace, smooth scrolling, double width, semigraphics, display
+gating, and bitmap cursor effects remain unimplemented. The text cursor is
+confined to text mode. Ready status and block operations retain immediate
+completion, and the live display retains its 25 Hz snapshot refresh.
+
+Snapshots own packed bitmap bytes and optional colors. Snapshot extraction
+does not change register selection or the VRAM update address. Bitmap mode
+does not copy character-generator RAM. Returning to text restores the existing
+text snapshot/compositor path; firmware must retain or restore its text data.
+
+### Firmware example
+
+`examples/vdc_bitmap.asm` initializes all relevant registers, clears with block
+fill, draws byte/scan-line boundary patterns, copies one scan line with block
+copy, then demonstrates color attributes and returning to text.
+
+```sh
+lwasm --format=srec --output=build/vdc_bitmap.srec examples/vdc_bitmap.asm
+cmake -S . -B build -DMICROLIND_BUILD_GUI=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build --target microlind-sim-gui
+./build/microlind-sim-gui
+```
+
+Load `examples/hw.cfg` and the generated S-record in the GUI, reset, and run.
+The ROM starts at `$F800`. Initially the image uses global white/black colors.
+Pause, change RAM `$0000` to 1, and resume to enable per-cell colors. Change it
+to 2 and resume to return to text with a custom glyph. Fit, zoom, CRT aspect,
+and Save PNG work in both modes; PNGs retain native pixel dimensions.
+
 ## Attribute RAM
 In the attribute ram each byte corresponds to a byte on the screen. This byte defines the characteristics of that character.
 

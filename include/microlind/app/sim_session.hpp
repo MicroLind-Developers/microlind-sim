@@ -176,6 +176,9 @@ struct VdcSnapshot {
     std::array<uint8_t, Cells> chars{};
     std::array<uint8_t, Cells> attrs{};
     std::array<uint8_t, CharacterBytes> character_data{};
+    // Packed visible scan lines and row-group colors, with VRAM stride removed.
+    std::vector<uint8_t> bitmap_data;
+    std::vector<uint8_t> bitmap_attrs;
 };
 
 struct LogicDecodeSnapshot {

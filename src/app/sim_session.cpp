@@ -9,6 +9,7 @@
 #include "microlind/app/disassembler.hpp"
 #include "microlind/app/logic_validation.hpp"
 #include "microlind/app/sim_builder.hpp"
+#include "microlind/app/vdc_render.hpp"
 
 #include "microlind/devices/compact_flash.hpp"
 #include "microlind/devices/memory_mapper.hpp"
@@ -472,9 +473,26 @@ VdcSnapshot SimSession::vdc_snapshot() const {
     snapshot.cursor_position = vdc_dev_->cursor_position();
     snapshot.character_start = vdc_dev_->character_start();
     snapshot.frame_version = vdc_dev_->frame_version();
-    snapshot.chars = vdc_dev_->display_chars();
-    snapshot.attrs = vdc_dev_->display_attrs();
-    snapshot.character_data = vdc_dev_->character_data();
+    if (vdc_bitmap_enabled(snapshot)) {
+        const auto geometry = vdc_frame_geometry(snapshot);
+        if (geometry.error) return snapshot;
+        snapshot.bitmap_data.resize(geometry.bitmap_bytes);
+        snapshot.bitmap_attrs.resize(geometry.attribute_bytes);
+        for (int y = 0; y < geometry.height; ++y) {
+            vdc_dev_->copy_vram(static_cast<uint16_t>(snapshot.display_start + y * geometry.stride),
+                std::span<uint8_t>(snapshot.bitmap_data).subspan(
+                    static_cast<std::size_t>(y) * geometry.byte_columns, geometry.byte_columns));
+        }
+        for (int row = 0; row < geometry.row_groups && !snapshot.bitmap_attrs.empty(); ++row) {
+            vdc_dev_->copy_vram(static_cast<uint16_t>(snapshot.attribute_start + row * geometry.stride),
+                std::span<uint8_t>(snapshot.bitmap_attrs).subspan(
+                    static_cast<std::size_t>(row) * geometry.byte_columns, geometry.byte_columns));
+        }
+    } else {
+        snapshot.chars = vdc_dev_->display_chars();
+        snapshot.attrs = vdc_dev_->display_attrs();
+        snapshot.character_data = vdc_dev_->character_data();
+    }
     return snapshot;
 }
 

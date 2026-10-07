@@ -84,6 +84,64 @@ bool vdc_attributes_enabled(const VdcSnapshot& snapshot) {
     return (snapshot.registers[kRegHorizontalScroll] & kAttributesEnabled) != 0;
 }
 
+bool vdc_bitmap_enabled(const VdcSnapshot& snapshot) {
+    return (snapshot.registers[kRegHorizontalScroll] & 0x80) != 0;
+}
+
+VdcFrameGeometry vdc_frame_geometry(const VdcSnapshot& snapshot) {
+    VdcFrameGeometry geometry;
+    if (!snapshot.present) {
+        geometry.error = "No VDC is configured.";
+        return geometry;
+    }
+    geometry.group_height = (snapshot.registers[kRegCharacterTotalVertical] & 0x1F) + 1;
+    if (vdc_bitmap_enabled(snapshot)) {
+        geometry.byte_columns = snapshot.registers[0x01];
+        geometry.row_groups = snapshot.registers[0x06];
+        geometry.width = geometry.byte_columns * 8;
+        geometry.height = geometry.row_groups * geometry.group_height;
+        geometry.stride = geometry.byte_columns + snapshot.registers[0x1B];
+        if ((snapshot.registers[0x08] & 1) != 0 ||
+            (snapshot.registers[kRegVerticalScroll] & 0x1F) != 0 ||
+            (snapshot.registers[kRegHorizontalScroll] & 0x3F) != 0 ||
+            snapshot.registers[kRegCharacterHorizontal] != 0x78 ||
+            (snapshot.registers[kRegCharacterVertical] & 0x1F) != geometry.group_height) {
+            geometry.error = "Unsupported VDC bitmap profile (interlace, scrolling, or cell geometry).";
+            return geometry;
+        }
+    } else {
+        geometry.width = snapshot.columns * ((snapshot.registers[kRegCharacterHorizontal] >> 4) + 1);
+        geometry.height = snapshot.rows * geometry.group_height;
+        if (static_cast<std::size_t>(snapshot.columns) * snapshot.rows > snapshot.chars.size()) {
+            geometry.error = "The VDC text frame exceeds the snapshot capacity.";
+            return geometry;
+        }
+    }
+    // Bound allocations before calculating payload sizes or allocating RGBA pixels.
+    // These limits allow up to 8 MiB of RGBA data per frame.
+    if (geometry.width <= 0 || geometry.height <= 0 || geometry.width > 2048 || geometry.height > 1024) {
+        geometry.error = "The VDC frame dimensions are invalid or exceed 2048x1024.";
+        return geometry;
+    }
+    if (vdc_bitmap_enabled(snapshot)) {
+        geometry.bitmap_bytes = static_cast<std::size_t>(geometry.byte_columns) * geometry.height;
+        geometry.attribute_bytes = vdc_attributes_enabled(snapshot)
+            ? static_cast<std::size_t>(geometry.byte_columns) * geometry.row_groups : 0;
+    }
+    return geometry;
+}
+
+const char* vdc_frame_error(const VdcSnapshot& snapshot) {
+    const auto geometry = vdc_frame_geometry(snapshot);
+    if (geometry.error) return geometry.error;
+    if (vdc_bitmap_enabled(snapshot) &&
+        (snapshot.bitmap_data.size() < geometry.bitmap_bytes ||
+         snapshot.bitmap_attrs.size() < geometry.attribute_bytes)) {
+        return "The VDC bitmap snapshot is incomplete.";
+    }
+    return nullptr;
+}
+
 VdcCellStyle vdc_cell_style(const VdcSnapshot& snapshot, std::size_t cell) {
     const uint8_t color_register = snapshot.registers[kRegColor];
     uint8_t foreground = static_cast<uint8_t>(color_register >> 4);
@@ -128,7 +186,33 @@ int vdc_underline_row(const VdcSnapshot& snapshot, int cell_height) {
 
 VdcFramebuffer render_vdc_framebuffer(const VdcSnapshot& snapshot, double elapsed_seconds) {
     VdcFramebuffer framebuffer;
-    if (!snapshot.present || snapshot.columns == 0 || snapshot.rows == 0) return framebuffer;
+    if (vdc_frame_error(snapshot)) return framebuffer;
+    const auto geometry = vdc_frame_geometry(snapshot);
+    framebuffer.width = geometry.width;
+    framebuffer.height = geometry.height;
+    framebuffer.rgba.resize(static_cast<std::size_t>(framebuffer.width) * framebuffer.height * 4);
+
+    if (vdc_bitmap_enabled(snapshot)) {
+        const bool attributes = vdc_attributes_enabled(snapshot);
+        const bool reverse = (snapshot.registers[kRegVerticalScroll] & kGlobalReverse) != 0;
+        for (int y = 0; y < framebuffer.height; ++y) {
+            for (int column = 0; column < geometry.byte_columns; ++column) {
+                const auto bits = snapshot.bitmap_data[static_cast<std::size_t>(y) * geometry.byte_columns + column];
+                const auto color = attributes
+                    ? snapshot.bitmap_attrs[static_cast<std::size_t>(y / geometry.group_height) * geometry.byte_columns + column]
+                    : snapshot.registers[kRegColor];
+                // Bitmap attributes reverse the nibble roles of the global color register.
+                auto foreground = vdc_rgb(attributes ? color & 0x0F : color >> 4);
+                auto background = vdc_rgb(attributes ? color >> 4 : color & 0x0F);
+                if (reverse) std::swap(foreground, background);
+                for (int bit = 0; bit < 8; ++bit) {
+                    set_pixel(framebuffer.rgba, framebuffer.width, column * 8 + bit, y,
+                        (bits & (0x80u >> bit)) != 0 ? foreground : background);
+                }
+            }
+        }
+        return framebuffer;
+    }
 
     const int cell_width = static_cast<int>((snapshot.registers[kRegCharacterHorizontal] >> 4) & 0x0F) + 1;
     const int displayed_width = std::min({
@@ -139,9 +223,6 @@ VdcFramebuffer render_vdc_framebuffer(const VdcSnapshot& snapshot, double elapse
     const int displayed_height = std::min(
         static_cast<int>(snapshot.registers[kRegCharacterVertical] & 0x1F),
         cell_height);
-    framebuffer.width = static_cast<int>(snapshot.columns) * cell_width;
-    framebuffer.height = static_cast<int>(snapshot.rows) * cell_height;
-    framebuffer.rgba.resize(static_cast<std::size_t>(framebuffer.width) * framebuffer.height * 4);
 
     const std::size_t cell_count = std::min(
         static_cast<std::size_t>(snapshot.columns) * snapshot.rows,

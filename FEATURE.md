@@ -74,6 +74,10 @@ The simulator GUI is an ImGui/SDL application that runs beside the CLI and provi
 - VDC Display panel composing the MOS 8563/8568 text and attribute RAM through
   its character-generator RAM into a native-pixel framebuffer at 25 Hz, with
   fit-to-panel, integer zoom, and CRT pixel-aspect display options.
+- VDC bitmap mode with scan-line VRAM addressing, row stride and 64 KiB wrapping,
+  global RGBI colors or foreground/background colors per cell, global reverse,
+  and the same live display and PNG screenshot pipeline as text mode. Supports
+  non-interlaced eight-pixel cells; scrolling and interlace remain deferred.
 - Serial panel with terminal view, raw hex view, RX text injection, RX hex-byte
   injection, TX clear, output-port byte display, and RGB power LED display.
 

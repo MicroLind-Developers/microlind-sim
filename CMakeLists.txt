@@ -81,6 +81,7 @@ if(BUILD_TESTING)
         tests/test_microcycle.cpp
         tests/test_sim_session.cpp
         tests/test_vdc_render.cpp
+        tests/test_vdc.cpp
         src/gui/gui_runtime.cpp
     )
     target_include_directories(microlind-sim-tests PRIVATE src/gui)
