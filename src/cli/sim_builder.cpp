@@ -296,7 +296,7 @@ Simulator build_sim(
                 sim.map_device(segment.start, segment.end, BusDeviceSelect::Rom, std::move(rom_dev));
             }
         }
-    } else if (image && !image->data.empty()) {
+    } else if (!cfg && image && !image->data.empty()) {
         auto rom_dev = std::make_unique<Memory>(image->data.size(), false);
         rom_dev->load(0, image->data);
         sim.map_device(
@@ -304,7 +304,7 @@ Simulator build_sim(
             static_cast<uint16_t>(image->base + image->data.size() - 1),
             BusDeviceSelect::Rom,
             std::move(rom_dev));
-    } else {
+    } else if (!cfg) {
         default_memory_map(sim, 64 * 1024, 0x8000, nullptr);
     }
 

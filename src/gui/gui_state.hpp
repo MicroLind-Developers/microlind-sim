@@ -17,6 +17,7 @@
 #include "gui_runtime.hpp"
 
 #include "microlind/app/image_loader.hpp"
+#include "microlind/app/config_editor.hpp"
 #include "microlind/app/session_file.hpp"
 #include "microlind/app/vdc_render.hpp"
 #include "microlind/cpu.hpp"
@@ -112,6 +113,18 @@ struct GuiState {
     bool about_open{false};
     microlind::app::GuiTheme theme{microlind::app::GuiTheme::Dark};
     bool show_file_panel{true};
+    bool config_editor_open_requested{};
+    bool config_editor_modal_open{};
+    app::ConfigEditor config_editor;
+    bool config_editor_initialized{};
+    int config_editor_section{5};
+    std::array<char, 2048> config_editor_path{};
+    std::string config_editor_error;
+    std::string config_editor_status;
+    std::vector<app::ConfigIssue> config_editor_pld_issues;
+    bool config_editor_pld_checked{};
+    int config_editor_pending_action{};
+    std::filesystem::path config_editor_pending_path;
     bool show_control_panel{true};
     bool show_registers{true};
     bool show_disassembly{true};

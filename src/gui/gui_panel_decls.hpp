@@ -5,6 +5,7 @@
 namespace microlind::gui {
 
 void draw_file_panel(GuiState& state);
+void draw_config_editor(GuiState& state);
 void draw_control_panel(GuiState& state);
 void draw_registers(GuiState& state);
 void draw_disassembly(GuiState& state);

@@ -37,7 +37,7 @@ struct GuiSessionState {
     int vdc_scale_mode{};
     bool vdc_crt_aspect{true};
     int operations_per_minute{600};
-    bool run_micro_steps{};
+    bool run_micro_steps{false};
     uint32_t true_clock_hz{1000000};
     GuiTheme theme{GuiTheme::Dark};
     bool show_file_panel{true};

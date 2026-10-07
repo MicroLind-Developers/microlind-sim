@@ -3,6 +3,38 @@
 `hw.cfg` describes the simulator's board-level memory map and optional PLD
 logic integration. The current example is `examples/hw.cfg`.
 
+## GUI configuration editor
+
+Open **File > Configuration...**. This pauses execution and opens a modal editor,
+which blocks the simulator controls until closed. Execution stays paused after
+closing. The editor opens the selected config as a draft. **New** starts a board
+configuration with the standard microLind addresses and no CF image attached.
+
+Use the device checkboxes to enable or disable sections, then select a device
+to edit its addresses, interrupt level, or other settings. ROM regions and
+mapper windows have editable tables. CF and PLD paths can be typed or selected
+with Browse. Relative paths use the directory of the opened config; a new draft
+uses the simulator's working directory until its first save.
+
+The address map and validation messages update as settings change. Invalid
+ranges, overlapping mappings, unsupported device sizes, and invalid bank
+settings prevent saving and applying. **Validate PLD** checks the selected logic
+files and their decode against the draft. Applying checks PLD files again;
+decode mismatches block PLD routing, while validation mode reports warnings.
+
+**Save** and **Save as...** write the draft without changing running hardware.
+Save As adjusts relative asset paths to keep pointing to the same files.
+Comments and unknown settings in enabled sections are retained; disabled
+sections are omitted. Numeric inline comments become standalone comments.
+Saving over an opened file that changed externally is rejected; reopen it or
+save to another path.
+
+**Save & apply** saves the file and rebuilds the simulated
+hardware using the current ROM image. This resets CPU and device state.
+**Discard edits** restores the last opened or saved draft. Opening another file
+or creating a new configuration asks before replacing unsaved changes. **Close**
+retains the draft for the next time the editor is opened.
+
 ## Format
 
 The file is an INI-style text file:

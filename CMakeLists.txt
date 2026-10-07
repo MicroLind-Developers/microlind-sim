@@ -37,6 +37,7 @@ add_library(microlind-sim
 target_include_directories(microlind-sim PUBLIC include)
 
 add_library(microlind-sim-app
+    src/app/config_editor.cpp
     src/app/logic_validation.cpp
     src/app/session_file.cpp
     src/app/sim_session.cpp
@@ -74,6 +75,7 @@ if(BUILD_TESTING)
 
     add_executable(microlind-sim-tests
         tests/test_bus.cpp
+        tests/test_config_editor.cpp
         tests/test_cpu.cpp
         tests/test_integration.cpp
         tests/test_logic.cpp
@@ -152,6 +154,8 @@ if(MICROLIND_BUILD_GUI)
         GIT_TAG ${MICROLIND_PFD_GIT_TAG}
         GIT_SHALLOW TRUE
         UPDATE_DISCONNECTED TRUE
+        # We only need the header; skip upstream's obsolete CMake 3.1 project.
+        SOURCE_SUBDIR microlind-header-only
     )
     FetchContent_MakeAvailable(portable_file_dialogs)
 
@@ -171,6 +175,7 @@ if(MICROLIND_BUILD_GUI)
     add_executable(microlind-sim-gui
         "${MICROLIND_GUI_HELP_SOURCE}"
         src/gui/gui_debugger_panels.cpp
+        src/gui/gui_config_editor.cpp
         src/gui/gui_file_panels.cpp
         src/gui/gui_logic_analyser.cpp
         src/gui/gui_memory_panels.cpp

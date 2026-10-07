@@ -76,6 +76,11 @@ XR88C92 serial, CompactFlash, memory mapper windows, board IRQ register, and
 optional PLD logic routing. See [docs/hardware-config.md](docs/hardware-config.md)
 for the full syntax.
 
+Use **File > Configuration...** in the GUI to create or edit hardware configs
+with device checkboxes, settings forms, ROM and mapper tables, and live
+validation. The modal editor pauses simulation. Saving keeps hardware intact;
+**Save & apply** rebuilds and resets it using the edited configuration.
+
 A minimal CompactFlash section looks like:
 
 ```

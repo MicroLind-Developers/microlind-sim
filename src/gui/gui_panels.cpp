@@ -145,6 +145,10 @@ void draw_main_menu(GuiState& state) {
             state.save_session_as();
         }
         ImGui::Separator();
+        if (ImGui::MenuItem("Configuration...")) {
+            state.config_editor_open_requested = true;
+        }
+        ImGui::Separator();
         if (ImGui::MenuItem("Exit", "Ctrl+Q")) {
             state.quit_requested = true;
         }
@@ -404,6 +408,7 @@ void draw_workbench(GuiState& state) {
     if (state.show_video) draw_vdc_display(state);
     if (state.show_parallel) draw_parallel(state);
     if (state.show_logic_analyser) draw_logic_analyser(state);
+    draw_config_editor(state);
     if (!state.true_running()) {
         if (state.show_file_panel) draw_file_panel(state);
         if (state.show_registers) draw_registers(state);
@@ -423,6 +428,7 @@ void draw_workbench(GuiState& state) {
 }
 
 void handle_shortcut(GuiState& state, SDL_Keycode key, SDL_Keymod mods) {
+    if (state.config_editor_open_requested || state.config_editor_modal_open) return;
     const bool ctrl = (mods & KMOD_CTRL) != 0;
     const bool shift = (mods & KMOD_SHIFT) != 0;
 

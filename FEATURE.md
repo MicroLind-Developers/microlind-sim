@@ -6,6 +6,10 @@ The simulator GUI is an ImGui/SDL application that runs beside the CLI and provi
 
 - Load and save session files.
 - Load hardware configuration, ROM images, and optional CompactFlash images.
+- File > Configuration opens a modal hardware editor and pauses simulation.
+  Enable or disable devices, edit values and ROM/mapper tables, inspect the
+  address map, and validate settings or PLD decode before saving and applying.
+  Save As preserves asset locations; applying resets the simulated hardware.
 - Support raw, Intel HEX, and S-record ROM formats.
 - Save and restore GUI window/table layout with the session.
 - Save and restore debugger view state, breakpoints, watchpoints, labels, and hit counts.
