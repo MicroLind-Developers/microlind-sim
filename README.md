@@ -22,6 +22,12 @@ debugger GUI.
 cmake -S . -B build
 cmake --build build
 ```
+Single-config generators default to a Release build. To keep a separate
+performance build tree:
+```
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release
+```
 Run the CLI:
 ```
 ./build/microlind-sim-cli --6309 --rom path/to/bios.rom
@@ -51,7 +57,12 @@ ROM, hardware config, and CF image loading. It includes run, pause, reset,
 instruction step, micro-step, step-over, run-until-address, run-until-return,
 and rate-limited Run controls. The run rate is configured as operations per
 minute and displayed as operations per second; Run can execute either full
-instructions or individual micro-steps.
+instructions or individual micro-steps. A True Run mode can target 1, 2, or
+3 MHz while pausing debugger panel refresh and keeping peripherals such as
+serial active. True Run executes on a named simulator worker thread while the
+GUI reads runtime snapshots and queues live serial/control commands safely.
+Normal debugger Run, Micro Run, Run Until, Step Over, and True Run share the
+same runtime mode handling.
 
 Debugger panels include registers, flags, disassembly with instruction bytes,
 editable memory, stack inspection, serial RX/TX, breakpoints, watchpoints,

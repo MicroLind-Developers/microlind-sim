@@ -14,9 +14,11 @@
 #include "portable-file-dialogs.h"
 #endif
 
+#include "gui_runtime.hpp"
+
 #include "microlind/app/image_loader.hpp"
 #include "microlind/app/session_file.hpp"
-#include "microlind/app/sim_session.hpp"
+#include "microlind/app/vdc_render.hpp"
 #include "microlind/cpu.hpp"
 
 namespace microlind::gui {
@@ -43,6 +45,16 @@ std::string hex_value(uint32_t value, int width);
 std::string instruction_bytes(microlind::Bus& bus, uint16_t pc, uint8_t length);
 TextureResource load_png_texture(SDL_Renderer* renderer, const std::filesystem::path& path);
 SDL_Surface* load_png_surface(const std::filesystem::path& path);
+bool save_vdc_screenshot_png(
+    const std::filesystem::path& path,
+    const microlind::app::VdcSnapshot& vdc,
+    double elapsed_seconds,
+    std::string& error);
+bool update_rgba_texture(
+    SDL_Renderer* renderer,
+    TextureResource& texture,
+    const microlind::app::VdcFramebuffer& framebuffer,
+    std::string& error);
 std::string serial_terminal_text(const std::vector<uint8_t>& bytes);
 std::vector<uint8_t> parse_hex_bytes(std::string_view input, bool& ok);
 const char* watchpoint_type_label(microlind::app::WatchpointType type);
@@ -59,7 +71,7 @@ microlind::cli::RomFormat selected_rom_format(int index);
 int rom_format_combo_index(microlind::cli::RomFormat format);
 
 struct GuiState {
-    microlind::app::SimSession session{microlind::CpuMode::HD6309};
+    GuiRuntime runtime{microlind::CpuMode::HD6309};
 
     std::array<char, 512> rom_path{};
     std::array<char, 512> config_path{};
@@ -72,7 +84,6 @@ struct GuiState {
     int rom_format_index{1};
     int raw_base{0x8000};
     int cf_min_sectors{0};
-    int operations_per_minute{600};
     int memory_start{0x0000};
     int memory_rows{16};
     bool memory_follow_pc{false};
@@ -86,12 +97,16 @@ struct GuiState {
     bool stack_follow_pointer{true};
     bool serial_hex_view{false};
     bool serial_rx_hex{false};
+    std::array<SDL_Keycode, 5> joystick_keys{{SDLK_UP, SDLK_DOWN, SDLK_LEFT, SDLK_RIGHT, SDLK_SPACE}};
+    std::array<int, 5> joystick_bits{{0, 1, 2, 3, 4}};
+    std::array<bool, 5> joystick_pressed{};
+    bool joystick_port_a{};
+    int joystick_rebinding{-1};
+    int vdc_scale_mode{};
+    bool vdc_crt_aspect{true};
     bool pld_live_bus{false};
     bool pld_follow_pc{true};
     bool pld_read{true};
-    bool running{false};
-    bool run_micro_steps{false};
-    bool run_until_active{false};
     bool quit_requested{false};
     bool help_open{false};
     bool about_open{false};
@@ -106,52 +121,110 @@ struct GuiState {
     bool show_mapper{true};
     bool show_pld_logic{true};
     bool show_compact_flash{true};
+    bool show_parallel{true};
+    bool show_logic_analyser{true};
+    bool show_video{true};
     bool show_breakpoints{true};
     bool show_watchpoints{true};
     bool show_trace{true};
     bool show_serial{true};
     bool show_log{true};
+    bool logic_analyser_microcycle{};
+    bool logic_analyser_use_trigger{};
+    int logic_analyser_trigger_signal{static_cast<int>(LogicSignal::ViaTimer2Flag)};
+    int logic_analyser_trigger_mode{static_cast<int>(LogicTriggerMode::Rising)};
+    int logic_analyser_samples_visible{160};
+    int logic_analyser_history_offset{};
+    std::array<bool, kLogicSignalCount> logic_analyser_signals{};
+    std::array<ImVec4, kLogicSignalCount> logic_analyser_colors{};
+    bool speaker_muted{false};
+    bool speaker_audio_available{false};
+    bool speaker_signal_active{false};
+    float speaker_volume{0.12f};
+    double speaker_frequency_hz{};
+    uint64_t speaker_last_cycles{};
+    uint64_t speaker_last_transitions{};
     TextureResource about_logo{};
+    TextureResource vdc_display{};
+    SDL_Renderer* renderer{};
+    microlind::app::VdcSnapshot cached_vdc{};
+    double last_vdc_refresh_time{-1.0};
 
     GuiState() {
         set_buffer(session_path, "examples/bios.session");
         set_buffer(rom_path, "examples/bios.ihex");
         set_buffer(config_path, "examples/hw.cfg");
         set_buffer(cf_path, "examples/sim.img");
-        session.add_log("GUI ready.");
+        logic_analyser_signals[static_cast<std::size_t>(LogicSignal::ClockE)] = true;
+        logic_analyser_signals[static_cast<std::size_t>(LogicSignal::ClockQ)] = true;
+        logic_analyser_signals[static_cast<std::size_t>(LogicSignal::CpuIrq)] = true;
+        logic_analyser_signals[static_cast<std::size_t>(LogicSignal::ViaTimer2Flag)] = true;
+        logic_analyser_signals[static_cast<std::size_t>(LogicSignal::ViaPb7)] = true;
+        const std::array<ImVec4, kLogicSignalCount> default_colors{{
+            {0.35f, 0.75f, 1.00f, 1.00f}, {0.80f, 0.45f, 1.00f, 1.00f}, {0.45f, 0.90f, 0.60f, 1.00f},
+            {1.00f, 0.75f, 0.30f, 1.00f}, {0.95f, 0.50f, 0.35f, 1.00f}, {1.00f, 0.35f, 0.35f, 1.00f},
+            {1.00f, 0.55f, 0.25f, 1.00f}, {1.00f, 0.65f, 0.20f, 1.00f}, {0.30f, 0.90f, 0.85f, 1.00f},
+            {0.95f, 0.85f, 0.25f, 1.00f}, {0.45f, 0.65f, 1.00f, 1.00f}, {0.95f, 0.45f, 0.75f, 1.00f},
+            {0.60f, 0.90f, 0.35f, 1.00f}, {0.65f, 0.65f, 0.65f, 1.00f}, {0.85f, 0.85f, 0.85f, 1.00f},
+        }};
+        logic_analyser_colors = default_colors;
+        runtime.add_log("GUI ready.");
+    }
+
+    bool running() const {
+        const auto mode = runtime.mode();
+        return mode == RuntimeMode::DebugRun || mode == RuntimeMode::DebugMicroRun;
+    }
+
+    bool run_until_active() const {
+        return runtime.run_until_active();
+    }
+
+    bool true_running() const {
+        return runtime.true_run_active();
+    }
+
+    bool debug_run_active() const {
+        return runtime.debug_run_active();
     }
 
     void stop_execution() {
-        running = false;
-        run_until_active = false;
+        runtime.stop();
     }
 
     void load_rom() {
         const std::string path = buffer_string(rom_path);
-        session.load_rom(path, selected_rom_format(rom_format_index), static_cast<uint16_t>(raw_base));
+        runtime.load_rom(path, selected_rom_format(rom_format_index), static_cast<uint16_t>(raw_base));
     }
 
     void load_config() {
         const std::string path = buffer_string(config_path);
-        session.load_hardware_config(path);
+        runtime.load_hardware_config(path);
     }
 
     void attach_cf() {
         const std::string path = buffer_string(cf_path);
-        session.attach_cf_image(path, static_cast<uint32_t>(std::max(cf_min_sectors, 0)));
+        runtime.attach_cf_image(path, static_cast<uint32_t>(std::max(cf_min_sectors, 0)));
+    }
+
+    void remove_cf() {
+        if (runtime.remove_cf_image()) {
+            set_buffer(cf_path, "");
+            cf_min_sectors = 0;
+        }
     }
 
     void load_session_file(const std::filesystem::path& path) {
         std::string error;
         const auto loaded = microlind::app::load_session_definition(path, error);
         if (!loaded) {
-            session.add_log("Session error: " + error);
+            runtime.add_log("Session error: " + error);
             return;
         }
 
         stop_execution();
         if (loaded->mode) {
-            session.set_mode(*loaded->mode);
+            runtime.set_cpu_mode(*loaded->mode);
         }
         set_buffer(session_path, path.string());
         set_buffer(config_path, loaded->config_path.string());
@@ -160,7 +233,8 @@ struct GuiState {
         rom_format_index = rom_format_combo_index(loaded->rom_format);
         raw_base = loaded->raw_base;
         cf_min_sectors = static_cast<int>(loaded->cf_sectors);
-        operations_per_minute = loaded->gui.operations_per_minute;
+        runtime.set_operations_per_minute(static_cast<uint32_t>(std::max(loaded->gui.operations_per_minute, 0)));
+        runtime.set_true_run_target_hz(true_hz_for_index(true_clock_index_for_hz(loaded->gui.true_clock_hz)));
         memory_start = loaded->gui.memory_start;
         memory_rows = loaded->gui.memory_rows;
         memory_follow_pc = loaded->gui.memory_follow_pc;
@@ -170,7 +244,23 @@ struct GuiState {
         stack_follow_pointer = loaded->gui.stack_follow_pointer;
         serial_hex_view = loaded->gui.serial_hex_view;
         serial_rx_hex = loaded->gui.serial_rx_hex;
-        run_micro_steps = loaded->gui.run_micro_steps;
+        release_joystick();
+        joystick_keys = {
+            static_cast<SDL_Keycode>(loaded->gui.joystick_keys[0]),
+            static_cast<SDL_Keycode>(loaded->gui.joystick_keys[1]),
+            static_cast<SDL_Keycode>(loaded->gui.joystick_keys[2]),
+            static_cast<SDL_Keycode>(loaded->gui.joystick_keys[3]),
+            static_cast<SDL_Keycode>(loaded->gui.joystick_keys[4]),
+        };
+        for (std::size_t i = 0; i < joystick_bits.size(); ++i) {
+            joystick_bits[i] = loaded->gui.joystick_bits[i];
+        }
+        joystick_port_a = loaded->gui.joystick_port_a;
+        joystick_pressed.fill(false);
+        joystick_rebinding = -1;
+        vdc_scale_mode = std::clamp(loaded->gui.vdc_scale_mode, 0, 4);
+        vdc_crt_aspect = loaded->gui.vdc_crt_aspect;
+        runtime.set_run_micro_steps(loaded->gui.run_micro_steps);
         theme = loaded->gui.theme;
         show_file_panel = loaded->gui.show_file_panel;
         show_control_panel = loaded->gui.show_control_panel;
@@ -182,22 +272,29 @@ struct GuiState {
         show_mapper = loaded->gui.show_mapper;
         show_pld_logic = loaded->gui.show_pld_logic;
         show_compact_flash = loaded->gui.show_compact_flash;
+        show_parallel = loaded->gui.show_parallel;
+        show_logic_analyser = loaded->gui.show_logic_analyser;
+        show_video = loaded->gui.show_video;
         show_breakpoints = loaded->gui.show_breakpoints;
         show_watchpoints = loaded->gui.show_watchpoints;
         show_trace = loaded->gui.show_trace;
         show_serial = loaded->gui.show_serial;
         show_log = loaded->gui.show_log;
 
-        const bool config_ok = session.load_hardware_config(loaded->config_path);
-        const bool rom_ok = config_ok && session.load_rom(loaded->rom_path, loaded->rom_format, loaded->raw_base);
-        if (rom_ok && !loaded->cf_path.empty()) {
-            session.attach_cf_image(loaded->cf_path, loaded->cf_sectors);
+        const bool config_ok = runtime.load_hardware_config(loaded->config_path);
+        const bool rom_ok = config_ok && runtime.load_rom(loaded->rom_path, loaded->rom_format, loaded->raw_base);
+        if (rom_ok) {
+            if (!loaded->cf_path.empty()) {
+                runtime.attach_cf_image(loaded->cf_path, loaded->cf_sectors);
+            } else {
+                runtime.remove_cf_image();
+            }
         }
         if (config_ok && rom_ok) {
-            session.set_breakpoints(loaded->breakpoints);
-            session.set_watchpoints(loaded->watchpoints);
+            runtime.set_breakpoints(loaded->breakpoints);
+            runtime.set_watchpoints(loaded->watchpoints);
             pending_layout_ini = loaded->layout_ini;
-            session.add_log("Loaded session: " + path.string());
+            runtime.add_log("Loaded session: " + path.string());
         }
     }
 
@@ -207,9 +304,11 @@ struct GuiState {
 
     bool save_session_file(const std::filesystem::path& path) {
         if (path.empty()) {
-            session.add_log("Session path is empty.");
+            runtime.add_log("Session path is empty.");
             return false;
         }
+
+        stop_execution();
 
         microlind::app::SessionDefinition definition;
         definition.config_path = buffer_string(config_path);
@@ -218,11 +317,12 @@ struct GuiState {
         definition.rom_format = selected_rom_format(rom_format_index);
         definition.raw_base = static_cast<uint16_t>(raw_base);
         definition.cf_sectors = static_cast<uint32_t>(std::max(cf_min_sectors, 0));
-        definition.mode = session.mode();
-        definition.breakpoints = session.breakpoints();
-        definition.watchpoints = session.watchpoints();
-        definition.gui.operations_per_minute = operations_per_minute;
-        definition.gui.run_micro_steps = run_micro_steps;
+        definition.mode = runtime.cpu_mode();
+        definition.breakpoints = runtime.breakpoints();
+        definition.watchpoints = runtime.watchpoints();
+        definition.gui.operations_per_minute = static_cast<int>(runtime.operations_per_minute());
+        definition.gui.run_micro_steps = runtime.run_micro_steps();
+        definition.gui.true_clock_hz = static_cast<uint32_t>(runtime.true_target_hz());
         definition.gui.memory_start = static_cast<uint16_t>(memory_start);
         definition.gui.memory_rows = memory_rows;
         definition.gui.memory_follow_pc = memory_follow_pc;
@@ -232,6 +332,13 @@ struct GuiState {
         definition.gui.stack_follow_pointer = stack_follow_pointer;
         definition.gui.serial_hex_view = serial_hex_view;
         definition.gui.serial_rx_hex = serial_rx_hex;
+        for (std::size_t i = 0; i < joystick_keys.size(); ++i) {
+            definition.gui.joystick_keys[i] = static_cast<uint32_t>(joystick_keys[i]);
+            definition.gui.joystick_bits[i] = static_cast<uint8_t>(joystick_bits[i]);
+        }
+        definition.gui.joystick_port_a = joystick_port_a;
+        definition.gui.vdc_scale_mode = vdc_scale_mode;
+        definition.gui.vdc_crt_aspect = vdc_crt_aspect;
         definition.gui.theme = theme;
         definition.gui.show_file_panel = show_file_panel;
         definition.gui.show_control_panel = show_control_panel;
@@ -243,6 +350,9 @@ struct GuiState {
         definition.gui.show_mapper = show_mapper;
         definition.gui.show_pld_logic = show_pld_logic;
         definition.gui.show_compact_flash = show_compact_flash;
+        definition.gui.show_parallel = show_parallel;
+        definition.gui.show_logic_analyser = show_logic_analyser;
+        definition.gui.show_video = show_video;
         definition.gui.show_breakpoints = show_breakpoints;
         definition.gui.show_watchpoints = show_watchpoints;
         definition.gui.show_trace = show_trace;
@@ -257,12 +367,12 @@ struct GuiState {
 
         std::string error;
         if (!microlind::app::save_session_definition(path, definition, error)) {
-            session.add_log(error);
+            runtime.add_log(error);
             return false;
         }
 
         set_buffer(session_path, path.string());
-        session.add_log("Saved session: " + path.string());
+        runtime.add_log("Saved session: " + path.string());
         return true;
     }
 
@@ -284,21 +394,25 @@ struct GuiState {
 #endif
     }
 
-    void send_serial_text() {
+    void send_serial_text(bool append_carriage_return = false) {
         const std::string text = buffer_string(serial_input);
         bool ok = true;
-        const std::vector<uint8_t> bytes = serial_rx_hex ? parse_hex_bytes(text, ok) : std::vector<uint8_t>(text.begin(), text.end());
+        std::vector<uint8_t> bytes = serial_rx_hex ? parse_hex_bytes(text, ok) : std::vector<uint8_t>(text.begin(), text.end());
         if (!ok) {
-            session.add_log("Serial RX hex parse error.");
+            runtime.add_log("Serial RX hex parse error.");
             return;
         }
-        if (session.inject_serial_bytes(bytes)) {
+        if (append_carriage_return) {
+            bytes.push_back('\r');
+        }
+        if (runtime.inject_serial_bytes(bytes)) {
             set_buffer(serial_input, "");
         }
     }
 
     void step_once() {
-        const auto result = session.run_instructions(1);
+        const auto result = runtime.run_instructions(1);
+        runtime.stop();
         if (result.hit_breakpoint || result.hit_watchpoint) {
             stop_execution();
         }
@@ -306,19 +420,28 @@ struct GuiState {
 
     void step_microcycle() {
         stop_execution();
-        const auto result = session.step_microcycle();
+        const auto result = runtime.step_microcycle();
         if (result.instruction_started) {
-            session.add_log("Started micro-step instruction.");
+            runtime.add_log("Started micro-step instruction.");
         }
         if (result.instruction_complete) {
-            session.add_log("Completed micro-step instruction.");
+            runtime.add_log("Completed micro-step instruction.");
         }
     }
 
     void toggle_run() {
-        running = !running;
-        if (running) {
-            run_until_active = false;
+        if (running()) {
+            runtime.stop();
+        } else {
+            runtime.start_debug_run(runtime.run_micro_steps());
+        }
+    }
+
+    void toggle_true_run() {
+        if (true_running()) {
+            runtime.stop_true_run();
+        } else {
+            runtime.start_true_run(runtime.true_target_hz());
         }
     }
 
@@ -333,6 +456,9 @@ struct GuiState {
         show_mapper = visible;
         show_pld_logic = visible;
         show_compact_flash = visible;
+        show_parallel = visible;
+        show_logic_analyser = visible;
+        show_video = visible;
         show_breakpoints = visible;
         show_watchpoints = visible;
         show_trace = visible;
@@ -340,32 +466,89 @@ struct GuiState {
         show_log = visible;
     }
 
-    double operations_per_second() const {
-        return static_cast<double>(std::max(operations_per_minute, 0)) / 60.0;
+    void sync_joystick() {
+        uint8_t mask = 0;
+        uint8_t value = 0;
+        for (std::size_t i = 0; i < joystick_bits.size(); ++i) {
+            const uint8_t bit = static_cast<uint8_t>(std::clamp(joystick_bits[i], 0, 7));
+            const uint8_t bit_mask = static_cast<uint8_t>(1u << bit);
+            mask = static_cast<uint8_t>(mask | bit_mask);
+            if (!joystick_pressed[i]) value = static_cast<uint8_t>(value | bit_mask);
+        }
+        runtime.set_parallel_input_bits(joystick_port_a, mask, value);
+    }
+
+    void release_joystick() {
+        if (std::none_of(joystick_pressed.begin(), joystick_pressed.end(), [](bool pressed) { return pressed; })) return;
+        joystick_pressed.fill(false);
+        sync_joystick();
+    }
+
+    bool handle_joystick_key(SDL_Keycode key, bool pressed, bool keyboard_captured) {
+        if (joystick_rebinding >= 0 && pressed) {
+            if (key == SDLK_ESCAPE) {
+                joystick_rebinding = -1;
+            } else {
+                joystick_keys[static_cast<std::size_t>(joystick_rebinding)] = key;
+                joystick_rebinding = -1;
+            }
+            return true;
+        }
+        if (keyboard_captured && pressed) return false;
+
+        bool matched = false;
+        for (std::size_t i = 0; i < joystick_keys.size(); ++i) {
+            if (joystick_keys[i] == key && joystick_pressed[i] != pressed) {
+                joystick_pressed[i] = pressed;
+                matched = true;
+            }
+        }
+        if (matched) sync_joystick();
+        return matched;
+    }
+
+    static uint64_t true_hz_for_index(int index) {
+        constexpr uint64_t clocks[] = {1000000, 2000000, 3000000};
+        return clocks[std::clamp(index, 0, 2)];
+    }
+
+    static int true_clock_index_for_hz(uint64_t hz) {
+        if (hz <= 1500000) return 0;
+        if (hz <= 2500000) return 1;
+        return 2;
     }
 
     void step_over() {
-        const auto target = session.step_over_target();
+        stop_execution();
+        const auto target = runtime.step_over_target();
         if (!target) {
             step_once();
             return;
         }
         run_until_address = *target;
-        running = false;
-        run_until_active = true;
-        session.add_log("Stepping over until " + hex_value(static_cast<uint16_t>(run_until_address), 4) + ".");
+        runtime.start_step_over(*target);
+        runtime.add_log("Stepping over until " + hex_value(static_cast<uint16_t>(run_until_address), 4) + ".");
     }
 
     void run_until_return() {
-        const auto target = session.return_address_from_stack();
+        stop_execution();
+        const auto target = runtime.return_address_from_stack();
         if (!target) {
-            session.add_log("No return address is available on S.");
+            runtime.add_log("No return address is available on S.");
             return;
         }
         run_until_address = *target;
-        running = false;
-        run_until_active = true;
-        session.add_log("Running until return " + hex_value(static_cast<uint16_t>(run_until_address), 4) + ".");
+        runtime.start_run_until_return(*target);
+        runtime.add_log("Running until return " + hex_value(static_cast<uint16_t>(run_until_address), 4) + ".");
+    }
+
+    void toggle_run_until_address() {
+        if (run_until_active()) {
+            runtime.stop();
+            return;
+        }
+        runtime.start_run_until_address(static_cast<uint16_t>(run_until_address));
+        runtime.add_log("Running until " + hex_value(static_cast<uint16_t>(run_until_address), 4) + ".");
     }
 };
 

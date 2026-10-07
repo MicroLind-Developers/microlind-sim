@@ -7,6 +7,16 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+        Debug
+        Release
+        RelWithDebInfo
+        MinSizeRel
+    )
+endif()
+
 add_library(microlind-sim
     src/bus.cpp
     src/clock.cpp
@@ -15,6 +25,8 @@ add_library(microlind-sim
     src/cpu_micro_ops.cpp
     src/devices/compact_flash.cpp
     src/devices/interrupt_controller.cpp
+    src/devices/parallel.cpp
+    src/devices/vdc.cpp
     src/simulator.cpp
     src/devices/memory.cpp
     src/devices/memory_mapper.cpp
@@ -28,6 +40,7 @@ add_library(microlind-sim-app
     src/app/logic_validation.cpp
     src/app/session_file.cpp
     src/app/sim_session.cpp
+    src/app/vdc_render.cpp
     src/cli/disassembler.cpp
     src/cli/hardware_config.cpp
     src/cli/image_loader.cpp
@@ -43,6 +56,7 @@ target_link_libraries(microlind-sim-cli PRIVATE microlind-sim-app)
 
 include(CTest)
 if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
     find_package(GTest CONFIG QUIET)
     if(NOT GTest_FOUND)
         set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
@@ -63,13 +77,18 @@ if(BUILD_TESTING)
         tests/test_cpu.cpp
         tests/test_integration.cpp
         tests/test_logic.cpp
+        tests/test_gui_runtime.cpp
         tests/test_microcycle.cpp
         tests/test_sim_session.cpp
+        tests/test_vdc_render.cpp
+        src/gui/gui_runtime.cpp
     )
+    target_include_directories(microlind-sim-tests PRIVATE src/gui)
     target_link_libraries(microlind-sim-tests PRIVATE
         microlind-sim-app
         GTest::gmock
         GTest::gtest_main
+        Threads::Threads
     )
     gtest_discover_tests(microlind-sim-tests
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
@@ -85,6 +104,7 @@ set(MICROLIND_REPOSITORY_URL "https://github.com/MicroLind-Developers/microlind-
 if(MICROLIND_BUILD_GUI)
     find_package(SDL2 REQUIRED)
     find_package(PNG REQUIRED)
+    find_package(Threads REQUIRED)
 
     if(NOT TARGET SDL2::SDL2)
         add_library(SDL2::SDL2 INTERFACE IMPORTED)
@@ -104,10 +124,7 @@ if(MICROLIND_BUILD_GUI)
             GIT_SHALLOW TRUE
             UPDATE_DISCONNECTED TRUE
         )
-        FetchContent_GetProperties(imgui)
-        if(NOT imgui_POPULATED)
-            FetchContent_Populate(imgui)
-        endif()
+        FetchContent_MakeAvailable(imgui)
         set(MICROLIND_RESOLVED_IMGUI_DIR "${imgui_SOURCE_DIR}")
     endif()
     if(NOT EXISTS "${MICROLIND_RESOLVED_IMGUI_DIR}/imgui.cpp")
@@ -135,10 +152,7 @@ if(MICROLIND_BUILD_GUI)
         GIT_SHALLOW TRUE
         UPDATE_DISCONNECTED TRUE
     )
-    FetchContent_GetProperties(portable_file_dialogs)
-    if(NOT portable_file_dialogs_POPULATED)
-        FetchContent_Populate(portable_file_dialogs)
-    endif()
+    FetchContent_MakeAvailable(portable_file_dialogs)
 
     set(MICROLIND_GUI_HELP_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/gui_help_document.cpp")
     add_custom_command(
@@ -157,8 +171,11 @@ if(MICROLIND_BUILD_GUI)
         "${MICROLIND_GUI_HELP_SOURCE}"
         src/gui/gui_debugger_panels.cpp
         src/gui/gui_file_panels.cpp
+        src/gui/gui_logic_analyser.cpp
         src/gui/gui_memory_panels.cpp
         src/gui/gui_panels.cpp
+        src/gui/gui_runtime.cpp
+        src/gui/gui_speaker.cpp
         src/gui/gui_state.cpp
         src/gui/main.cpp
     )
@@ -170,7 +187,7 @@ if(MICROLIND_BUILD_GUI)
         MICROLIND_HAS_PORTABLE_FILE_DIALOGS=1
         MICROLIND_REPOSITORY_URL="${MICROLIND_REPOSITORY_URL}"
     )
-    target_link_libraries(microlind-sim-gui PRIVATE microlind-sim-app microlind-imgui PNG::PNG)
+    target_link_libraries(microlind-sim-gui PRIVATE microlind-sim-app microlind-imgui PNG::PNG Threads::Threads)
 endif()
 
 option(MICROLIND_WARNINGS "Enable extra warnings" ON)

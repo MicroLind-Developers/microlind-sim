@@ -2027,7 +2027,7 @@ uint8_t Cpu::op_abx(Bus&) {
 }
 
 uint8_t Cpu::op_sex(Bus&) {
-    regs_.b = (regs_.a & 0x80) ? 0xFF : 0x00;
+    regs_.a = (regs_.b & 0x80) ? 0xFF : 0x00;
     set_flags_nz16(static_cast<uint16_t>((regs_.a << 8) | regs_.b));
     return 2;
 }

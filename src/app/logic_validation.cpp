@@ -226,6 +226,26 @@ std::vector<LogicValidationIssue> validate_hardware_config_against_logic(
         }
     }
 
+    if (cfg.parallel.present) {
+        for (const uint16_t address : {cfg.parallel.start, cfg.parallel.end}) {
+            const auto decoded = decode(devices, address);
+            add_decode_errors(issues, address, decoded);
+            if (decoded.ok() && (!decoded.io_en || !decoded.par_en)) {
+                add_issue(issues, address, "Parallel address " + hex_address(address) + " is not decoded as parallel IO");
+            }
+        }
+    }
+
+    if (cfg.video.present) {
+        for (const uint16_t address : {cfg.video.start, cfg.video.end}) {
+            const auto decoded = decode(devices, address);
+            add_decode_errors(issues, address, decoded);
+            if (decoded.ok() && (!decoded.io_en || !decoded.vdc_en)) {
+                add_issue(issues, address, "Video address " + hex_address(address) + " is not decoded as VDC IO");
+            }
+        }
+    }
+
     return issues;
 }
 
@@ -331,6 +351,21 @@ std::string generate_partial_hardware_config_from_logic(const microlind::logic::
         out << "IRQ_LEVEL=1\n\n";
     }
 
+    if (!par.ranges.empty()) {
+        out << "[PARALLEL]\n";
+        out << "IO_START_ADDRESS=" << config_hex(par.ranges.front().start) << "\n";
+        out << "IO_END_ADDRESS=" << config_hex(par.ranges.back().end) << "\n";
+        out << "# Simulator default; adjust if board wiring differs.\n";
+        out << "IRQ_LEVEL=2\n\n";
+    }
+
+    if (!vdc.ranges.empty()) {
+        out << "[VIDEO]\n";
+        out << "IO_START_ADDRESS=" << config_hex(vdc.ranges.front().start) << "\n";
+        out << "IO_END_ADDRESS=" << config_hex(static_cast<uint16_t>(vdc.ranges.front().start + 1)) << "\n";
+        out << "VRAM_SIZE=65536\n\n";
+    }
+
     if (!mapper.ranges.empty()) {
         out << "[MEMORY_MAPPER]\n";
         for (int index = 0; index < 4; ++index) {
@@ -352,7 +387,6 @@ std::string generate_partial_hardware_config_from_logic(const microlind::logic::
 
     out << "# Additional decoded IO ranges not currently represented as first-class hw.cfg devices:\n";
     write_ranges_as_comments(out, "PS2_EN", ps2.ranges);
-    write_ranges_as_comments(out, "PAR_EN", par.ranges);
     write_ranges_as_comments(out, "VDC_EN", vdc.ranges);
     write_ranges_as_comments(out, "SND_EN", snd.ranges);
     write_ranges_as_comments(out, "EXP_EN", exp.ranges);

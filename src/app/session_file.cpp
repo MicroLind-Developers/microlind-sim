@@ -443,6 +443,57 @@ std::optional<SessionDefinition> load_session_definition(const std::filesystem::
                 return std::nullopt;
             }
             session.gui.serial_rx_hex = *parsed;
+        } else if (cli::iequals(key, "JOYSTICK_PORT")) {
+            if (cli::iequals(value, "A")) {
+                session.gui.joystick_port_a = true;
+            } else if (cli::iequals(value, "B")) {
+                session.gui.joystick_port_a = false;
+            } else {
+                error = "Bad JOYSTICK_PORT at line " + std::to_string(lineno);
+                return std::nullopt;
+            }
+        } else if (cli::iequals(key, "JOYSTICK_KEY_UP") || cli::iequals(key, "JOYSTICK_KEY_DOWN") ||
+                   cli::iequals(key, "JOYSTICK_KEY_LEFT") || cli::iequals(key, "JOYSTICK_KEY_RIGHT") ||
+                   cli::iequals(key, "JOYSTICK_KEY_FIRE")) {
+            const auto parsed = cli::parse_number(value);
+            if (!parsed) {
+                error = "Bad " + key + " at line " + std::to_string(lineno);
+                return std::nullopt;
+            }
+            const std::size_t index = cli::iequals(key, "JOYSTICK_KEY_UP") ? 0 :
+                cli::iequals(key, "JOYSTICK_KEY_DOWN") ? 1 : cli::iequals(key, "JOYSTICK_KEY_LEFT") ? 2 :
+                cli::iequals(key, "JOYSTICK_KEY_RIGHT") ? 3 : 4;
+            session.gui.joystick_keys[index] = *parsed;
+        } else if (cli::iequals(key, "JOYSTICK_BIT_UP") || cli::iequals(key, "JOYSTICK_BIT_DOWN") ||
+                   cli::iequals(key, "JOYSTICK_BIT_LEFT") || cli::iequals(key, "JOYSTICK_BIT_RIGHT") ||
+                   cli::iequals(key, "JOYSTICK_BIT_FIRE")) {
+            const auto parsed = cli::parse_number(value);
+            if (!parsed || *parsed > 7) {
+                error = "Bad " + key + " at line " + std::to_string(lineno);
+                return std::nullopt;
+            }
+            const std::size_t index = cli::iequals(key, "JOYSTICK_BIT_UP") ? 0 :
+                cli::iequals(key, "JOYSTICK_BIT_DOWN") ? 1 : cli::iequals(key, "JOYSTICK_BIT_LEFT") ? 2 :
+                cli::iequals(key, "JOYSTICK_BIT_RIGHT") ? 3 : 4;
+            session.gui.joystick_bits[index] = static_cast<uint8_t>(*parsed);
+        } else if (cli::iequals(key, "VDC_SCALE")) {
+            if (cli::iequals(value, "fit")) {
+                session.gui.vdc_scale_mode = 0;
+            } else {
+                const auto parsed = cli::parse_number(value);
+                if (!parsed || *parsed < 1 || *parsed > 4) {
+                    error = "Bad VDC_SCALE at line " + std::to_string(lineno);
+                    return std::nullopt;
+                }
+                session.gui.vdc_scale_mode = static_cast<int>(*parsed);
+            }
+        } else if (cli::iequals(key, "VDC_CRT_ASPECT")) {
+            const auto parsed = parse_bool(value);
+            if (!parsed) {
+                error = "Bad VDC_CRT_ASPECT at line " + std::to_string(lineno);
+                return std::nullopt;
+            }
+            session.gui.vdc_crt_aspect = *parsed;
         } else if (cli::iequals(key, "OPERATIONS_PER_MINUTE") || cli::iequals(key, "STEPS_PER_FRAME")) {
             const auto parsed = cli::parse_number(value);
             if (!parsed) {
@@ -457,6 +508,13 @@ std::optional<SessionDefinition> load_session_definition(const std::filesystem::
                 return std::nullopt;
             }
             session.gui.run_micro_steps = *parsed;
+        } else if (cli::iequals(key, "TRUE_CLOCK_HZ")) {
+            const auto parsed = cli::parse_number(value);
+            if (!parsed || *parsed == 0) {
+                error = "Bad TRUE_CLOCK_HZ at line " + std::to_string(lineno);
+                return std::nullopt;
+            }
+            session.gui.true_clock_hz = *parsed;
         } else if (cli::iequals(key, "GUI_THEME") || cli::iequals(key, "THEME")) {
             const auto parsed = parse_gui_theme(value);
             if (!parsed) {
@@ -484,6 +542,12 @@ std::optional<SessionDefinition> load_session_definition(const std::filesystem::
             if (!parse_named_bool(key, value, session.gui.show_pld_logic, error, lineno)) return std::nullopt;
         } else if (cli::iequals(key, "SHOW_COMPACT_FLASH")) {
             if (!parse_named_bool(key, value, session.gui.show_compact_flash, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_PARALLEL")) {
+            if (!parse_named_bool(key, value, session.gui.show_parallel, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_LOGIC_ANALYSER")) {
+            if (!parse_named_bool(key, value, session.gui.show_logic_analyser, error, lineno)) return std::nullopt;
+        } else if (cli::iequals(key, "SHOW_VIDEO")) {
+            if (!parse_named_bool(key, value, session.gui.show_video, error, lineno)) return std::nullopt;
         } else if (cli::iequals(key, "SHOW_BREAKPOINTS")) {
             if (!parse_named_bool(key, value, session.gui.show_breakpoints, error, lineno)) return std::nullopt;
         } else if (cli::iequals(key, "SHOW_WATCHPOINTS")) {
@@ -552,8 +616,17 @@ bool save_session_definition(const std::filesystem::path& path, const SessionDef
     file << "STACK_FOLLOW=" << (session.gui.stack_follow_pointer ? "true" : "false") << '\n';
     file << "SERIAL_HEX_VIEW=" << (session.gui.serial_hex_view ? "true" : "false") << '\n';
     file << "SERIAL_RX_HEX=" << (session.gui.serial_rx_hex ? "true" : "false") << '\n';
+    file << "JOYSTICK_PORT=" << (session.gui.joystick_port_a ? "A" : "B") << '\n';
+    constexpr std::array<const char*, 5> joystick_names{{"UP", "DOWN", "LEFT", "RIGHT", "FIRE"}};
+    for (std::size_t i = 0; i < joystick_names.size(); ++i) {
+        file << "JOYSTICK_KEY_" << joystick_names[i] << '=' << session.gui.joystick_keys[i] << '\n';
+        file << "JOYSTICK_BIT_" << joystick_names[i] << '=' << static_cast<unsigned>(session.gui.joystick_bits[i]) << '\n';
+    }
+    file << "VDC_SCALE=" << (session.gui.vdc_scale_mode == 0 ? "fit" : std::to_string(session.gui.vdc_scale_mode)) << '\n';
+    file << "VDC_CRT_ASPECT=" << (session.gui.vdc_crt_aspect ? "true" : "false") << '\n';
     file << "OPERATIONS_PER_MINUTE=" << session.gui.operations_per_minute << '\n';
     file << "RUN_MICRO_STEPS=" << (session.gui.run_micro_steps ? "true" : "false") << '\n';
+    file << "TRUE_CLOCK_HZ=" << session.gui.true_clock_hz << '\n';
     file << "GUI_THEME=" << gui_theme_name(session.gui.theme) << '\n';
     write_bool(file, "SHOW_FILES", session.gui.show_file_panel);
     write_bool(file, "SHOW_CONTROL", session.gui.show_control_panel);
@@ -565,6 +638,9 @@ bool save_session_definition(const std::filesystem::path& path, const SessionDef
     write_bool(file, "SHOW_MEMORY_MAPPER", session.gui.show_mapper);
     write_bool(file, "SHOW_PLD_LOGIC", session.gui.show_pld_logic);
     write_bool(file, "SHOW_COMPACT_FLASH", session.gui.show_compact_flash);
+    write_bool(file, "SHOW_PARALLEL", session.gui.show_parallel);
+    write_bool(file, "SHOW_LOGIC_ANALYSER", session.gui.show_logic_analyser);
+    write_bool(file, "SHOW_VIDEO", session.gui.show_video);
     write_bool(file, "SHOW_BREAKPOINTS", session.gui.show_breakpoints);
     write_bool(file, "SHOW_WATCHPOINTS", session.gui.show_watchpoints);
     write_bool(file, "SHOW_TRACE", session.gui.show_trace);

@@ -2,6 +2,15 @@
 
 ## GUI Debugger
 
+- Implement unified GUI runtime handling.
+  - Follow `docs/gui-runtime-threading-plan.md`.
+  - Done: added the single-threaded `GuiRuntime` facade.
+  - Done: converted panel display reads to runtime snapshots/range requests.
+  - Done: moved True Run to a worker thread with queued runtime commands.
+  - Done: unified normal debugger run modes behind `GuiRuntime` state.
+  - Done: routed GUI panel mutations through runtime APIs instead of direct `SimSession` access.
+  - Future option: move debug Run/Run Until to a worker if long operations need cancellation/responsiveness improvements.
+
 - Polish the Memory window.
   - Add copy/paste for byte ranges.
   - Add fill range.
@@ -52,5 +61,16 @@
   - Audit interrupt/status register details against the datasheet.
 
 - Add device modules for remaining board peripherals.
-  - Parallel I/O.
-  - Video/sound stubs.
+  - Sound stubs.
+
+- Deepen W65C22 parallel I/O behavior as software needs it.
+  - Audit port handshaking, CA/CB control lines, shift-register behavior, and
+    timer edge cases against the datasheet.
+  - Add GUI controls or test hooks for external port input pins when needed.
+
+- Deepen MOS 8563/8568 VDC behavior as software needs it.
+  - Done: implement the VDC block fill command.
+  - Done: render text and attributes from VDC character-generator RAM.
+  - Add the VDC block copy command.
+  - Add graphical mode once firmware or tests need it.
+  - Improve ready/vblank/update timing after the first always-ready model.

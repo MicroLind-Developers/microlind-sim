@@ -99,25 +99,30 @@ void draw_file_panel(GuiState& state) {
     if (ImGui::Button("Attach CF")) {
         state.attach_cf();
     }
+    ImGui::SameLine();
+    if (ImGui::Button("Remove CF")) {
+        state.remove_cf();
+    }
 
     ImGui::Separator();
     const char* modes[] = {"MC6809", "HD6309"};
-    int mode_index = state.session.mode() == microlind::CpuMode::HD6309 ? 1 : 0;
+    int mode_index = state.runtime.cpu_mode() == microlind::CpuMode::HD6309 ? 1 : 0;
     if (ImGui::Combo("CPU mode", &mode_index, modes, static_cast<int>(std::size(modes)))) {
-        state.session.set_mode(mode_index == 1 ? microlind::CpuMode::HD6309 : microlind::CpuMode::MC6809);
+        state.runtime.set_cpu_mode(mode_index == 1 ? microlind::CpuMode::HD6309 : microlind::CpuMode::MC6809);
     }
 
     ImGui::End();
 }
 
 void draw_control_panel(GuiState& state) {
-    set_next_window_defaults(376.0f, 28.0f, 500.0f, 150.0f);
+    set_next_window_defaults(376.0f, 28.0f, 560.0f, 210.0f);
     ImGui::Begin("Control", &state.show_control_panel);
     if (ImGui::Button("Reset")) {
         state.stop_execution();
-        state.session.reset();
+        state.runtime.reset();
     }
     ImGui::SameLine();
+    ImGui::BeginDisabled(state.true_running());
     if (ImGui::Button("Step")) {
         state.step_once();
     }
@@ -130,37 +135,59 @@ void draw_control_panel(GuiState& state) {
         state.step_over();
     }
     ImGui::SameLine();
-    if (ImGui::Button(state.running ? "Pause" : "Run")) {
+    if (ImGui::Button(state.running() ? "Pause" : "Run")) {
         state.toggle_run();
     }
-    ImGui::SliderInt("Operations/min", &state.operations_per_minute, 10, 6000);
-    ImGui::Text("Frequency: %.2f operations/s", state.operations_per_second());
-    ImGui::Checkbox("Micro-step run", &state.run_micro_steps);
+    ImGui::EndDisabled();
+    int operations_per_minute = static_cast<int>(state.runtime.operations_per_minute());
+    if (ImGui::SliderInt("Operations/min", &operations_per_minute, 10, 60000)) {
+        state.runtime.set_operations_per_minute(static_cast<uint32_t>(std::max(operations_per_minute, 0)));
+    }
+    ImGui::Text("Frequency: %.2f operations/s", state.runtime.operations_per_second());
+    ImGui::BeginDisabled(state.true_running());
+    bool run_micro_steps = state.runtime.run_micro_steps();
+    if (ImGui::Checkbox("Micro-step run", &run_micro_steps)) {
+        state.runtime.set_run_micro_steps(run_micro_steps);
+    }
     ImGui::InputInt("Run until", &state.run_until_address, 1, 256, ImGuiInputTextFlags_CharsHexadecimal);
     state.run_until_address = std::clamp(state.run_until_address, 0, 0xFFFF);
-    if (ImGui::Button(state.run_until_active ? "Stop Until" : "Run Until")) {
-        state.run_until_active = !state.run_until_active;
-        if (state.run_until_active) {
-            state.running = false;
-            state.session.add_log("Running until " + hex_value(static_cast<uint16_t>(state.run_until_address), 4) + ".");
-        }
+    if (ImGui::Button(state.run_until_active() ? "Stop Until" : "Run Until")) {
+        state.toggle_run_until_address();
     }
     ImGui::SameLine();
     if (ImGui::Button("Until Return")) {
         state.run_until_return();
     }
-    ImGui::Text("Serial mapped: %s", state.session.serial_mapped() ? "yes" : "no");
+    ImGui::EndDisabled();
+    ImGui::Separator();
+    const char* true_clocks[] = {"1 MHz", "2 MHz", "3 MHz"};
+    int true_clock_index = GuiState::true_clock_index_for_hz(state.runtime.true_target_hz());
+    if (ImGui::Combo("True clock", &true_clock_index, true_clocks, static_cast<int>(std::size(true_clocks)))) {
+        state.runtime.set_true_run_target_hz(GuiState::true_hz_for_index(true_clock_index));
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(state.true_running() ? "Pause True" : "True Run")) {
+        state.toggle_true_run();
+    }
+    const auto status = state.runtime.status_snapshot();
+    ImGui::Text(
+        "True frequency: %.2f MHz target, %.4f MHz effective",
+        static_cast<double>(status.true_target_hz) / 1000000.0,
+        status.true_effective_hz / 1000000.0);
+    const auto snapshot = state.runtime.debugger_snapshot();
+    ImGui::Text("Serial mapped: %s", snapshot.serial_mapped ? "yes" : "no");
     ImGui::End();
 }
 
 void draw_serial(GuiState& state) {
     set_next_window_defaults(944.0f, 694.0f, 480.0f, 80.0f);
     ImGui::Begin("Serial", &state.show_serial);
-    const auto serial = state.session.serial_snapshot();
+    const auto snapshot = state.runtime.debugger_snapshot();
+    const auto& serial = snapshot.serial;
     draw_power_led(serial);
     ImGui::Separator();
 
-    ImGui::BeginDisabled(!state.session.serial_mapped());
+    ImGui::BeginDisabled(!snapshot.serial_mapped);
     ImGui::Checkbox("Hex RX", &state.serial_rx_hex);
     ImGui::SameLine();
     const bool submitted = ImGui::InputText(
@@ -169,13 +196,17 @@ void draw_serial(GuiState& state) {
         state.serial_input.size(),
         ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
-    if ((submitted && !buffer_string(state.serial_input).empty()) || ImGui::Button("Send")) {
+    if (submitted && !buffer_string(state.serial_input).empty()) {
+        state.send_serial_text(true);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Send")) {
         state.send_serial_text();
     }
     ImGui::EndDisabled();
 
     if (ImGui::Button("Clear TX")) {
-        state.session.clear_serial_tx();
+        state.runtime.clear_serial_tx();
     }
     ImGui::SameLine();
     ImGui::Checkbox("Hex view", &state.serial_hex_view);
@@ -183,7 +214,7 @@ void draw_serial(GuiState& state) {
     ImGui::Separator();
     ImGui::TextUnformatted("TX");
     ImGui::BeginChild("serial_tx", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
-    const auto& tx = state.session.serial_tx();
+    const auto& tx = snapshot.serial_tx;
     if (state.serial_hex_view) {
         if (ImGui::BeginTable("serial_hex", 17, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
             ImGui::TableSetupColumn("Offset");
@@ -210,7 +241,7 @@ void draw_serial(GuiState& state) {
         }
     } else {
         const std::string text = serial_terminal_text(tx);
-        ImGui::TextUnformatted(text.c_str());
+        ImGui::TextUnformatted(text.data(), text.data() + text.size());
     }
     ImGui::EndChild();
     ImGui::End();
@@ -219,11 +250,12 @@ void draw_serial(GuiState& state) {
 void draw_log(GuiState& state) {
     set_next_window_defaults(944.0f, 780.0f, 480.0f, 86.0f);
     ImGui::Begin("Log", &state.show_log);
+    const auto snapshot = state.runtime.debugger_snapshot();
     if (ImGui::Button("Clear")) {
-        state.session.clear_log();
+        state.runtime.clear_log();
     }
     ImGui::Separator();
-    for (const auto& line : state.session.log()) {
+    for (const auto& line : snapshot.log) {
         ImGui::TextUnformatted(line.c_str());
     }
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
@@ -11,7 +12,9 @@
 #include "microlind/cpu.hpp"
 #include "microlind/devices/interrupt_controller.hpp"
 #include "microlind/devices/memory.hpp"
+#include "microlind/devices/parallel.hpp"
 #include "microlind/devices/serial.hpp"
+#include "microlind/devices/vdc.hpp"
 #include "microlind/simulator.hpp"
 
 #include "test_harness.hpp"
@@ -232,6 +235,293 @@ TEST(SerialDeviceTest, SerialIrqCanDriveInterruptController) {
     EXPECT_EQ(serial.read8(0x03), 0x41);
     EXPECT_EQ(irq.pending_level(), 0);
     EXPECT_FALSE(cpu_irq_line);
+}
+
+TEST(ParallelDeviceTest, PortsRespectDataDirectionRegisters) {
+    microlind::devices::W65C22 via;
+
+    EXPECT_EQ(via.peek8(0x01), 0xFF);
+    via.set_port_a_input(0xA5);
+    via.write8(0x03, 0xF0); // DDRA
+    via.write8(0x01, 0x3C); // ORA
+
+    EXPECT_EQ(via.ddr_a(), 0xF0);
+    EXPECT_EQ(via.output_a(), 0x3C);
+    EXPECT_EQ(via.peek8(0x01), 0x35);
+
+    via.set_port_b_input(0xF0);
+    via.write8(0x02, 0x0F); // DDRB
+    via.write8(0x00, 0xA5); // ORB
+    EXPECT_EQ(via.peek8(0x00), 0xF5);
+}
+
+TEST(ParallelDeviceTest, TimerInterruptFollowsIerAndIfr) {
+    bool irq_line = false;
+    microlind::devices::W65C22 via([&](bool asserted) {
+        irq_line = asserted;
+    });
+
+    via.write8(0x0E, 0xC0); // enable timer 1 IRQ
+    via.write8(0x04, 0x02);
+    via.write8(0x05, 0x00);
+    EXPECT_FALSE(via.irq_asserted());
+
+    via.tick(3);
+    EXPECT_TRUE(via.irq_asserted());
+    EXPECT_TRUE(irq_line);
+    EXPECT_EQ(via.ifr() & 0xC0, 0xC0);
+
+    via.write8(0x0D, 0x40);
+    EXPECT_FALSE(via.irq_asserted());
+    EXPECT_FALSE(irq_line);
+    EXPECT_EQ(via.ifr() & 0x40, 0x00);
+}
+
+TEST(ParallelDeviceTest, Timer1OneShotDrivesPb7LowThenHigh) {
+    microlind::devices::W65C22 via;
+
+    via.write8(0x02, 0x80); // DDRB: PB7 is an output
+    via.write8(0x00, 0x80); // ORB: PB7 latch starts high
+    via.write8(0x0B, 0x80); // ACR: T1 one-shot output on PB7
+    const uint64_t transitions_before_pulse = via.pb7_transition_count();
+    via.write8(0x04, 0x02); // T1 low latch
+    via.write8(0x05, 0x00); // T1 high/counter load starts the pulse
+
+    EXPECT_TRUE(via.timer1_pb7_output_enabled());
+    EXPECT_FALSE(via.timer1_free_running());
+    EXPECT_FALSE(via.pb7_pin_level());
+    EXPECT_EQ(via.peek8(0x00) & 0x80, 0x00);
+
+    via.tick(2);
+    EXPECT_FALSE(via.pb7_pin_level());
+    via.tick(1);
+    EXPECT_TRUE(via.pb7_pin_level());
+    EXPECT_FALSE(via.timer1_running());
+    EXPECT_EQ(via.ifr() & 0x40, 0x40);
+    EXPECT_EQ(via.pb7_transition_count(), transitions_before_pulse + 2u);
+
+    via.write8(0x0B, 0x00); // Return PB7 to the ORB latch.
+    EXPECT_TRUE(via.pb7_pin_level());
+    EXPECT_EQ(via.output_b() & 0x80, 0x80);
+}
+
+TEST(ParallelDeviceTest, Timer1FreeRunTogglesPb7AtEveryTimeout) {
+    microlind::devices::W65C22 via;
+
+    via.write8(0x00, 0x80); // Keep PB7 high while output control is configured.
+    via.write8(0x02, 0x80); // DDRB
+    via.write8(0x0B, 0xC0); // ACR: T1 free-run square wave on PB7
+    via.write8(0x04, 0x01);
+    via.write8(0x05, 0x00);
+
+    EXPECT_FALSE(via.pb7_pin_level());
+    EXPECT_EQ(via.timer1_counter(), 1u);
+    EXPECT_EQ(via.timer1_latch(), 1u);
+
+    via.tick(2);
+    EXPECT_TRUE(via.pb7_pin_level());
+    EXPECT_TRUE(via.timer1_running());
+    EXPECT_EQ(via.timer1_counter(), 1u);
+
+    via.tick(2);
+    EXPECT_FALSE(via.pb7_pin_level());
+    EXPECT_EQ(via.pb7_transition_count(), 3u); // Load, then two timeouts
+}
+
+TEST(ParallelDeviceTest, Pb7TimerOutputStillHonorsDdrb) {
+    microlind::devices::W65C22 via;
+
+    via.set_port_b_input(0x80);
+    via.write8(0x0B, 0xC0);
+    via.write8(0x04, 0x00);
+    via.write8(0x05, 0x00);
+
+    EXPECT_FALSE(via.timer1_pb7_level());
+    EXPECT_TRUE(via.pb7_pin_level());
+    EXPECT_EQ(via.pb7_transition_count(), 0u);
+
+    via.write8(0x02, 0x80);
+    EXPECT_FALSE(via.pb7_pin_level());
+    EXPECT_EQ(via.pb7_transition_count(), 1u);
+}
+
+TEST(ParallelDeviceTest, WritingTimer1HighLatchClearsInterruptFlag) {
+    microlind::devices::W65C22 via;
+
+    via.write8(0x04, 0x00);
+    via.write8(0x05, 0x00);
+    via.tick(1);
+    ASSERT_EQ(via.ifr() & 0x40, 0x40);
+
+    via.write8(0x07, 0x12);
+    EXPECT_EQ(via.ifr() & 0x40, 0x00);
+    EXPECT_EQ(via.timer1_latch(), 0x1200);
+}
+
+TEST(VdcDeviceTest, SelectsAndReadsWritableRegistersThroughTwoByteWindow) {
+    microlind::devices::Vdc8568 vdc;
+
+    EXPECT_EQ(vdc.read8(0x00) & 0x80, 0x80);
+
+    vdc.write8(0x00, 0x06);
+    EXPECT_EQ(vdc.read8(0x01), 25);
+
+    vdc.write8(0x00, 0x1A);
+    vdc.write8(0x01, 0x5A);
+    EXPECT_EQ(vdc.peek8(0x01), 0x5A);
+    EXPECT_EQ(vdc.registers()[0x1A], 0x5A);
+}
+
+TEST(VdcDeviceTest, DataRegisterAccessesPrivateVramAndIncrementsUpdateAddress) {
+    microlind::devices::Vdc8568 vdc;
+
+    vdc.write8(0x00, 0x12);
+    vdc.write8(0x01, 0x20);
+    vdc.write8(0x00, 0x13);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x1F);
+    vdc.write8(0x01, 'A');
+    EXPECT_EQ(vdc.update_address(), 0x2001);
+
+    vdc.write8(0x00, 0x12);
+    vdc.write8(0x01, 0x20);
+    vdc.write8(0x00, 0x13);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x1F);
+    EXPECT_EQ(vdc.peek8(0x01), 'A');
+    EXPECT_EQ(vdc.update_address(), 0x2000);
+    EXPECT_EQ(vdc.read8(0x01), 'A');
+    EXPECT_EQ(vdc.update_address(), 0x2001);
+}
+
+TEST(VdcDeviceTest, BlockFillWritesWordCountBytesAndAdvancesUpdateAddress) {
+    microlind::devices::Vdc8568 vdc;
+
+    vdc.write8(0x00, 0x0C);
+    vdc.write8(0x01, 0x20);
+    vdc.write8(0x00, 0x0D);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x12);
+    vdc.write8(0x01, 0x20);
+    vdc.write8(0x00, 0x13);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x18);
+    vdc.write8(0x01, 0x00); // fill mode
+    vdc.write8(0x00, 0x1F);
+    vdc.write8(0x01, 'X'); // first byte is the normal data-register write
+
+    const uint64_t version_before_fill = vdc.frame_version();
+    vdc.write8(0x00, 0x1E);
+    vdc.write8(0x01, 3);
+
+    const auto chars = vdc.display_chars();
+    EXPECT_EQ(chars[0], 'X');
+    EXPECT_EQ(chars[1], 'X');
+    EXPECT_EQ(chars[2], 'X');
+    EXPECT_EQ(chars[3], 'X');
+    EXPECT_EQ(chars[4], 0x00);
+    EXPECT_EQ(vdc.update_address(), 0x2004);
+    EXPECT_EQ(vdc.frame_version(), version_before_fill + 1);
+}
+
+TEST(VdcDeviceTest, ZeroLengthBlockFillWrites256BytesAndWrapsVram) {
+    microlind::devices::Vdc8568 vdc;
+
+    vdc.write8(0x00, 0x0C);
+    vdc.write8(0x01, 0xFF);
+    vdc.write8(0x00, 0x0D);
+    vdc.write8(0x01, 0xF0);
+    vdc.write8(0x00, 0x12);
+    vdc.write8(0x01, 0xFF);
+    vdc.write8(0x00, 0x13);
+    vdc.write8(0x01, 0xF0);
+    vdc.write8(0x00, 0x1F);
+    vdc.write8(0x01, '#');
+    vdc.write8(0x00, 0x1E);
+    vdc.write8(0x01, 0x00);
+
+    const auto chars = vdc.display_chars();
+    EXPECT_TRUE(std::all_of(chars.begin(), chars.begin() + 257, [](uint8_t value) { return value == '#'; }));
+    EXPECT_EQ(chars[257], ' ');
+    EXPECT_EQ(vdc.update_address(), 0x00F1);
+}
+
+TEST(VdcDeviceTest, DataRegisterIgnoresDisplayRowAddressIncrement) {
+    microlind::devices::Vdc8568 vdc;
+
+    vdc.write8(0x00, 0x1B);
+    vdc.write8(0x01, 80);
+    vdc.write8(0x00, 0x1F);
+    vdc.write8(0x01, 'A');
+    vdc.write8(0x01, 'B');
+
+    const auto chars = vdc.display_chars();
+    EXPECT_EQ(chars[0], 'A');
+    EXPECT_EQ(chars[1], 'B');
+    EXPECT_EQ(vdc.update_address(), 0x0002);
+}
+
+TEST(VdcDeviceTest, DisplaySnapshotReflectsDisplayRam) {
+    microlind::devices::Vdc8568 vdc;
+
+    vdc.write8(0x00, 0x12);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x13);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x1F);
+    vdc.write8(0x01, 'H');
+    vdc.write8(0x01, 'i');
+
+    const auto chars = vdc.display_chars();
+    EXPECT_EQ(chars[0], 'H');
+    EXPECT_EQ(chars[1], 'i');
+    EXPECT_EQ(chars[2], ' ');
+}
+
+TEST(VdcDeviceTest, AttributeSnapshotReflectsAttributeRamAndVisibleRegisterChanges) {
+    microlind::devices::Vdc8568 vdc;
+
+    vdc.write8(0x00, 0x14);
+    vdc.write8(0x01, 0x20);
+    vdc.write8(0x00, 0x15);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x12);
+    vdc.write8(0x01, 0x20);
+    vdc.write8(0x00, 0x13);
+    vdc.write8(0x01, 0x00);
+    vdc.write8(0x00, 0x1F);
+    vdc.write8(0x01, 0xF9);
+    vdc.write8(0x01, 0x42);
+
+    const auto attrs = vdc.display_attrs();
+    EXPECT_EQ(attrs[0], 0xF9);
+    EXPECT_EQ(attrs[1], 0x42);
+
+    const uint64_t version = vdc.frame_version();
+    for (const uint8_t visible_register : {0x09, 0x0A, 0x0B, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1C, 0x1D}) {
+        vdc.write8(0x00, visible_register);
+        vdc.write8(0x01, 0x01);
+    }
+    EXPECT_EQ(vdc.frame_version(), version + 10);
+}
+
+TEST(VdcDeviceTest, CharacterSnapshotUsesCharacterBaseRegister) {
+    microlind::devices::Vdc8568 vdc;
+
+    vdc.write8(0x00, 0x1C);
+    vdc.write8(0x01, 0x40);
+    EXPECT_EQ(vdc.character_start(), 0x4000);
+
+    constexpr uint16_t glyph_address = 0x4000 + 65 * 16 + 3;
+    vdc.write8(0x00, 0x12);
+    vdc.write8(0x01, static_cast<uint8_t>(glyph_address >> 8));
+    vdc.write8(0x00, 0x13);
+    vdc.write8(0x01, static_cast<uint8_t>(glyph_address));
+    vdc.write8(0x00, 0x1F);
+    vdc.write8(0x01, 0x81);
+
+    const auto characters = vdc.character_data();
+    EXPECT_EQ(characters[65 * 16 + 3], 0x81);
 }
 
 TEST(CpuExecutionTest, HD6309InvalidOpcodeTrapsThroughFFF0Vector) {
@@ -580,6 +870,37 @@ TEST(CpuExecutionTest, HD6309ExecutesHD6309SingleByteOpcode) {
     EXPECT_EQ(cpu.regs().b, 0x34);
     EXPECT_EQ(cpu.regs().e, 0x56);
     EXPECT_EQ(cpu.regs().f, 0x78);
+}
+
+TEST(CpuExecutionTest, SexSignExtendsBIntoD) {
+    struct Case {
+        uint8_t initial_b;
+        uint16_t expected_d;
+        uint8_t expected_cc;
+    };
+
+    const Case cases[] = {
+        {0x80, 0xFF80, static_cast<uint8_t>(microlind::CC_N | microlind::CC_V | microlind::CC_C)},
+        {0x7F, 0x007F, static_cast<uint8_t>(microlind::CC_V | microlind::CC_C)},
+        {0x00, 0x0000, static_cast<uint8_t>(microlind::CC_Z | microlind::CC_V | microlind::CC_C)},
+    };
+
+    for (const auto& test : cases) {
+        microlind::Bus bus;
+        microlind::test::map_flat_ram(bus);
+        write_bytes(bus, 0x0100, {0x1D});
+
+        microlind::Cpu cpu(microlind::CpuMode::HD6309);
+        cpu.set_pc(0x0100);
+        cpu.regs().a = 0x12;
+        cpu.regs().b = test.initial_b;
+        cpu.regs().cc = static_cast<uint8_t>(microlind::CC_V | microlind::CC_C);
+
+        const auto result = cpu.tick(bus);
+        EXPECT_EQ(result.cycles, 2u);
+        EXPECT_EQ(static_cast<uint16_t>((cpu.regs().a << 8) | cpu.regs().b), test.expected_d);
+        EXPECT_EQ(cpu.regs().cc, test.expected_cc);
+    }
 }
 
 TEST(CpuExecutionTest, LbraUsesSignedSixteenBitOffsetAndWraps) {

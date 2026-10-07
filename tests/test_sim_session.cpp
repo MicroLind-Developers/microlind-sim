@@ -51,12 +51,68 @@ TEST(SimSessionTest, ReportsExplicitMapperWindowsAndCompactFlashSnapshot) {
 
     const auto cf = session.cf_snapshot();
     ASSERT_TRUE(cf.present);
+    EXPECT_FALSE(cf.image_loaded);
     EXPECT_EQ(cf.start, 0xF418);
     EXPECT_EQ(cf.end, 0xF41F);
-    EXPECT_EQ(cf.sector_count, 512u);
+    EXPECT_EQ(cf.sector_count, 0u);
     EXPECT_FALSE(cf.read_only);
-    EXPECT_EQ(cf.status, 0x50);
+    EXPECT_EQ(cf.status, 0xFF);
     EXPECT_EQ(cf.transfer_mode, microlind::app::CfTransferMode::None);
+
+    const auto parallel = session.parallel_snapshot();
+    ASSERT_TRUE(parallel.present);
+    EXPECT_EQ(parallel.start, 0xF420);
+    EXPECT_EQ(parallel.end, 0xF42F);
+    EXPECT_EQ(parallel.port_a, 0xFF);
+    EXPECT_EQ(parallel.port_b, 0xFF);
+    EXPECT_FALSE(parallel.pb7_timer_output_enabled);
+    EXPECT_TRUE(parallel.pb7_pin_level);
+    EXPECT_EQ(parallel.pb7_transition_count, 0u);
+
+    const auto vdc = session.vdc_snapshot();
+    ASSERT_TRUE(vdc.present);
+    EXPECT_EQ(vdc.start, 0xF440);
+    EXPECT_EQ(vdc.end, 0xF441);
+    EXPECT_EQ(vdc.status & 0x80, 0x80);
+    EXPECT_EQ(vdc.columns, 80);
+    EXPECT_EQ(vdc.rows, 25);
+    EXPECT_EQ(vdc.chars[0], ' ');
+}
+
+TEST(SimSessionTest, CompactFlashReturnsFFWhenNoImageIsLoaded) {
+    auto session = loaded_session();
+
+    for (uint16_t address = 0xF418; address <= 0xF41F; ++address) {
+        EXPECT_EQ(session.peek_memory(address), 0xFF) << "peek " << std::hex << address;
+        EXPECT_EQ(session.read_memory(address), 0xFF) << "read " << std::hex << address;
+    }
+
+    session.write_memory(0xF41F, 0xEC);
+    EXPECT_EQ(session.peek_memory(0xF41F), 0xFF);
+}
+
+TEST(SimSessionTest, CompactFlashImageCanBeAttachedAndRemoved) {
+    auto session = loaded_session();
+    const auto image_path = test_output_path("cf-remove.img");
+    {
+        std::ofstream image(image_path, std::ios::binary);
+        const std::string sector(512, '\0');
+        image.write(sector.data(), static_cast<std::streamsize>(sector.size()));
+    }
+
+    ASSERT_TRUE(session.attach_cf_image(image_path, 1));
+    auto cf = session.cf_snapshot();
+    EXPECT_TRUE(cf.image_loaded);
+    EXPECT_EQ(cf.image_path, image_path);
+    EXPECT_EQ(cf.sector_count, 1u);
+    EXPECT_EQ(session.peek_memory(0xF41F), 0x50);
+
+    ASSERT_TRUE(session.remove_cf_image());
+    cf = session.cf_snapshot();
+    EXPECT_FALSE(cf.image_loaded);
+    EXPECT_TRUE(cf.image_path.empty());
+    EXPECT_EQ(cf.sector_count, 0u);
+    EXPECT_EQ(session.peek_memory(0xF41F), 0xFF);
 }
 
 TEST(SimSessionTest, MapperRegisterWritesSwitchVisibleRamBank) {
@@ -116,6 +172,7 @@ TEST(SimSessionTest, ReportsPldLogicDecodeSnapshotForGui) {
 
     const auto rom = session.logic_decode_snapshot(0xF000, true);
     EXPECT_TRUE(rom.configured);
+    EXPECT_EQ(rom.bus_mode, microlind::BusDecodeMode::Route);
     ASSERT_TRUE(rom.available);
     ASSERT_TRUE(rom.decoded.ok());
     EXPECT_TRUE(rom.decoded.rom_en);
@@ -128,6 +185,20 @@ TEST(SimSessionTest, ReportsPldLogicDecodeSnapshotForGui) {
     EXPECT_TRUE(cf_write.decoded.io_en);
     EXPECT_TRUE(cf_write.decoded.cf_en);
     EXPECT_TRUE(cf_write.decoded.wr);
+}
+
+TEST(SimSessionTest, CanSwitchPldBusModeForGui) {
+    auto session = loaded_session();
+    EXPECT_EQ(session.logic_bus_mode(), microlind::BusDecodeMode::Route);
+
+    ASSERT_TRUE(session.set_logic_bus_mode(microlind::BusDecodeMode::RangeMap));
+    EXPECT_EQ(session.logic_bus_mode(), microlind::BusDecodeMode::RangeMap);
+    EXPECT_EQ(session.logic_decode_snapshot(0xF000, true).bus_mode, microlind::BusDecodeMode::RangeMap);
+    EXPECT_EQ(session.simulator().bus().decode_mode(), microlind::BusDecodeMode::RangeMap);
+
+    ASSERT_TRUE(session.set_logic_bus_mode(microlind::BusDecodeMode::Validate));
+    EXPECT_EQ(session.logic_bus_mode(), microlind::BusDecodeMode::Validate);
+    EXPECT_EQ(session.simulator().bus().decode_mode(), microlind::BusDecodeMode::Validate);
 }
 
 TEST(SimSessionTest, StepsSingleMicrocycleForGui) {
@@ -165,6 +236,21 @@ TEST(SimSessionTest, RecordsTraceWhenMicroSteppedInstructionCompletes) {
     EXPECT_EQ(session.trace().front().pc, 0xFF00);
     EXPECT_EQ(session.trace().front().instruction, "jmp ext $ff03");
     EXPECT_EQ(session.trace().front().cycles, result.instruction_result.cycles);
+}
+
+TEST(SimSessionTest, RealtimeRunAdvancesCyclesWithoutDebuggerTrace) {
+    auto session = loaded_session();
+    auto& sim = session.simulator();
+    ASSERT_TRUE(session.add_breakpoint(0xFF00, "ignored by realtime run"));
+
+    const auto result = session.run_realtime_cycles(16);
+
+    EXPECT_GE(result.cycles, 16u);
+    EXPECT_GT(result.instructions, 0u);
+    EXPECT_TRUE(session.trace().empty());
+    EXPECT_TRUE(sim.bus().access_log().empty());
+    EXPECT_EQ(session.breakpoints().front().hits, 0u);
+    EXPECT_GT(sim.clock().total_cycles(), 0u);
 }
 
 TEST(SimSessionTest, MergesReadWriteWatchpointsAndStopsOnHit) {
@@ -393,8 +479,11 @@ TEST(SessionFileTest, LoadsPathsLayoutAndPersistedDebuggerState) {
         file << "STACK_FOLLOW=false\n";
         file << "SERIAL_HEX_VIEW=true\n";
         file << "SERIAL_RX_HEX=on\n";
+        file << "VDC_SCALE=3\n";
+        file << "VDC_CRT_ASPECT=false\n";
         file << "OPERATIONS_PER_MINUTE=250\n";
         file << "RUN_MICRO_STEPS=true\n";
+        file << "TRUE_CLOCK_HZ=2000000\n";
         file << "GUI_THEME=light\n";
         file << "SHOW_FILES=false\n";
         file << "SHOW_CONTROL=true\n";
@@ -406,6 +495,8 @@ TEST(SessionFileTest, LoadsPathsLayoutAndPersistedDebuggerState) {
         file << "SHOW_MEMORY_MAPPER=true\n";
         file << "SHOW_PLD_LOGIC=false\n";
         file << "SHOW_COMPACT_FLASH=true\n";
+        file << "SHOW_PARALLEL=false\n";
+        file << "SHOW_VIDEO=true\n";
         file << "SHOW_BREAKPOINTS=false\n";
         file << "SHOW_WATCHPOINTS=true\n";
         file << "SHOW_TRACE=false\n";
@@ -437,8 +528,11 @@ TEST(SessionFileTest, LoadsPathsLayoutAndPersistedDebuggerState) {
     EXPECT_FALSE(loaded->gui.stack_follow_pointer);
     EXPECT_TRUE(loaded->gui.serial_hex_view);
     EXPECT_TRUE(loaded->gui.serial_rx_hex);
+    EXPECT_EQ(loaded->gui.vdc_scale_mode, 3);
+    EXPECT_FALSE(loaded->gui.vdc_crt_aspect);
     EXPECT_EQ(loaded->gui.operations_per_minute, 250);
     EXPECT_TRUE(loaded->gui.run_micro_steps);
+    EXPECT_EQ(loaded->gui.true_clock_hz, 2000000u);
     EXPECT_EQ(loaded->gui.theme, microlind::app::GuiTheme::Light);
     EXPECT_FALSE(loaded->gui.show_file_panel);
     EXPECT_TRUE(loaded->gui.show_control_panel);
@@ -450,6 +544,8 @@ TEST(SessionFileTest, LoadsPathsLayoutAndPersistedDebuggerState) {
     EXPECT_TRUE(loaded->gui.show_mapper);
     EXPECT_FALSE(loaded->gui.show_pld_logic);
     EXPECT_TRUE(loaded->gui.show_compact_flash);
+    EXPECT_FALSE(loaded->gui.show_parallel);
+    EXPECT_TRUE(loaded->gui.show_video);
     EXPECT_FALSE(loaded->gui.show_breakpoints);
     EXPECT_TRUE(loaded->gui.show_watchpoints);
     EXPECT_FALSE(loaded->gui.show_trace);
@@ -509,8 +605,14 @@ TEST(SessionFileTest, SavesAndReloadsPersistedDebuggerState) {
     session.gui.stack_follow_pointer = true;
     session.gui.serial_hex_view = true;
     session.gui.serial_rx_hex = false;
+    session.gui.joystick_port_a = true;
+    session.gui.joystick_keys = {{119u, 115u, 97u, 100u, 1073742049u}};
+    session.gui.joystick_bits = {{7, 6, 5, 4, 3}};
+    session.gui.vdc_scale_mode = 2;
+    session.gui.vdc_crt_aspect = false;
     session.gui.operations_per_minute = 123;
     session.gui.run_micro_steps = true;
+    session.gui.true_clock_hz = 3000000;
     session.gui.theme = microlind::app::GuiTheme::Light;
     session.gui.show_file_panel = false;
     session.gui.show_control_panel = true;
@@ -522,6 +624,8 @@ TEST(SessionFileTest, SavesAndReloadsPersistedDebuggerState) {
     session.gui.show_mapper = true;
     session.gui.show_pld_logic = false;
     session.gui.show_compact_flash = true;
+    session.gui.show_parallel = false;
+    session.gui.show_video = true;
     session.gui.show_breakpoints = false;
     session.gui.show_watchpoints = true;
     session.gui.show_trace = false;
@@ -542,8 +646,14 @@ TEST(SessionFileTest, SavesAndReloadsPersistedDebuggerState) {
     EXPECT_EQ(loaded->layout_ini, session.layout_ini);
     EXPECT_EQ(loaded->gui.memory_start, session.gui.memory_start);
     EXPECT_EQ(loaded->gui.stack_start, session.gui.stack_start);
+    EXPECT_EQ(loaded->gui.vdc_scale_mode, session.gui.vdc_scale_mode);
+    EXPECT_EQ(loaded->gui.vdc_crt_aspect, session.gui.vdc_crt_aspect);
     EXPECT_EQ(loaded->gui.operations_per_minute, session.gui.operations_per_minute);
     EXPECT_EQ(loaded->gui.run_micro_steps, session.gui.run_micro_steps);
+    EXPECT_EQ(loaded->gui.true_clock_hz, session.gui.true_clock_hz);
+    EXPECT_EQ(loaded->gui.joystick_port_a, session.gui.joystick_port_a);
+    EXPECT_EQ(loaded->gui.joystick_keys, session.gui.joystick_keys);
+    EXPECT_EQ(loaded->gui.joystick_bits, session.gui.joystick_bits);
     EXPECT_EQ(loaded->gui.theme, session.gui.theme);
     EXPECT_EQ(loaded->gui.show_file_panel, session.gui.show_file_panel);
     EXPECT_EQ(loaded->gui.show_control_panel, session.gui.show_control_panel);
@@ -555,6 +665,8 @@ TEST(SessionFileTest, SavesAndReloadsPersistedDebuggerState) {
     EXPECT_EQ(loaded->gui.show_mapper, session.gui.show_mapper);
     EXPECT_EQ(loaded->gui.show_pld_logic, session.gui.show_pld_logic);
     EXPECT_EQ(loaded->gui.show_compact_flash, session.gui.show_compact_flash);
+    EXPECT_EQ(loaded->gui.show_parallel, session.gui.show_parallel);
+    EXPECT_EQ(loaded->gui.show_video, session.gui.show_video);
     EXPECT_EQ(loaded->gui.show_breakpoints, session.gui.show_breakpoints);
     EXPECT_EQ(loaded->gui.show_watchpoints, session.gui.show_watchpoints);
     EXPECT_EQ(loaded->gui.show_trace, session.gui.show_trace);

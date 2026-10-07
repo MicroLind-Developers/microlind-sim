@@ -57,7 +57,8 @@ CompactFlash::CompactFlash(Options options) : options_(std::move(options)) {
     std::string ignored_error;
     if (!load_image(&ignored_error)) {
         options_.image_path.clear();
-        load_image();
+        storage_.clear();
+        sector_count_ = 0;
     }
     reset_registers();
 }
@@ -67,16 +68,58 @@ bool CompactFlash::load_disk_image(const std::filesystem::path& path, std::strin
 }
 
 bool CompactFlash::load_disk_image(const std::filesystem::path& path, uint32_t minimum_sectors, std::string* error) {
+    const Options previous_options = options_;
+    const std::vector<uint8_t> previous_storage = storage_;
+    const uint32_t previous_sector_count = sector_count_;
+
     options_.image_path = path;
     options_.sectors = minimum_sectors;
-    if (!load_image(error)) return false;
+    if (!load_image(error)) {
+        options_ = previous_options;
+        storage_ = previous_storage;
+        sector_count_ = previous_sector_count;
+        return false;
+    }
     reset_registers();
     return true;
 }
 
+void CompactFlash::unload_disk_image() {
+    flush_image();
+    options_.image_path.clear();
+    options_.sectors = 0;
+    storage_.clear();
+    sector_count_ = 0;
+    reset_registers();
+}
+
 CompactFlash::Snapshot CompactFlash::snapshot() const {
+    if (!image_loaded()) {
+        return Snapshot{
+            options_.image_path,
+            false,
+            0,
+            options_.read_only,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFFFFFFFF,
+            0xFFFFFFFF,
+            TransferMode::None,
+            0,
+            0,
+        };
+    }
+
     return Snapshot{
         options_.image_path,
+        true,
         sector_count_,
         options_.read_only,
         error_,
@@ -98,6 +141,11 @@ CompactFlash::Snapshot CompactFlash::snapshot() const {
 
 bool CompactFlash::load_image(std::string* error) {
     storage_.clear();
+    sector_count_ = 0;
+    if (options_.image_path.empty()) {
+        return true;
+    }
+
     if (!options_.image_path.empty()) {
         std::ifstream file(options_.image_path, std::ios::binary);
         if (!file) {
@@ -105,10 +153,6 @@ bool CompactFlash::load_image(std::string* error) {
             return false;
         }
         storage_.assign(std::istreambuf_iterator<char>(file), {});
-    }
-
-    if (storage_.empty()) {
-        storage_.resize(static_cast<std::size_t>(options_.sectors) * SectorSize, 0);
     }
 
     if (storage_.size() % SectorSize != 0) {
@@ -160,6 +204,8 @@ void CompactFlash::reset_registers() {
 }
 
 uint8_t CompactFlash::read8(uint16_t offset) {
+    if (!image_loaded()) return 0xFF;
+
     switch (offset & 0x07) {
     case 0x00:
         if (transfer_mode_ == TransferMode::Read && transfer_index_ < transfer_buffer_.size()) {
@@ -184,6 +230,8 @@ uint8_t CompactFlash::read8(uint16_t offset) {
 }
 
 uint8_t CompactFlash::peek8(uint16_t offset) {
+    if (!image_loaded()) return 0xFF;
+
     switch (offset & 0x07) {
     case 0x00:
         if (transfer_mode_ == TransferMode::Read && transfer_index_ < transfer_buffer_.size()) {
@@ -202,6 +250,8 @@ uint8_t CompactFlash::peek8(uint16_t offset) {
 }
 
 void CompactFlash::write8(uint16_t offset, uint8_t value) {
+    if (!image_loaded()) return;
+
     switch (offset & 0x07) {
     case 0x00:
         if (transfer_mode_ == TransferMode::Write && transfer_index_ < transfer_buffer_.size()) {

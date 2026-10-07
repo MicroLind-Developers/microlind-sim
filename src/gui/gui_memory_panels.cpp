@@ -6,18 +6,21 @@
 #include <cstdint>
 #include <cstdio>
 #include <initializer_list>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "imgui.h"
+#include "microlind/app/vdc_render.hpp"
 
 namespace microlind::gui {
 
 void draw_memory_map(GuiState& state) {
     set_next_window_defaults(944.0f, 28.0f, 240.0f, 190.0f);
     ImGui::Begin("Memory Map", &state.show_memory_map);
-    const std::vector<std::string> summary = state.session.memory_map();
+    const auto snapshot = state.runtime.debugger_snapshot();
+    const auto& summary = snapshot.memory_map;
     if (summary.empty()) {
         ImGui::TextDisabled("No mapped devices.");
     } else {
@@ -32,8 +35,8 @@ void draw_memory_viewer(GuiState& state) {
     set_next_window_defaults(944.0f, 528.0f, 560.0f, 260.0f);
     ImGui::Begin("Memory", &state.show_memory_viewer);
 
-    auto& sim = state.session.simulator();
-    const auto& regs = sim.cpu().regs();
+    const auto debug_snapshot = state.runtime.debugger_snapshot();
+    const auto& regs = debug_snapshot.regs;
 
     if (state.memory_follow_pc) {
         state.memory_start = regs.pc & 0xFFF0;
@@ -84,6 +87,7 @@ void draw_memory_viewer(GuiState& state) {
                                   ImGuiTableFlags_SizingFixedFit;
     const float line_height = ImGui::GetTextLineHeightWithSpacing();
     const float table_height = std::max(line_height * 6.0f, ImGui::GetContentRegionAvail().y);
+    const auto memory_rows = state.runtime.memory_snapshot(static_cast<uint16_t>(state.memory_start), state.memory_rows);
     if (ImGui::BeginTable("memory_view", kCols + 2, flags, ImVec2(0.0f, table_height))) {
         ImGui::TableSetupScrollFreeze(1, 1);
         ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed, 64.0f);
@@ -98,30 +102,25 @@ void draw_memory_viewer(GuiState& state) {
         ImGui::TableSetupColumn("ASCII", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableHeadersRow();
 
-        for (int row = 0; row < state.memory_rows; ++row) {
+        for (const auto& row : memory_rows) {
             ImGui::TableNextRow();
-            const uint16_t row_address = static_cast<uint16_t>(state.memory_start + row * kCols);
             ImGui::TableNextColumn();
-            ImGui::Text("%04X", row_address);
+            ImGui::Text("%04X", row.address);
 
             std::array<char, kCols + 1> ascii{};
             for (int col = 0; col < kCols; ++col) {
                 ImGui::TableNextColumn();
-                const uint16_t address = static_cast<uint16_t>(row_address + col);
-                uint8_t value = state.session.peek_memory(address);
+                const auto index = static_cast<std::size_t>(col);
+                const uint16_t address = static_cast<uint16_t>(row.address + col);
+                uint8_t value = row.bytes[index];
                 ascii[static_cast<std::size_t>(col)] =
                     std::isprint(static_cast<unsigned char>(value)) ? static_cast<char>(value) : '.';
 
-                const bool at_pc = address == regs.pc;
-                const bool at_s = address == regs.s;
-                const bool at_u = address == regs.u;
-                const bool watched = state.session.is_watchpoint(address, microlind::app::WatchpointType::Read) ||
-                                     state.session.is_watchpoint(address, microlind::app::WatchpointType::Write);
-                if (at_pc) {
+                if (row.at_pc[index]) {
                     ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, IM_COL32(38, 96, 56, 180));
-                } else if (at_s || at_u) {
+                } else if (row.at_s[index] || row.at_u[index]) {
                     ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, IM_COL32(72, 72, 116, 180));
-                } else if (watched) {
+                } else if (row.watched[index]) {
                     ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, IM_COL32(120, 92, 38, 180));
                 }
 
@@ -135,8 +134,8 @@ void draw_memory_viewer(GuiState& state) {
                         nullptr,
                         "%02X",
                         ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_AutoSelectAll)) {
-                    state.session.write_memory(address, value);
-                    state.session.add_log("Wrote " + hex_value(value, 2) + " to " + hex_value(address, 4) + ".");
+                    state.runtime.write_memory(address, value);
+                    state.runtime.add_log("Wrote " + hex_value(value, 2) + " to " + hex_value(address, 4) + ".");
                 }
                 ImGui::PopID();
             }
@@ -153,7 +152,8 @@ void draw_memory_viewer(GuiState& state) {
 void draw_mapper(GuiState& state) {
     set_next_window_defaults(944.0f, 224.0f, 240.0f, 294.0f);
     ImGui::Begin("Memory Mapper", &state.show_mapper);
-    const auto mapper = state.session.mapper_snapshot();
+    const auto snapshot = state.runtime.debugger_snapshot();
+    const auto& mapper = snapshot.mapper;
     if (!mapper.present) {
         ImGui::TextDisabled("No memory mapper configured.");
         ImGui::End();
@@ -192,8 +192,8 @@ void draw_mapper(GuiState& state) {
                         "%02X",
                         ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_AutoSelectAll)) {
                     const uint16_t reg = mapper.bank_registers[i];
-                    state.session.write_memory(reg, bank);
-                    state.session.add_log(
+                    state.runtime.write_memory(reg, bank);
+                    state.runtime.add_log(
                         "Mapper window " + std::to_string(i) + " bank set to " +
                         hex_value(bank, 2) + " via " + hex_value(reg, 4) + ".");
                 }
@@ -256,6 +256,32 @@ const char* bus_cycle_kind_label(microlind::BusCycleKind kind) {
     return "Unknown";
 }
 
+const char* bus_decode_mode_label(microlind::BusDecodeMode mode) {
+    switch (mode) {
+    case microlind::BusDecodeMode::RangeMap: return "Range";
+    case microlind::BusDecodeMode::Validate: return "Validate";
+    case microlind::BusDecodeMode::Route: return "Route";
+    }
+    return "Unknown";
+}
+
+int bus_decode_mode_index(microlind::BusDecodeMode mode) {
+    switch (mode) {
+    case microlind::BusDecodeMode::RangeMap: return 0;
+    case microlind::BusDecodeMode::Validate: return 1;
+    case microlind::BusDecodeMode::Route: return 2;
+    }
+    return 0;
+}
+
+microlind::BusDecodeMode bus_decode_mode_from_index(int index) {
+    switch (index) {
+    case 1: return microlind::BusDecodeMode::Validate;
+    case 2: return microlind::BusDecodeMode::Route;
+    default: return microlind::BusDecodeMode::RangeMap;
+    }
+}
+
 void draw_logic_signal_row(const char* name, bool asserted) {
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
@@ -285,7 +311,8 @@ void draw_pld_logic(GuiState& state) {
     set_next_window_defaults(1188.0f, 524.0f, 300.0f, 300.0f);
     ImGui::Begin("PLD Logic", &state.show_pld_logic);
 
-    const auto& regs = state.session.simulator().cpu().regs();
+    const auto debug_snapshot = state.runtime.debugger_snapshot();
+    const auto& regs = debug_snapshot.regs;
     if (!state.pld_live_bus && state.pld_follow_pc) {
         state.pld_address = regs.pc;
     }
@@ -309,14 +336,29 @@ void draw_pld_logic(GuiState& state) {
     }
     ImGui::EndDisabled();
 
-    const auto snapshot = state.pld_live_bus
-        ? state.session.logic_decode_snapshot(state.session.simulator().bus().last_signals())
-        : state.session.logic_decode_snapshot(static_cast<uint16_t>(state.pld_address), state.pld_read);
+    const auto snapshot = state.runtime.logic_snapshot(
+        state.pld_live_bus,
+        static_cast<uint16_t>(state.pld_address),
+        state.pld_read);
     if (!snapshot.configured) {
         ImGui::TextDisabled("No [PLD_LOGIC] configured.");
         ImGui::End();
         return;
     }
+
+    const char* bus_modes[] = {"Range", "Validate", "Route"};
+    int bus_mode_index = bus_decode_mode_index(snapshot.bus_mode);
+    ImGui::BeginDisabled(state.runtime.execution_active());
+    ImGui::SetNextItemWidth(112.0f);
+    if (ImGui::Combo("Bus mode", &bus_mode_index, bus_modes, static_cast<int>(std::size(bus_modes)))) {
+        state.runtime.set_logic_bus_mode(bus_decode_mode_from_index(bus_mode_index));
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && state.runtime.execution_active()) {
+        ImGui::SetTooltip("Pause execution before changing PLD bus mode");
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", bus_decode_mode_label(snapshot.bus_mode));
 
     ImGui::Text("SIGNAL: %s", snapshot.signal_logic_path.filename().string().c_str());
     ImGui::Text("MEMORY: %s", snapshot.memory_logic_path.filename().string().c_str());
@@ -403,7 +445,8 @@ void draw_pld_logic(GuiState& state) {
 void draw_compact_flash(GuiState& state) {
     set_next_window_defaults(480.0f, 520.0f, 456.0f, 180.0f);
     ImGui::Begin("CompactFlash", &state.show_compact_flash);
-    const auto cf = state.session.cf_snapshot();
+    const auto snapshot = state.runtime.debugger_snapshot();
+    const auto& cf = snapshot.compact_flash;
     if (!cf.present) {
         ImGui::TextDisabled("No CompactFlash device configured.");
         ImGui::End();
@@ -413,6 +456,7 @@ void draw_compact_flash(GuiState& state) {
     const std::string path = cf.image_path.empty() ? std::string("-") : cf.image_path.string();
     ImGui::Text("I/O: %04X-%04X", cf.start, cf.end);
     ImGui::Text("Image: %s", path.c_str());
+    ImGui::Text("Loaded: %s", cf.image_loaded ? "yes" : "no");
     ImGui::Text("Sectors: %u", cf.sector_count);
     ImGui::Text("Mode: %s", cf.read_only ? "read-only" : "read/write");
     ImGui::Text("Transfer: %s", cf_transfer_label(cf.transfer_mode));
@@ -455,6 +499,273 @@ void draw_compact_flash(GuiState& state) {
         ImGui::EndTable();
     }
 
+    ImGui::End();
+}
+
+void draw_parallel(GuiState& state) {
+    set_next_window_defaults(480.0f, 706.0f, 456.0f, 390.0f);
+    ImGui::Begin("Parallel I/O", &state.show_parallel);
+    const auto parallel = state.runtime.parallel_snapshot();
+    if (!parallel.present) {
+        ImGui::TextDisabled("No W65C22 parallel device configured.");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Text("I/O: %04X-%04X", parallel.start, parallel.end);
+    ImGui::Text("IRQ: %s", parallel.irq_asserted ? "asserted" : "idle");
+
+    if (ImGui::BeginTable("parallel_registers", 4, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Register");
+        ImGui::TableSetupColumn("A");
+        ImGui::TableSetupColumn("B");
+        ImGui::TableSetupColumn("Notes");
+        ImGui::TableHeadersRow();
+
+        auto row = [](const char* name, uint8_t a, uint8_t b, const char* notes) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(name);
+            ImGui::TableNextColumn();
+            ImGui::Text("%02X", a);
+            ImGui::TableNextColumn();
+            ImGui::Text("%02X", b);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(notes);
+        };
+
+        row("Port", parallel.port_a, parallel.port_b, "effective pins");
+        row("Output", parallel.output_a, parallel.output_b, "output latch");
+        row("Input", parallel.input_a, parallel.input_b, "external pins");
+        row("DDR", parallel.ddr_a, parallel.ddr_b, "1=output");
+
+        ImGui::EndTable();
+    }
+
+    ImGui::Separator();
+    if (ImGui::BeginTable("parallel_control", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Register");
+        ImGui::TableSetupColumn("Value");
+        ImGui::TableHeadersRow();
+
+        auto row = [](const char* name, uint8_t value) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(name);
+            ImGui::TableNextColumn();
+            ImGui::Text("%02X", value);
+        };
+
+        row("ACR", parallel.acr);
+        row("PCR", parallel.pcr);
+        row("IFR", parallel.ifr);
+        row("IER", parallel.ier);
+
+        ImGui::EndTable();
+    }
+
+    ImGui::SeparatorText("Joystick input");
+    ImGui::TextDisabled("Active-low external input pins; controls are inactive while typing in a text field.");
+    if (ImGui::RadioButton("Port A", state.joystick_port_a)) {
+        state.release_joystick();
+        state.joystick_port_a = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Port B", !state.joystick_port_a)) {
+        state.release_joystick();
+        state.joystick_port_a = false;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Defaults")) {
+        state.release_joystick();
+        state.joystick_port_a = false;
+        state.joystick_keys = {{SDLK_UP, SDLK_DOWN, SDLK_LEFT, SDLK_RIGHT, SDLK_SPACE}};
+        state.joystick_bits = {{0, 1, 2, 3, 4}};
+        state.joystick_rebinding = -1;
+    }
+
+    constexpr std::array<const char*, 5> joystick_actions{{"Up", "Down", "Left", "Right", "Fire"}};
+    if (ImGui::BeginTable("joystick_bindings", 3, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Action");
+        ImGui::TableSetupColumn("Key");
+        ImGui::TableSetupColumn("Input bit");
+        ImGui::TableHeadersRow();
+        for (std::size_t i = 0; i < joystick_actions.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i));
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(joystick_actions[i]);
+            ImGui::TableNextColumn();
+            const char* key_name = state.joystick_rebinding == static_cast<int>(i)
+                ? "Press a key (Esc cancels)"
+                : SDL_GetKeyName(state.joystick_keys[i]);
+            if (ImGui::Button(key_name != nullptr && key_name[0] != '\0' ? key_name : "Unknown")) {
+                state.joystick_rebinding = static_cast<int>(i);
+            }
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(58.0f);
+            if (ImGui::InputInt("##bit", &state.joystick_bits[i], 0, 1)) {
+                state.joystick_bits[i] = std::clamp(state.joystick_bits[i], 0, 7);
+                state.sync_joystick();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::SeparatorText("PC speaker (PB7)");
+    const ImU32 speaker_color = state.speaker_signal_active && !state.speaker_muted
+        ? IM_COL32(64, 200, 112, 255)
+        : ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    const ImVec2 top_left = ImGui::GetCursorScreenPos();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(
+        ImVec2(top_left.x, top_left.y + 17.0f),
+        ImVec2(top_left.x + 12.0f, top_left.y + 35.0f),
+        speaker_color,
+        2.0f);
+    const ImVec2 cone[] = {
+        ImVec2(top_left.x + 12.0f, top_left.y + 17.0f),
+        ImVec2(top_left.x + 31.0f, top_left.y + 7.0f),
+        ImVec2(top_left.x + 31.0f, top_left.y + 45.0f),
+        ImVec2(top_left.x + 12.0f, top_left.y + 35.0f),
+    };
+    draw->AddConvexPolyFilled(cone, 4, speaker_color);
+    if (state.speaker_signal_active && !state.speaker_muted) {
+        draw->PathArcTo(ImVec2(top_left.x + 31.0f, top_left.y + 26.0f), 13.0f, -0.8f, 0.8f, 12);
+        draw->PathStroke(speaker_color, 0, 2.0f);
+        draw->PathArcTo(ImVec2(top_left.x + 31.0f, top_left.y + 26.0f), 22.0f, -0.8f, 0.8f, 16);
+        draw->PathStroke(speaker_color, 0, 2.0f);
+    }
+    ImGui::Dummy(ImVec2(62.0f, 52.0f));
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    ImGui::Text("PB7 pin: %s", parallel.pb7_pin_level ? "HIGH" : "LOW");
+    if (parallel.pb7_timer_output_enabled) {
+        ImGui::Text(
+            "Source: Timer 1 (%s)%s",
+            parallel.timer1_free_running ? "square wave" : "one-shot",
+            (parallel.ddr_b & 0x80) != 0 ? "" : ", DDRB7=input");
+    } else {
+        ImGui::Text("Source: ORB7%s", (parallel.ddr_b & 0x80) != 0 ? "" : ", DDRB7=input");
+    }
+    if (state.speaker_frequency_hz > 0.0) {
+        ImGui::Text("Output: %.1f Hz", state.speaker_frequency_hz);
+    } else {
+        ImGui::TextDisabled("Output: idle");
+    }
+    ImGui::EndGroup();
+
+    ImGui::Text("T1 counter: %04X    T1 latch: %04X", parallel.timer1_counter, parallel.timer1_latch);
+    ImGui::Checkbox("Mute PC speaker", &state.speaker_muted);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(120.0f);
+    ImGui::SliderFloat("Volume", &state.speaker_volume, 0.0f, 0.25f, "%.2f");
+    if (!state.speaker_audio_available) {
+        ImGui::TextDisabled("SDL audio output is unavailable; PB7 visualization remains active.");
+    }
+
+    ImGui::End();
+}
+
+void draw_vdc_display(GuiState& state) {
+    set_next_window_defaults(320.0f, 706.0f, 724.0f, 460.0f);
+    ImGui::Begin("VDC Display", &state.show_video);
+
+    const double now = ImGui::GetTime();
+    if (state.last_vdc_refresh_time < 0.0 || now - state.last_vdc_refresh_time >= 0.04) {
+        state.cached_vdc = state.runtime.vdc_snapshot();
+        state.last_vdc_refresh_time = now;
+    }
+
+    const auto& vdc = state.cached_vdc;
+    if (!vdc.present) {
+        ImGui::TextDisabled("No MOS 8563/8568 VDC configured.");
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::Button("Save PNG...")) {
+#ifdef MICROLIND_HAS_PORTABLE_FILE_DIALOGS
+        std::filesystem::path path = pick_save_file(
+            "Save VDC screenshot",
+            "vdc-screenshot.png",
+            {"PNG images", "*.png", "All files", "*"});
+#else
+        std::filesystem::path path{"vdc-screenshot.png"};
+#endif
+        if (!path.empty()) {
+            if (!path.has_extension()) path += ".png";
+            std::string error;
+            if (save_vdc_screenshot_png(path, vdc, now, error)) {
+                state.runtime.add_log("Saved VDC screenshot: " + path.string());
+            } else {
+                state.runtime.add_log("Could not save VDC screenshot: " + error);
+            }
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Save the VDC display as a PNG image");
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(88.0f);
+    ImGui::Combo("Size", &state.vdc_scale_mode, "Fit\0" "1x\0" "2x\0" "3x\0" "4x\0");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Scale the VDC framebuffer in the display panel");
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("CRT aspect", &state.vdc_crt_aspect);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Double vertical pixel height for the classic 640x200 display aspect");
+    }
+
+    ImGui::Text(
+        "I/O: %04X-%04X  REG:%02X  STATUS:%02X  DISP:%04X  ATTR:%04X  CHAR:%04X  UPDATE:%04X  FRAME:%llu",
+        vdc.start,
+        vdc.end,
+        vdc.selected_register,
+        vdc.status,
+        vdc.display_start,
+        vdc.attribute_start,
+        vdc.character_start,
+        vdc.update_address,
+        static_cast<unsigned long long>(vdc.frame_version));
+    ImGui::Separator();
+
+    const std::size_t cell_count = static_cast<std::size_t>(vdc.columns) * vdc.rows;
+    if (vdc.columns == 0 || vdc.rows == 0 || cell_count > vdc.chars.size()) {
+        ImGui::TextDisabled("Invalid VDC display dimensions.");
+        ImGui::End();
+        return;
+    }
+    const auto framebuffer = microlind::app::render_vdc_framebuffer(vdc, now);
+    std::string texture_error;
+    if (!update_rgba_texture(state.renderer, state.vdc_display, framebuffer, texture_error)) {
+        ImGui::TextDisabled("Could not render the VDC framebuffer: %s", texture_error.c_str());
+        ImGui::End();
+        return;
+    }
+
+    ImGui::BeginChild("vdc_framebuffer", ImVec2(0.0f, 0.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
+    const ImVec2 available = ImGui::GetContentRegionAvail();
+    const float vertical_aspect = state.vdc_crt_aspect ? 2.0f : 1.0f;
+    float scale = static_cast<float>(std::clamp(state.vdc_scale_mode, 1, 4));
+    if (state.vdc_scale_mode == 0) {
+        const float horizontal_scale = available.x / static_cast<float>(framebuffer.width);
+        const float vertical_scale = available.y / (static_cast<float>(framebuffer.height) * vertical_aspect);
+        scale = std::max(0.1f, std::min(horizontal_scale, vertical_scale));
+    }
+    const ImVec2 display_size{
+        static_cast<float>(framebuffer.width) * scale,
+        static_cast<float>(framebuffer.height) * scale * vertical_aspect};
+    const ImVec2 cursor = ImGui::GetCursorPos();
+    ImGui::SetCursorPos(ImVec2(
+        cursor.x + std::max(0.0f, (available.x - display_size.x) * 0.5f),
+        cursor.y + std::max(0.0f, (available.y - display_size.y) * 0.5f)));
+    ImGui::Image(
+        reinterpret_cast<ImTextureID>(state.vdc_display.texture),
+        display_size);
+    ImGui::EndChild();
     ImGui::End();
 }
 

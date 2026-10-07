@@ -14,7 +14,9 @@
 #include "microlind/devices/interrupt_controller.hpp"
 #include "microlind/devices/memory.hpp"
 #include "microlind/devices/memory_mapper.hpp"
+#include "microlind/devices/parallel.hpp"
 #include "microlind/devices/serial.hpp"
+#include "microlind/devices/vdc.hpp"
 
 namespace microlind::cli {
 namespace {
@@ -125,6 +127,8 @@ Simulator build_sim(
     std::function<void(uint8_t)> serial_tx,
     std::shared_ptr<microlind::devices::MapperState>* mapper_state_out,
     microlind::devices::CompactFlash** cf_out,
+    microlind::devices::W65C22** parallel_out,
+    microlind::devices::Vdc8568** vdc_out,
     std::vector<std::string>* diagnostics_out) {
     Simulator sim(mode, 1000000);
     using microlind::devices::BankedMemory;
@@ -133,6 +137,8 @@ Simulator build_sim(
     using microlind::devices::MapperState;
     using microlind::devices::Memory;
     using microlind::devices::MemoryMapper;
+    using microlind::devices::Vdc8568;
+    using microlind::devices::W65C22;
     using microlind::devices::XR88C92;
 
     std::shared_ptr<MapperState> mapper_state;
@@ -142,6 +148,8 @@ Simulator build_sim(
     InterruptController* irq_controller_raw = nullptr;
     std::unique_ptr<InterruptController> irq_controller;
     CompactFlash* cf_dev_raw = nullptr;
+    W65C22* parallel_dev_raw = nullptr;
+    Vdc8568* vdc_dev_raw = nullptr;
     std::shared_ptr<microlind::logic::BoardLogicDevices> logic_devices;
 
     if (cfg) {
@@ -328,6 +336,28 @@ Simulator build_sim(
         sim.map_device(cfg->serial.start, cfg->serial.end, BusDeviceSelect::Serial, std::move(serial_up));
     }
 
+    if (cfg && cfg->parallel.present) {
+        auto on_irq = [irq_controller_raw, irq_level = cfg->parallel.irq_level](bool asserted) {
+            if (!irq_controller_raw || irq_level == 0) {
+                return;
+            }
+            if (asserted) {
+                irq_controller_raw->request(irq_level);
+            } else {
+                irq_controller_raw->clear(irq_level);
+            }
+        };
+        auto parallel_up = std::make_unique<W65C22>(on_irq);
+        parallel_dev_raw = parallel_up.get();
+        sim.map_device(cfg->parallel.start, cfg->parallel.end, BusDeviceSelect::Parallel, std::move(parallel_up));
+    }
+
+    if (cfg && cfg->video.present) {
+        auto vdc_up = std::make_unique<Vdc8568>();
+        vdc_dev_raw = vdc_up.get();
+        sim.map_device(cfg->video.start, cfg->video.end, BusDeviceSelect::Video, std::move(vdc_up));
+    }
+
     if (cfg && cfg->cf.present) {
         CompactFlash::Options options;
         options.image_path = cfg->cf.image_path;
@@ -415,6 +445,12 @@ Simulator build_sim(
     }
     if (cf_out) {
         *cf_out = cf_dev_raw;
+    }
+    if (parallel_out) {
+        *parallel_out = parallel_dev_raw;
+    }
+    if (vdc_out) {
+        *vdc_out = vdc_dev_raw;
     }
     return sim;
 }

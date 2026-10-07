@@ -138,6 +138,10 @@ public:
     void tick_bus_cycles(uint32_t cycles, const std::vector<BusAccess>& accesses, uint16_t idle_address);
     void tick_bus_cycle(BusSignals signals);
     [[nodiscard]] uint64_t bus_cycle_count() const { return bus_cycle_count_; }
+    void set_detailed_bus_phases(bool enabled) { detailed_bus_phases_ = enabled; }
+    [[nodiscard]] bool detailed_bus_phases() const { return detailed_bus_phases_; }
+    void set_access_logging(bool enabled) { access_logging_ = enabled; }
+    [[nodiscard]] bool access_logging() const { return access_logging_; }
     void begin_deferred_bus_cycles();
     [[nodiscard]] std::size_t deferred_bus_cycle_count() const { return deferred_bus_cycles_.size(); }
     [[nodiscard]] bool deferring_bus_cycles() const { return defer_bus_cycles_; }
@@ -176,6 +180,7 @@ private:
 
     MappedDevice* find_range_device(uint16_t address);
     MappedDevice* find_selected_device(uint16_t address, BusDeviceSelect select);
+    MappedDevice* find_bus_cycle_device(const BusSignals& signals);
     BusDecodeResult decode_signals(const BusSignals& signals, bool log_diagnostics);
     ResolvedAccess resolve_access(
         BusAccessType type,
@@ -194,6 +199,8 @@ private:
     BusSignals last_signals_{};
     uint64_t bus_cycle_count_{};
     bool defer_bus_cycles_{};
+    bool detailed_bus_phases_{true};
+    bool access_logging_{true};
     BusDecodeMode decode_mode_{BusDecodeMode::RangeMap};
     std::function<BusDecodeResult(const BusSignals&)> decoder_;
 };

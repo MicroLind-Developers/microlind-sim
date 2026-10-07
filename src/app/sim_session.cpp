@@ -12,7 +12,9 @@
 
 #include "microlind/devices/compact_flash.hpp"
 #include "microlind/devices/memory_mapper.hpp"
+#include "microlind/devices/parallel.hpp"
 #include "microlind/devices/serial.hpp"
+#include "microlind/devices/vdc.hpp"
 
 namespace microlind::app {
 
@@ -37,6 +39,30 @@ bool watchpoint_matches(WatchpointType configured, WatchpointType requested) {
 WatchpointType merge_watchpoint_types(WatchpointType a, WatchpointType b) {
     return a == b ? a : WatchpointType::ReadWrite;
 }
+
+class RealtimeBusScope {
+public:
+    explicit RealtimeBusScope(Bus& bus)
+        : bus_(bus),
+          detailed_bus_phases_(bus.detailed_bus_phases()),
+          access_logging_(bus.access_logging()) {
+        bus_.set_detailed_bus_phases(false);
+        bus_.set_access_logging(false);
+    }
+
+    ~RealtimeBusScope() {
+        bus_.set_detailed_bus_phases(detailed_bus_phases_);
+        bus_.set_access_logging(access_logging_);
+    }
+
+    RealtimeBusScope(const RealtimeBusScope&) = delete;
+    RealtimeBusScope& operator=(const RealtimeBusScope&) = delete;
+
+private:
+    Bus& bus_;
+    bool detailed_bus_phases_{};
+    bool access_logging_{};
+};
 
 uint8_t mapper_bits_for_address(
     const cli::HardwareConfig& cfg,
@@ -72,7 +98,9 @@ SimSession::SimSession(CpuMode mode)
           &serial_dev_,
           [this](uint8_t value) { on_serial_tx(value); },
           &mapper_state_,
-          &cf_dev_)) {
+          &cf_dev_,
+          &parallel_dev_,
+          &vdc_dev_)) {
     add_log("Session ready.");
 }
 
@@ -139,6 +167,41 @@ bool SimSession::attach_cf_image(const std::filesystem::path& path, uint32_t min
     return true;
 }
 
+bool SimSession::remove_cf_image() {
+    if (!hw_cfg_ || !hw_cfg_->cf.present) {
+        add_log("No CF device is configured.");
+        return false;
+    }
+
+    hw_cfg_->cf.image_path.clear();
+    hw_cfg_->cf.sectors = 0;
+    if (cf_dev_) {
+        cf_dev_->unload_disk_image();
+    }
+    add_log("Removed CF image.");
+    return true;
+}
+
+BusDecodeMode SimSession::logic_bus_mode() const {
+    if (!hw_cfg_ || !hw_cfg_->logic.present) {
+        return BusDecodeMode::RangeMap;
+    }
+    return hw_cfg_->logic.bus_mode;
+}
+
+bool SimSession::set_logic_bus_mode(BusDecodeMode mode) {
+    if (!hw_cfg_ || !hw_cfg_->logic.present) {
+        add_log("No PLD logic is configured.");
+        return false;
+    }
+    if (hw_cfg_->logic.bus_mode == mode) {
+        return true;
+    }
+    hw_cfg_->logic.bus_mode = mode;
+    rebuild("Changed PLD bus mode.");
+    return true;
+}
+
 void SimSession::reset() {
     sim_.reset_from_vector();
     sim_.reset_clock();
@@ -180,7 +243,7 @@ SimulatorMicrocycleResult SimSession::step_microcycle() {
     return result;
 }
 
-RunResult SimSession::run_instructions(uint32_t count) {
+RunResult SimSession::run_instructions(uint32_t count, StepObserver after_step) {
     RunResult result;
     for (uint32_t i = 0; i < count; ++i) {
         if (check_breakpoint(result.executed, result)) {
@@ -188,6 +251,7 @@ RunResult SimSession::run_instructions(uint32_t count) {
         }
         step_instruction();
         ++result.executed;
+        if (after_step) after_step();
         if (check_watchpoints(result)) {
             return result;
         }
@@ -198,7 +262,7 @@ RunResult SimSession::run_instructions(uint32_t count) {
     return result;
 }
 
-RunResult SimSession::run_microcycles(uint32_t count) {
+RunResult SimSession::run_microcycles(uint32_t count, StepObserver after_step) {
     RunResult result;
     for (uint32_t i = 0; i < count; ++i) {
         if (!sim_.has_pending_microcycles() && check_breakpoint(result.executed, result)) {
@@ -207,6 +271,7 @@ RunResult SimSession::run_microcycles(uint32_t count) {
 
         const auto step = step_microcycle();
         ++result.executed;
+        if (after_step) after_step();
         if (check_watchpoints(result)) {
             return result;
         }
@@ -217,7 +282,26 @@ RunResult SimSession::run_microcycles(uint32_t count) {
     return result;
 }
 
-RunResult SimSession::run_until_address(uint16_t address, uint32_t max_instructions) {
+RealtimeRunResult SimSession::run_realtime_cycles(uint64_t cycle_budget, StepObserver after_step) {
+    RealtimeRunResult result;
+    if (cycle_budget == 0) return result;
+
+    RealtimeBusScope realtime_bus(sim_.bus());
+    sim_.bus().clear_access_log();
+    sim_.bus().clear_decode_log();
+    while (result.cycles < cycle_budget) {
+        const CpuTickResult tick = sim_.tick();
+        ++result.instructions;
+        if (after_step) after_step();
+        if (tick.cycles == 0) break;
+        result.cycles += tick.cycles;
+    }
+    sim_.bus().clear_access_log();
+    sim_.bus().clear_decode_log();
+    return result;
+}
+
+RunResult SimSession::run_until_address(uint16_t address, uint32_t max_instructions, StepObserver after_step) {
     RunResult result;
     for (uint32_t i = 0; i < max_instructions; ++i) {
         if (check_target(address, result.executed, result)) {
@@ -228,6 +312,7 @@ RunResult SimSession::run_until_address(uint16_t address, uint32_t max_instructi
         }
         step_instruction();
         ++result.executed;
+        if (after_step) after_step();
         if (check_watchpoints(result)) {
             return result;
         }
@@ -241,13 +326,13 @@ RunResult SimSession::run_until_address(uint16_t address, uint32_t max_instructi
     return result;
 }
 
-RunResult SimSession::run_until_return(uint32_t max_instructions) {
+RunResult SimSession::run_until_return(uint32_t max_instructions, StepObserver after_step) {
     const auto target = return_address_from_stack();
     if (!target) {
         add_log("No return address is available on S.");
         return {};
     }
-    return run_until_address(*target, max_instructions);
+    return run_until_address(*target, max_instructions, std::move(after_step));
 }
 
 void SimSession::tick_cycles(uint64_t cycles) {
@@ -320,6 +405,76 @@ SerialSnapshot SimSession::serial_snapshot() const {
     snapshot.led_green = led.green;
     snapshot.led_blue = led.blue;
     snapshot.irq_asserted = serial_dev_->irq_asserted();
+    return snapshot;
+}
+
+bool SimSession::set_parallel_input_bits(bool port_a, uint8_t mask, uint8_t value) {
+    if (!parallel_dev_) return false;
+
+    const uint8_t current = port_a ? parallel_dev_->input_a() : parallel_dev_->input_b();
+    const uint8_t updated = static_cast<uint8_t>((current & ~mask) | (value & mask));
+    if (port_a) {
+        parallel_dev_->set_port_a_input(updated);
+    } else {
+        parallel_dev_->set_port_b_input(updated);
+    }
+    return true;
+}
+
+ParallelSnapshot SimSession::parallel_snapshot() const {
+    ParallelSnapshot snapshot;
+    snapshot.present = parallel_dev_ != nullptr;
+    if (!hw_cfg_ || !hw_cfg_->parallel.present || !parallel_dev_) {
+        return snapshot;
+    }
+
+    snapshot.start = hw_cfg_->parallel.start;
+    snapshot.end = hw_cfg_->parallel.end;
+    snapshot.input_a = parallel_dev_->input_a();
+    snapshot.input_b = parallel_dev_->input_b();
+    snapshot.output_a = parallel_dev_->output_a();
+    snapshot.output_b = parallel_dev_->output_b();
+    snapshot.ddr_a = parallel_dev_->ddr_a();
+    snapshot.ddr_b = parallel_dev_->ddr_b();
+    snapshot.port_a = parallel_dev_->port_a();
+    snapshot.port_b = parallel_dev_->port_b();
+    snapshot.acr = parallel_dev_->acr();
+    snapshot.pcr = parallel_dev_->pcr();
+    snapshot.ifr = parallel_dev_->ifr();
+    snapshot.ier = parallel_dev_->ier();
+    snapshot.irq_asserted = parallel_dev_->irq_asserted();
+    snapshot.timer1_counter = parallel_dev_->timer1_counter();
+    snapshot.timer1_latch = parallel_dev_->timer1_latch();
+    snapshot.timer1_running = parallel_dev_->timer1_running();
+    snapshot.timer1_free_running = parallel_dev_->timer1_free_running();
+    snapshot.pb7_timer_output_enabled = parallel_dev_->timer1_pb7_output_enabled();
+    snapshot.pb7_timer_level = parallel_dev_->timer1_pb7_level();
+    snapshot.pb7_pin_level = parallel_dev_->pb7_pin_level();
+    snapshot.pb7_transition_count = parallel_dev_->pb7_transition_count();
+    return snapshot;
+}
+
+VdcSnapshot SimSession::vdc_snapshot() const {
+    VdcSnapshot snapshot;
+    snapshot.present = vdc_dev_ != nullptr;
+    if (!hw_cfg_ || !hw_cfg_->video.present || !vdc_dev_) {
+        return snapshot;
+    }
+
+    snapshot.start = hw_cfg_->video.start;
+    snapshot.end = hw_cfg_->video.end;
+    snapshot.selected_register = vdc_dev_->selected_register();
+    snapshot.status = vdc_dev_->status();
+    snapshot.registers = vdc_dev_->registers();
+    snapshot.display_start = vdc_dev_->display_start();
+    snapshot.attribute_start = vdc_dev_->attribute_start();
+    snapshot.update_address = vdc_dev_->update_address();
+    snapshot.cursor_position = vdc_dev_->cursor_position();
+    snapshot.character_start = vdc_dev_->character_start();
+    snapshot.frame_version = vdc_dev_->frame_version();
+    snapshot.chars = vdc_dev_->display_chars();
+    snapshot.attrs = vdc_dev_->display_attrs();
+    snapshot.character_data = vdc_dev_->character_data();
     return snapshot;
 }
 
@@ -547,6 +702,7 @@ CfSnapshot SimSession::cf_snapshot() const {
 
     const auto device = cf_dev_->snapshot();
     snapshot.present = true;
+    snapshot.image_loaded = device.image_loaded;
     snapshot.start = hw_cfg_->cf.start;
     snapshot.end = hw_cfg_->cf.end;
     snapshot.image_path = device.image_path;
@@ -615,6 +771,7 @@ LogicDecodeSnapshot SimSession::logic_decode_snapshot(const BusSignals& signals)
     }
 
     snapshot.configured = true;
+    snapshot.bus_mode = hw_cfg_->logic.bus_mode;
     snapshot.signal_logic_path = hw_cfg_->logic.signal_logic_path;
     snapshot.memory_logic_path = hw_cfg_->logic.memory_logic_path;
     snapshot.address_logic_path = hw_cfg_->logic.address_logic_path;
@@ -651,6 +808,8 @@ void SimSession::add_log(std::string message) {
 void SimSession::rebuild(std::string reason) {
     serial_dev_ = nullptr;
     cf_dev_ = nullptr;
+    parallel_dev_ = nullptr;
+    vdc_dev_ = nullptr;
     mapper_state_.reset();
     logic_devices_.reset();
     logic_error_.clear();
@@ -668,6 +827,8 @@ void SimSession::rebuild(std::string reason) {
         [this](uint8_t value) { on_serial_tx(value); },
         &mapper_state_,
         &cf_dev_,
+        &parallel_dev_,
+        &vdc_dev_,
         &diagnostics);
     for (const auto& diagnostic : diagnostics) {
         add_log(diagnostic);

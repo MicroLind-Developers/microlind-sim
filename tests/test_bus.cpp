@@ -80,6 +80,29 @@ TEST(BusPhaseTest, SimulatorExpandsInstructionCyclesIntoFourBusPhases) {
     }
 }
 
+TEST(BusPhaseTest, FastBusModeSkipsPhaseFanoutButStillExecutesCpuCycles) {
+    microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
+    auto memory = std::make_unique<PhaseProbeMemory>();
+    auto* probe = memory.get();
+    probe->data[0x0100] = 0x86; // LDA immediate
+    probe->data[0x0101] = 0x42;
+    ASSERT_FALSE(sim.map_device(0x0000, 0xFFFF, std::move(memory)));
+
+    sim.bus().set_detailed_bus_phases(false);
+    sim.bus().set_access_logging(false);
+    sim.cpu().set_pc(0x0100);
+    const auto result = sim.tick();
+
+    EXPECT_EQ(result.cycles, 2u);
+    EXPECT_EQ(sim.cpu().regs().a, 0x42);
+    EXPECT_EQ(sim.bus().bus_cycle_count(), 2u);
+    EXPECT_TRUE(sim.bus().phase_log().empty());
+    EXPECT_TRUE(sim.bus().access_log().empty());
+    EXPECT_TRUE(probe->phases.empty());
+    EXPECT_EQ(probe->ticked_cycles, 2u);
+    EXPECT_EQ(sim.bus().last_signals().phase, microlind::BusPhase::QLowEHigh);
+}
+
 TEST(BusPhaseTest, TagsOpcodeAndOperandFetchCycles) {
     microlind::Simulator sim(microlind::CpuMode::HD6309, 1'000'000);
     auto memory = std::make_unique<PhaseProbeMemory>();

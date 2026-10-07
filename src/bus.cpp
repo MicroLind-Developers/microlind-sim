@@ -144,6 +144,17 @@ Bus::MappedDevice* Bus::find_selected_device(uint16_t address, BusDeviceSelect s
     return it == devices_.end() ? nullptr : &*it;
 }
 
+Bus::MappedDevice* Bus::find_bus_cycle_device(const BusSignals& signals) {
+    MappedDevice* device = nullptr;
+    if (signals.mapped_select != BusDeviceSelect::None) {
+        device = find_selected_device(signals.address, signals.mapped_select);
+    }
+    if (!device) {
+        device = find_range_device(signals.address);
+    }
+    return device;
+}
+
 void Bus::log_decode_issue(std::string message) {
     decode_log_.push_back(std::move(message));
     if (decode_log_.size() > 256) {
@@ -226,11 +237,13 @@ Bus::ResolvedAccess Bus::resolve_access(
 void Bus::record_access(BusAccess access) {
     if (defer_bus_cycles_) {
         BusSignals signals = signals_from_access(access);
-        signals.log_access = true;
+        signals.log_access = access_logging_;
         deferred_bus_cycles_.push_back(signals);
         return;
     }
-    access_log_.push_back(access);
+    if (access_logging_) {
+        access_log_.push_back(access);
+    }
     tick_bus_cycle(signals_from_access(access));
 }
 
@@ -320,6 +333,38 @@ std::vector<BusSignals> Bus::take_deferred_bus_cycles() {
 
 void Bus::tick_bus_cycle(BusSignals signals) {
     ++bus_cycle_count_;
+    if (!detailed_bus_phases_) {
+        set_phase(signals, BusPhase::QLowEHigh);
+        const BusDecodeResult decoded = decode_signals(signals, false);
+        signals.decoded_select = decoded.selected ? decoded.select : BusDeviceSelect::None;
+        if (signals.mapped_select == BusDeviceSelect::None && signals.memory_enable) {
+            if (MappedDevice* mapped = find_range_device(signals.address)) {
+                signals.mapped_select = mapped->select;
+            }
+        }
+        if (MappedDevice* device = find_bus_cycle_device(signals)) {
+            if (signals.apply_read) {
+                signals.data = device->device->read8(device->offset(signals.address));
+            }
+            if (signals.apply_write) {
+                device->device->write8(device->offset(signals.address), signals.data);
+            }
+        }
+        last_signals_ = signals;
+        if (signals.log_access && access_logging_) {
+            access_log_.push_back(BusAccess{
+                signals.rw ? BusAccessType::Read : BusAccessType::Write,
+                signals.address,
+                signals.data,
+                signals.decoded_select,
+                signals.mapped_select,
+                signals.cycle_kind,
+                signals.apply_read,
+                signals.apply_write});
+        }
+        return;
+    }
+
     bool applied_deferred_access = false;
     constexpr BusPhase phases[] = {
         BusPhase::QHighELow,
@@ -338,13 +383,7 @@ void Bus::tick_bus_cycle(BusSignals signals) {
             }
         }
         if (!applied_deferred_access && signals.phase == BusPhase::QLowEHigh) {
-            MappedDevice* device = nullptr;
-            if (signals.mapped_select != BusDeviceSelect::None) {
-                device = find_selected_device(signals.address, signals.mapped_select);
-            }
-            if (!device) {
-                device = find_range_device(signals.address);
-            }
+            MappedDevice* device = find_bus_cycle_device(signals);
             if (device && signals.apply_read) {
                 signals.data = device->device->read8(device->offset(signals.address));
             }
@@ -362,7 +401,7 @@ void Bus::tick_bus_cycle(BusSignals signals) {
             m.device->tick_phase(signals);
         }
     }
-    if (signals.log_access) {
+    if (signals.log_access && access_logging_) {
         access_log_.push_back(BusAccess{
             signals.rw ? BusAccessType::Read : BusAccessType::Write,
             signals.address,

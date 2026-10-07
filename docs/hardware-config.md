@@ -112,10 +112,64 @@ Keys:
 - `SECTORS`: optional minimum sector count.
 - `READ_ONLY`: `true`, `yes`, or `1` opens the image read-only.
 
-Without `IMAGE`, the CF device uses volatile zero-filled storage. With `IMAGE`,
-the image size becomes the disk size unless `SECTORS` is set as a larger
-minimum. Disk images that are not an exact multiple of 512 bytes are padded to
-the next sector.
+Without `IMAGE`, the CF register window is mapped but no media is loaded and
+register reads return `$FF`. With `IMAGE`, the image size becomes the disk size
+unless `SECTORS` is set as a larger minimum. Disk images that are not an exact
+multiple of 512 bytes are padded to the next sector.
+
+## Parallel I/O
+
+`[PARALLEL]` or `[PAR]` maps the W65C22/VIA-style parallel I/O device.
+
+```ini
+[PARALLEL]
+IO_START_ADDRESS=0xF420
+IO_END_ADDRESS=0xF42F
+IRQ_LEVEL=2
+```
+
+Keys:
+
+- `IO_START_ADDRESS`: first parallel I/O register address.
+- `IO_END_ADDRESS`: last parallel I/O register address.
+- `IRQ_LEVEL`: optional microLind IRQ controller level asserted by the
+  parallel device when an enabled W65C22 interrupt is pending. Defaults to `2`.
+
+The W65C22 model exposes port A/B output latches, input pins, data direction
+registers, ACR/PCR, IFR/IER, shift register storage, and timer-driven interrupt
+flags. Timer 1 also implements the ACR-controlled PB7 output described in the
+W65C22 data sheet: ACR7 enables PB7 timer output, ACR6 selects one-shot or
+free-run operation, and DDRB7 must select output for the signal to reach the
+pin. The desktop GUI connects its simulated PC speaker to this PB7 pin.
+
+## Video / VDC
+
+`[VIDEO]` or `[VDC]` maps the MOS 8563/8568-style VDC two-register CPU
+interface. The VDC owns 64 KiB of private video RAM that is accessed through
+the VDC data register, not through the normal CPU memory map.
+
+```ini
+[VIDEO]
+IO_START_ADDRESS=0xF440
+IO_END_ADDRESS=0xF441
+VRAM_SIZE=65536
+```
+
+Keys:
+
+- `IO_START_ADDRESS`: VDC control/status register address.
+- `IO_END_ADDRESS`: VDC data register address. The first implementation expects
+  this to be `IO_START_ADDRESS + 1`.
+- `VRAM_SIZE`: documented private VDC RAM size. The simulator currently models
+  64 KiB.
+
+The initial model ignores exact VDC timing and reports ready immediately. The
+GUI VDC Display window snapshots the 80x25 text and attribute planes plus the
+8 KiB character-generator bank selected by register `$1C`. It composes those
+bytes into a native-pixel RGBA framebuffer at a 25 Hz snapshot refresh rate.
+The display panel offers fit-to-panel and 1x-4x zoom modes. CRT aspect mode
+doubles the displayed vertical pixel height while leaving framebuffer and PNG
+dimensions unchanged.
 
 ## Memory Mapper
 
@@ -191,8 +245,8 @@ Keys:
 - `route`: use the PLD-selected device role for bus accesses. Devices are still
   created from `hw.cfg`; PLD routing chooses between those mapped devices.
 
-The simulator validates configured ROM, RAM, memory mapper, CompactFlash, and
-serial ranges against the PLD decode during rebuild. CLI builds print
+The simulator validates configured ROM, RAM, memory mapper, CompactFlash,
+parallel, and serial ranges against the PLD decode during rebuild. CLI builds print
 diagnostics, and GUI/session rebuilds add them to the event log.
 
 ## CLI Helpers

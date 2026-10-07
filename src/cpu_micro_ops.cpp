@@ -2114,7 +2114,7 @@ CpuMicrocycleStatus Cpu::complete_microcycle(const BusSignals& signals) {
                 break;
             }
             case 0x1D:
-                regs_.b = (regs_.a & 0x80) ? 0xFF : 0x00;
+                regs_.a = (regs_.b & 0x80) ? 0xFF : 0x00;
                 set_flags_nz16(static_cast<uint16_t>((static_cast<uint16_t>(regs_.a) << 8) | regs_.b));
                 break;
             case 0x14: {

@@ -154,9 +154,14 @@ void draw_main_menu(GuiState& state) {
     if (ImGui::BeginMenu("Simulator")) {
         if (ImGui::MenuItem("Reset", "Ctrl+R")) {
             state.stop_execution();
-            state.session.reset();
+            state.runtime.reset();
         }
-        if (ImGui::MenuItem(state.running ? "Pause" : "Run", "F5")) {
+        if (ImGui::MenuItem(state.true_running() ? "Pause True Run" : "True Run")) {
+            state.toggle_true_run();
+        }
+        ImGui::Separator();
+        ImGui::BeginDisabled(state.true_running());
+        if (ImGui::MenuItem(state.running() ? "Pause" : "Run", "F5")) {
             state.toggle_run();
         }
         if (ImGui::MenuItem("Step", "F10")) {
@@ -171,6 +176,7 @@ void draw_main_menu(GuiState& state) {
         if (ImGui::MenuItem("Run Until Return", "Shift+F11")) {
             state.run_until_return();
         }
+        ImGui::EndDisabled();
         ImGui::EndMenu();
     }
 
@@ -206,6 +212,9 @@ void draw_main_menu(GuiState& state) {
         ImGui::MenuItem("Memory Mapper", nullptr, &state.show_mapper);
         ImGui::MenuItem("PLD Logic", nullptr, &state.show_pld_logic);
         ImGui::MenuItem("CompactFlash", nullptr, &state.show_compact_flash);
+        ImGui::MenuItem("Parallel I/O", nullptr, &state.show_parallel);
+        ImGui::MenuItem("Logic Analyser", nullptr, &state.show_logic_analyser);
+        ImGui::MenuItem("VDC Display", nullptr, &state.show_video);
         ImGui::MenuItem("Serial", nullptr, &state.show_serial);
         ImGui::Separator();
         ImGui::MenuItem("Breakpoints", nullptr, &state.show_breakpoints);
@@ -244,24 +253,45 @@ void draw_status_bar(GuiState& state) {
 #endif
 
     if (ImGui::Begin("Status Bar", nullptr, flags)) {
-        const auto& sim = state.session.simulator();
-        const char* run_state = sim.has_pending_microcycles()
-            ? "micro"
-            : (state.run_until_active ? "until" : (state.running ? (state.run_micro_steps ? "running micro" : "running") : "paused"));
+        const auto status = state.runtime.status_snapshot();
+        const char* run_state = "paused";
+        switch (status.mode) {
+        case RuntimeMode::DebugRun: run_state = "running"; break;
+        case RuntimeMode::DebugMicroRun: run_state = "running micro"; break;
+        case RuntimeMode::RunUntilAddress: run_state = "until"; break;
+        case RuntimeMode::RunUntilReturn: run_state = "until return"; break;
+        case RuntimeMode::StepOverPending: run_state = "step over"; break;
+        case RuntimeMode::StepPending: run_state = "step"; break;
+        case RuntimeMode::MicroStepPending: run_state = "micro step"; break;
+        case RuntimeMode::TrueRun: run_state = "true running"; break;
+        case RuntimeMode::Stopping: run_state = "stopping"; break;
+        case RuntimeMode::Paused:
+            run_state = status.pending_microcycles ? "micro" : "paused";
+            break;
+        }
         ImGui::Text("State: %s", run_state);
         ImGui::SameLine();
         ImGui::TextUnformatted("|");
         ImGui::SameLine();
-        ImGui::Text("PC: %04X", sim.cpu().regs().pc);
+        ImGui::Text("PC: %04X", status.pc);
         ImGui::SameLine();
         ImGui::TextUnformatted("|");
         ImGui::SameLine();
-        ImGui::Text("Cycles: %llu", static_cast<unsigned long long>(sim.clock().total_cycles()));
+        ImGui::Text("Cycles: %llu", static_cast<unsigned long long>(status.total_cycles));
         ImGui::SameLine();
         ImGui::TextUnformatted("|");
         ImGui::SameLine();
-        ImGui::Text("Bus: %llu", static_cast<unsigned long long>(sim.bus().bus_cycle_count()));
-        if (sim.has_pending_microcycles()) {
+        ImGui::Text("Bus: %llu", static_cast<unsigned long long>(status.bus_cycles));
+        if (state.true_running()) {
+            ImGui::SameLine();
+            ImGui::TextUnformatted("|");
+            ImGui::SameLine();
+            ImGui::Text(
+                "True: %.1f/%.4f MHz",
+                static_cast<double>(status.true_target_hz) / 1000000.0,
+                status.true_effective_hz / 1000000.0);
+        }
+        if (status.pending_microcycles) {
             ImGui::SameLine();
             ImGui::TextUnformatted("|");
             ImGui::SameLine();
@@ -334,7 +364,7 @@ void draw_about_modal(GuiState& state) {
     ImGui::TextUnformatted("Libraries and tools used");
     ImGui::BulletText("Dear ImGui - immediate-mode GUI and docking/table widgets");
     ImGui::BulletText("SDL2 - desktop windowing, renderer, input, and texture backend");
-    ImGui::BulletText("libpng - loading the application logo texture");
+    ImGui::BulletText("libpng - PNG image loading and VDC screenshot export");
     ImGui::BulletText("portable-file-dialogs - native file open/save dialogs when available");
     ImGui::BulletText("GoogleTest / GoogleMock - automated simulator and app-layer tests");
     ImGui::BulletText("CMake - build configuration and dependency wiring");
@@ -348,7 +378,7 @@ void draw_about_modal(GuiState& state) {
     ImGui::SameLine();
     if (ImGui::Button("Open GitHub", ImVec2(120.0f, 0.0f))) {
         if (SDL_OpenURL(MICROLIND_REPOSITORY_URL) != 0) {
-            state.session.add_log(std::string("Could not open GitHub URL: ") + SDL_GetError());
+            state.runtime.add_log(std::string("Could not open GitHub URL: ") + SDL_GetError());
         }
     }
 
@@ -359,7 +389,7 @@ void draw_workbench(GuiState& state) {
     if (!state.pending_layout_ini.empty()) {
         ImGui::LoadIniSettingsFromMemory(state.pending_layout_ini.data(), state.pending_layout_ini.size());
         state.pending_layout_ini.clear();
-        state.session.add_log("Restored session window layout.");
+        state.runtime.add_log("Restored session window layout.");
     }
 
     draw_main_menu(state);
@@ -369,21 +399,26 @@ void draw_workbench(GuiState& state) {
     draw_help_modal(state);
     draw_about_modal(state);
 
-    if (state.show_file_panel) draw_file_panel(state);
     if (state.show_control_panel) draw_control_panel(state);
-    if (state.show_registers) draw_registers(state);
-    if (state.show_disassembly) draw_disassembly(state);
-    if (state.show_memory_viewer) draw_memory_viewer(state);
-    if (state.show_stack) draw_stack(state);
-    if (state.show_memory_map) draw_memory_map(state);
-    if (state.show_mapper) draw_mapper(state);
-    if (state.show_pld_logic) draw_pld_logic(state);
-    if (state.show_compact_flash) draw_compact_flash(state);
-    if (state.show_breakpoints) draw_breakpoints(state);
-    if (state.show_watchpoints) draw_watchpoints(state);
-    if (state.show_trace) draw_trace(state);
     if (state.show_serial) draw_serial(state);
-    if (state.show_log) draw_log(state);
+    if (state.show_video) draw_vdc_display(state);
+    if (state.show_parallel) draw_parallel(state);
+    if (state.show_logic_analyser) draw_logic_analyser(state);
+    if (!state.true_running()) {
+        if (state.show_file_panel) draw_file_panel(state);
+        if (state.show_registers) draw_registers(state);
+        if (state.show_disassembly) draw_disassembly(state);
+        if (state.show_memory_viewer) draw_memory_viewer(state);
+        if (state.show_stack) draw_stack(state);
+        if (state.show_memory_map) draw_memory_map(state);
+        if (state.show_mapper) draw_mapper(state);
+        if (state.show_pld_logic) draw_pld_logic(state);
+        if (state.show_compact_flash) draw_compact_flash(state);
+        if (state.show_breakpoints) draw_breakpoints(state);
+        if (state.show_watchpoints) draw_watchpoints(state);
+        if (state.show_trace) draw_trace(state);
+        if (state.show_log) draw_log(state);
+    }
     draw_status_bar(state);
 }
 
@@ -401,7 +436,7 @@ void handle_shortcut(GuiState& state, SDL_Keycode key, SDL_Keymod mods) {
         state.quit_requested = true;
     } else if (ctrl && key == SDLK_r) {
         state.stop_execution();
-        state.session.reset();
+        state.runtime.reset();
     } else if (key == SDLK_F5) {
         state.toggle_run();
     } else if (key == SDLK_F9) {

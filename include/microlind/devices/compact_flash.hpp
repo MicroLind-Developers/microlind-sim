@@ -26,6 +26,7 @@ public:
 
     struct Snapshot {
         std::filesystem::path image_path{};
+        bool image_loaded{};
         uint32_t sector_count{};
         bool read_only{};
         uint8_t error{};
@@ -53,8 +54,10 @@ public:
 
     bool load_disk_image(const std::filesystem::path& path, std::string* error = nullptr);
     bool load_disk_image(const std::filesystem::path& path, uint32_t minimum_sectors, std::string* error = nullptr);
+    void unload_disk_image();
 
     [[nodiscard]] const std::filesystem::path& image_path() const { return options_.image_path; }
+    [[nodiscard]] bool image_loaded() const { return !storage_.empty(); }
     [[nodiscard]] uint32_t sector_count() const { return sector_count_; }
     [[nodiscard]] Snapshot snapshot() const;
 

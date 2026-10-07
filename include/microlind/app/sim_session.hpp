@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -19,6 +20,8 @@
 namespace microlind::devices {
 class CompactFlash;
 struct MapperState;
+class Vdc8568;
+class W65C22;
 class XR88C92;
 }
 
@@ -40,6 +43,11 @@ struct RunResult {
     uint16_t watchpoint_address{};
     BusAccessType watchpoint_type{BusAccessType::Read};
     uint8_t watchpoint_value{};
+};
+
+struct RealtimeRunResult {
+    uint64_t cycles{};
+    uint32_t instructions{};
 };
 
 enum class WatchpointType {
@@ -87,6 +95,7 @@ enum class CfTransferMode {
 
 struct CfSnapshot {
     bool present{};
+    bool image_loaded{};
     uint16_t start{};
     uint16_t end{};
     std::filesystem::path image_path{};
@@ -117,9 +126,62 @@ struct SerialSnapshot {
     bool irq_asserted{};
 };
 
+struct ParallelSnapshot {
+    bool present{};
+    uint16_t start{};
+    uint16_t end{};
+    uint8_t port_a{};
+    uint8_t port_b{};
+    uint8_t input_a{};
+    uint8_t input_b{};
+    uint8_t output_a{};
+    uint8_t output_b{};
+    uint8_t ddr_a{};
+    uint8_t ddr_b{};
+    uint8_t acr{};
+    uint8_t pcr{};
+    uint8_t ifr{};
+    uint8_t ier{};
+    bool irq_asserted{};
+    uint16_t timer1_counter{};
+    uint16_t timer1_latch{};
+    bool timer1_running{};
+    bool timer1_free_running{};
+    bool pb7_timer_output_enabled{};
+    bool pb7_timer_level{};
+    bool pb7_pin_level{};
+    uint64_t pb7_transition_count{};
+};
+
+struct VdcSnapshot {
+    static constexpr uint8_t Columns = 80;
+    static constexpr uint8_t Rows = 25;
+    static constexpr std::size_t Cells = static_cast<std::size_t>(Columns) * Rows;
+    static constexpr std::size_t CharacterBytes = 8192;
+
+    bool present{};
+    uint16_t start{};
+    uint16_t end{};
+    uint8_t selected_register{};
+    uint8_t status{};
+    std::array<uint8_t, 0x25> registers{};
+    uint16_t display_start{};
+    uint16_t attribute_start{};
+    uint16_t update_address{};
+    uint16_t cursor_position{};
+    uint16_t character_start{};
+    uint8_t columns{Columns};
+    uint8_t rows{Rows};
+    uint64_t frame_version{};
+    std::array<uint8_t, Cells> chars{};
+    std::array<uint8_t, Cells> attrs{};
+    std::array<uint8_t, CharacterBytes> character_data{};
+};
+
 struct LogicDecodeSnapshot {
     bool configured{};
     bool available{};
+    BusDecodeMode bus_mode{BusDecodeMode::RangeMap};
     BusPhase phase{BusPhase::QLowELow};
     BusCycleKind cycle_kind{BusCycleKind::Idle};
     uint16_t address{};
@@ -153,14 +215,20 @@ public:
     bool load_rom(const std::filesystem::path& path, cli::RomFormat format, uint16_t raw_base);
     bool load_hardware_config(const std::filesystem::path& path);
     bool attach_cf_image(const std::filesystem::path& path, uint32_t minimum_sectors);
+    bool remove_cf_image();
+    [[nodiscard]] BusDecodeMode logic_bus_mode() const;
+    bool set_logic_bus_mode(BusDecodeMode mode);
 
     void reset();
     CpuTickResult step_instruction();
     SimulatorMicrocycleResult step_microcycle();
-    RunResult run_instructions(uint32_t count);
-    RunResult run_microcycles(uint32_t count);
-    RunResult run_until_address(uint16_t address, uint32_t max_instructions);
-    RunResult run_until_return(uint32_t max_instructions);
+    using StepObserver = std::function<void()>;
+
+    RunResult run_instructions(uint32_t count, StepObserver after_step = {});
+    RunResult run_microcycles(uint32_t count, StepObserver after_step = {});
+    RealtimeRunResult run_realtime_cycles(uint64_t cycle_budget, StepObserver after_step = {});
+    RunResult run_until_address(uint16_t address, uint32_t max_instructions, StepObserver after_step = {});
+    RunResult run_until_return(uint32_t max_instructions, StepObserver after_step = {});
     void tick_cycles(uint64_t cycles);
 
     [[nodiscard]] std::optional<uint16_t> step_over_target();
@@ -196,7 +264,11 @@ public:
     void clear_trace();
 
     [[nodiscard]] bool serial_mapped() const { return serial_dev_ != nullptr; }
+    // Drive selected external VIA input pins without changing pins owned by other devices.
+    bool set_parallel_input_bits(bool port_a, uint8_t mask, uint8_t value);
     [[nodiscard]] SerialSnapshot serial_snapshot() const;
+    [[nodiscard]] ParallelSnapshot parallel_snapshot() const;
+    [[nodiscard]] VdcSnapshot vdc_snapshot() const;
     [[nodiscard]] std::vector<std::string> memory_map() const;
     [[nodiscard]] MapperSnapshot mapper_snapshot() const;
     [[nodiscard]] CfSnapshot cf_snapshot() const;
@@ -226,6 +298,8 @@ private:
     std::optional<cli::HardwareConfig> hw_cfg_;
     std::shared_ptr<devices::MapperState> mapper_state_;
     devices::XR88C92* serial_dev_{nullptr};
+    devices::W65C22* parallel_dev_{nullptr};
+    devices::Vdc8568* vdc_dev_{nullptr};
     devices::CompactFlash* cf_dev_{nullptr};
     std::optional<microlind::logic::BoardLogicDevices> logic_devices_;
     std::string logic_error_;

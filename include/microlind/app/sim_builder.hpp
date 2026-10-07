@@ -15,6 +15,8 @@
 namespace microlind::devices {
 class CompactFlash;
 struct MapperState;
+class Vdc8568;
+class W65C22;
 class XR88C92;
 }
 
@@ -28,6 +30,8 @@ Simulator build_sim(
     std::function<void(uint8_t)> serial_tx = nullptr,
     std::shared_ptr<microlind::devices::MapperState>* mapper_state_out = nullptr,
     microlind::devices::CompactFlash** cf_out = nullptr,
+    microlind::devices::W65C22** parallel_out = nullptr,
+    microlind::devices::Vdc8568** vdc_out = nullptr,
     std::vector<std::string>* diagnostics_out = nullptr);
 
 } // namespace microlind::cli
