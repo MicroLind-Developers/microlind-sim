@@ -61,6 +61,8 @@ BusSignals signals_from_access(const BusAccess& access) {
     signals.decoded_select = access.decoded_select;
     signals.mapped_select = access.mapped_select;
     signals.cycle_kind = access.cycle_kind;
+    signals.ba = false;
+    signals.bs = access.cycle_kind == BusCycleKind::VectorRead;
     signals.apply_read = access.apply_read;
     signals.apply_write = access.apply_write;
     return signals;
@@ -125,6 +127,8 @@ BusSignals access_signals(BusAccessType type, uint16_t address, uint8_t value, B
     signals.address = address;
     signals.data = value;
     signals.cycle_kind = cycle_kind;
+    signals.ba = false;
+    signals.bs = cycle_kind == BusCycleKind::VectorRead;
     return signals;
 }
 
@@ -247,7 +251,46 @@ void Bus::record_access(BusAccess access) {
     tick_bus_cycle(signals_from_access(access));
 }
 
+void Bus::qualify_vector(const BusSignals& signals) {
+    if (gate_enabled_ && signals.memory_enable && signals.rw && !signals.ba && signals.bs
+        && signals.cycle_kind == BusCycleKind::VectorRead
+        && signals.address >= 0xFFFA) {
+        privileged_ = true; // SWI/NMI/reset, either byte; IRQ/trap/SWI2/3 excluded.
+    }
+}
+
+bool Bus::permit_write(uint16_t address) {
+    if (!gate_enabled_ || address < 0xF400 || address > 0xF7FF) return true;
+    if (!privileged_) return false;
+    if (address == 0xF405) {
+        privileged_ = false;
+        return false; // The latch consumes the write, never a peripheral.
+    }
+    return true;
+}
+
+void Bus::apply_deferred_access(BusSignals& signals) {
+    qualify_vector(signals);
+    if (signals.apply_read && gate_enabled_ && signals.address == 0xF405) {
+        signals.data = privileged_ ? 0x80 : 0x00; // Lower bits deliberately unspecified.
+    } else if (MappedDevice* device = find_bus_cycle_device(signals)) {
+        if (signals.apply_read) signals.data = device->device->read8(device->offset(signals.address));
+    }
+    if (signals.apply_write && permit_write(signals.address)) {
+        if (MappedDevice* device = find_bus_cycle_device(signals)) {
+            device->device->write8(device->offset(signals.address), signals.data);
+        }
+    }
+}
+
 uint8_t Bus::read8(uint16_t address, BusCycleKind cycle_kind) {
+    if (!defer_bus_cycles_) qualify_vector(access_signals(BusAccessType::Read, address, 0xFF, cycle_kind));
+    if (gate_enabled_ && address == 0xF405) {
+        const uint8_t value = privileged_ ? 0x80 : 0x00;
+        record_access(BusAccess{BusAccessType::Read, address, value, BusDeviceSelect::None,
+            BusDeviceSelect::None, cycle_kind, defer_bus_cycles_, false});
+        return value;
+    }
     ResolvedAccess resolved = resolve_access(BusAccessType::Read, address, 0xFF, cycle_kind, true);
     if (resolved.device) {
         const uint8_t value = defer_bus_cycles_
@@ -269,6 +312,7 @@ uint8_t Bus::read8(uint16_t address, BusCycleKind cycle_kind) {
 }
 
 uint8_t Bus::peek8(uint16_t address) {
+    if (gate_enabled_ && address == 0xF405) return privileged_ ? 0x80 : 0x00;
     ResolvedAccess resolved = resolve_access(BusAccessType::Read, address, 0xFF, BusCycleKind::Internal, false);
     if (resolved.device) {
         return resolved.device->device->peek8(resolved.device->offset(address));
@@ -286,8 +330,9 @@ void Bus::write8(uint16_t address, uint8_t value, BusCycleKind cycle_kind) {
         resolved.mapped_select,
         cycle_kind,
         false,
-        defer_bus_cycles_ && resolved.device != nullptr};
-    if (resolved.device && !defer_bus_cycles_) {
+        defer_bus_cycles_ && (resolved.device != nullptr || (gate_enabled_ && address == 0xF405))};
+    const bool permitted = defer_bus_cycles_ || permit_write(address);
+    if (resolved.device && !defer_bus_cycles_ && permitted) {
         resolved.device->device->write8(resolved.device->offset(address), value);
     }
     record_access(access);
@@ -342,14 +387,7 @@ void Bus::tick_bus_cycle(BusSignals signals) {
                 signals.mapped_select = mapped->select;
             }
         }
-        if (MappedDevice* device = find_bus_cycle_device(signals)) {
-            if (signals.apply_read) {
-                signals.data = device->device->read8(device->offset(signals.address));
-            }
-            if (signals.apply_write) {
-                device->device->write8(device->offset(signals.address), signals.data);
-            }
-        }
+        apply_deferred_access(signals);
         last_signals_ = signals;
         if (signals.log_access && access_logging_) {
             access_log_.push_back(BusAccess{
@@ -383,13 +421,7 @@ void Bus::tick_bus_cycle(BusSignals signals) {
             }
         }
         if (!applied_deferred_access && signals.phase == BusPhase::QLowEHigh) {
-            MappedDevice* device = find_bus_cycle_device(signals);
-            if (device && signals.apply_read) {
-                signals.data = device->device->read8(device->offset(signals.address));
-            }
-            if (device && signals.apply_write) {
-                device->device->write8(device->offset(signals.address), signals.data);
-            }
+            apply_deferred_access(signals);
             applied_deferred_access = true;
         }
         last_signals_ = signals;

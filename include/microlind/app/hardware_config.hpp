@@ -75,12 +75,14 @@ struct LogicConfig {
 };
 
 struct HardwareConfig {
+    uint32_t cpu_hz{1'000'000};
     std::vector<RomRegion> roms;
     RamConfig ram;
     SerialConfig serial;
     ParallelConfig parallel;
     VideoConfig video;
     CfConfig cf;
+    CfConfig cf2; // Explicit second controller; no discovery/slot model implied.
     MapperConfig mapper;
     LogicConfig logic;
 };

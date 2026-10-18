@@ -2361,6 +2361,8 @@ CpuMicrocycleStatus Cpu::complete_microcycle(const BusSignals& signals) {
         if (completed_step == 0) {
             regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
         } else if (completed_step == 1) {
+            // Fetch the postbyte before observing or assigning PC, as tick() does.
+            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
             const uint8_t src = static_cast<uint8_t>(signals.data >> 4);
             const uint8_t dst = static_cast<uint8_t>(signals.data & 0x0F);
             if (micro_op_.opcode == 0x1F) {
@@ -2374,7 +2376,6 @@ CpuMicrocycleStatus Cpu::complete_microcycle(const BusSignals& signals) {
                 write_reg_sized(*this, src, right, wide);
                 write_reg_sized(*this, dst, left, wide);
             }
-            regs_.pc = static_cast<uint16_t>(regs_.pc + 1);
         }
         break;
     case MicroOpKind::PrefixedRegisterUnary:

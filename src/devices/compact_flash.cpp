@@ -187,6 +187,7 @@ void CompactFlash::flush_image() {
 }
 
 void CompactFlash::reset_registers() {
+    pending_command_cycles_ = 0;
     error_ = 0;
     features_ = 0;
     sector_count_reg_ = 1;
@@ -287,7 +288,30 @@ void CompactFlash::write8(uint16_t offset, uint8_t value) {
     }
 }
 
+void CompactFlash::tick(uint32_t cycles) {
+    if (!pending_command_cycles_) return;
+    if (cycles < pending_command_cycles_) { pending_command_cycles_ -= cycles; return; }
+    pending_command_cycles_ = 0;
+    execute_command_now(command_);
+}
+
 void CompactFlash::execute_command(uint8_t command) {
+    // IDENTIFY/setup stay immediate; delay READ/WRITE PIO admission only.
+    if (command_delay_cycles_ && (command == CMD_READ_SECTORS || command == CMD_WRITE_SECTORS)) {
+        command_ = command;
+        error_ = 0;
+        status_ = 0x80;
+        transfer_mode_ = TransferMode::None;
+        transfer_buffer_.clear();
+        transfer_index_ = 0;
+        pending_command_cycles_ = command_delay_cycles_;
+        return;
+    }
+    pending_command_cycles_ = 0;
+    execute_command_now(command);
+}
+
+void CompactFlash::execute_command_now(uint8_t command) {
     command_ = command;
     error_ = 0;
     status_ = STATUS_DRDY | STATUS_DSC;

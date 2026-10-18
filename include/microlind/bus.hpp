@@ -117,6 +117,12 @@ class Bus {
 public:
     Bus() = default;
 
+    // Stage-3 behavioral contract; not a model of the unfinished GAL equations.
+    // Opt in for a motherboard profile; generic CPU/flat-memory buses stay ungated.
+    void enable_privilege_gate(bool enabled) { gate_enabled_ = enabled; privileged_ = false; }
+    [[nodiscard]] bool privilege_gate_enabled() const { return gate_enabled_; }
+    [[nodiscard]] bool privileged() const { return privileged_; }
+
     std::optional<BusError> map_device(uint16_t start, uint16_t end, std::unique_ptr<BusDevice> device);
     std::optional<BusError> map_device(
         uint16_t start,
@@ -189,6 +195,9 @@ private:
         BusCycleKind cycle_kind,
         bool log_diagnostics);
     void record_access(BusAccess access);
+    void qualify_vector(const BusSignals& signals);
+    bool permit_write(uint16_t address);
+    void apply_deferred_access(BusSignals& signals);
     void log_decode_issue(std::string message);
 
     std::vector<MappedDevice> devices_{};
@@ -198,6 +207,8 @@ private:
     std::vector<BusSignals> deferred_bus_cycles_{};
     BusSignals last_signals_{};
     uint64_t bus_cycle_count_{};
+    bool gate_enabled_{};
+    bool privileged_{};
     bool defer_bus_cycles_{};
     bool detailed_bus_phases_{true};
     bool access_logging_{true};

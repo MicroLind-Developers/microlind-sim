@@ -32,6 +32,7 @@ Simulator build_sim(
     microlind::devices::CompactFlash** cf_out = nullptr,
     microlind::devices::W65C22** parallel_out = nullptr,
     microlind::devices::Vdc8568** vdc_out = nullptr,
-    std::vector<std::string>* diagnostics_out = nullptr);
+    std::vector<std::string>* diagnostics_out = nullptr,
+    microlind::devices::CompactFlash** cf2_out = nullptr);
 
 } // namespace microlind::cli

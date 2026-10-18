@@ -62,7 +62,7 @@ std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& 
     }
 
     HardwareConfig cfg;
-    enum class Section { None, Rom, Ram, Serial, Parallel, Video, Cf, Mapper, Logic };
+    enum class Section { None, Cpu, Rom, Ram, Serial, Parallel, Video, Cf, Cf2, Mapper, Logic };
     Section section = Section::None;
 
     RomRegion pending_rom{};
@@ -86,12 +86,14 @@ std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& 
         if (line.front() == '[' && line.back() == ']') {
             flush_rom();
             const std::string sect = trim(line.substr(1, line.size() - 2));
-            if (iequals(sect, "ROM")) section = Section::Rom;
+            if (iequals(sect, "CPU")) section = Section::Cpu;
+            else if (iequals(sect, "ROM")) section = Section::Rom;
             else if (iequals(sect, "RAM")) section = Section::Ram;
             else if (iequals(sect, "SERIAL")) section = Section::Serial;
             else if (iequals(sect, "PARALLEL") || iequals(sect, "PAR")) section = Section::Parallel;
             else if (iequals(sect, "VIDEO") || iequals(sect, "VDC")) section = Section::Video;
             else if (iequals(sect, "CF") || iequals(sect, "COMPACT_FLASH")) section = Section::Cf;
+            else if (iequals(sect, "CF2")) section = Section::Cf2;
             else if (iequals(sect, "MEMORY_MAPPER")) section = Section::Mapper;
             else if (iequals(sect, "PLD_LOGIC") || iequals(sect, "LOGIC")) section = Section::Logic;
             else section = Section::None;
@@ -104,7 +106,16 @@ std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& 
         std::string value = trim(line.substr(eq + 1));
         if (key.empty()) continue;
 
-        if (section == Section::Rom) {
+        if (section == Section::Cpu) {
+            if (iequals(key, "CLOCK_HZ")) {
+                const auto hz = parse_number(value);
+                if (!hz || *hz < 100'000 || *hz > 100'000'000) {
+                    error = "Bad CPU CLOCK_HZ at line " + std::to_string(lineno);
+                    return std::nullopt;
+                }
+                cfg.cpu_hz = *hz;
+            }
+        } else if (section == Section::Rom) {
             if (iequals(key, "START")) {
                 if (auto v = parse_number(value)) { pending_rom.start = static_cast<uint16_t>(*v); rom_has_start = true; }
                 else { error = "Bad ROM START at line " + std::to_string(lineno); return std::nullopt; }
@@ -153,18 +164,19 @@ std::optional<HardwareConfig> load_hardware_config(const std::filesystem::path& 
             } else if (iequals(key, "VRAM_SIZE")) {
                 if (auto v = parse_number(value); v && *v > 0) cfg.video.vram_size = *v; else { error = "Bad VIDEO VRAM_SIZE at line " + std::to_string(lineno); return std::nullopt; }
             }
-        } else if (section == Section::Cf) {
-            cfg.cf.present = true;
+        } else if (section == Section::Cf || section == Section::Cf2) {
+            auto& cf = section == Section::Cf ? cfg.cf : cfg.cf2;
+            cf.present = true;
             if (iequals(key, "IO_START_ADDRESS")) {
-                if (auto v = parse_number(value)) cfg.cf.start = static_cast<uint16_t>(*v); else { error = "Bad CF IO_START_ADDRESS at line " + std::to_string(lineno); return std::nullopt; }
+                if (auto v = parse_number(value)) cf.start = static_cast<uint16_t>(*v); else { error = "Bad CF IO_START_ADDRESS at line " + std::to_string(lineno); return std::nullopt; }
             } else if (iequals(key, "IO_END_ADDRESS")) {
-                if (auto v = parse_number(value)) cfg.cf.end = static_cast<uint16_t>(*v); else { error = "Bad CF IO_END_ADDRESS at line " + std::to_string(lineno); return std::nullopt; }
+                if (auto v = parse_number(value)) cf.end = static_cast<uint16_t>(*v); else { error = "Bad CF IO_END_ADDRESS at line " + std::to_string(lineno); return std::nullopt; }
             } else if (iequals(key, "IMAGE") || iequals(key, "IMAGE_PATH")) {
-                cfg.cf.image_path = value;
+                cf.image_path = value;
             } else if (iequals(key, "SECTORS")) {
-                if (auto v = parse_number(value)) cfg.cf.sectors = *v; else { error = "Bad CF SECTORS at line " + std::to_string(lineno); return std::nullopt; }
+                if (auto v = parse_number(value)) cf.sectors = *v; else { error = "Bad CF SECTORS at line " + std::to_string(lineno); return std::nullopt; }
             } else if (iequals(key, "READ_ONLY")) {
-                cfg.cf.read_only = iequals(value, "true") || value == "1" || iequals(value, "yes");
+                cf.read_only = iequals(value, "true") || value == "1" || iequals(value, "yes");
             }
         } else if (section == Section::Mapper) {
             cfg.mapper.present = true;

@@ -187,6 +187,8 @@ public:
     [[nodiscard]] std::optional<uint16_t> return_address_from_stack();
     void add_log(std::string message);
     bool inject_serial_bytes(const std::vector<uint8_t>& bytes);
+    bool set_serial_pty_enabled(bool channel_b, bool enabled);
+    void poll_serial_ports();
     bool set_parallel_input_bits(bool port_a, uint8_t mask, uint8_t value);
     void clear_serial_tx();
     void clear_log();

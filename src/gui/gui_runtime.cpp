@@ -548,6 +548,16 @@ bool GuiRuntime::inject_serial_bytes(const std::vector<uint8_t>& bytes) {
     return session_.inject_serial_bytes(bytes);
 }
 
+bool GuiRuntime::set_serial_pty_enabled(bool channel_b, bool enabled) {
+    std::lock_guard lock(mutex_);
+    return session_.set_serial_pty_enabled(channel_b, enabled);
+}
+
+void GuiRuntime::poll_serial_ports() {
+    std::lock_guard lock(mutex_);
+    session_.poll_serial_ports();
+}
+
 bool GuiRuntime::set_parallel_input_bits(bool port_a, uint8_t mask, uint8_t value) {
     if (true_run_active()) {
         auto command = std::make_shared<RuntimeCommand>(RuntimeCommand::Kind::SetParallelInputBits);

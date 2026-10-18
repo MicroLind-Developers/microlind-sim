@@ -29,6 +29,8 @@ TEST(ConfigEditorTest, NewBoardDefaultsValidateAndRoundTripAllDeviceSettings) {
     editor.config.logic = {"signal.pld", "memory.pld", "address.pld", microlind::BusDecodeMode::Validate, true};
     editor.config.cf.image_path = "disk image.img";
     editor.config.cf.read_only = true;
+    editor.config.cpu_hz = 3000000;
+    editor.config.cf2 = {0xF640,0xF647,"second disk.img",256,false,true};
     editor.config.parallel.irq_level = 3;
     const auto resolved = editor.effective_config();
     const auto filename = microlind::test::test_output_path("config-editor-roundtrip.cfg");
@@ -43,6 +45,10 @@ TEST(ConfigEditorTest, NewBoardDefaultsValidateAndRoundTripAllDeviceSettings) {
     EXPECT_EQ(loaded->parallel.irq_level, 3);
     EXPECT_EQ(loaded->video.vram_size, 65536);
     EXPECT_TRUE(loaded->cf.read_only);
+    EXPECT_EQ(loaded->cpu_hz,3000000u);
+    EXPECT_TRUE(loaded->cf2.present);
+    EXPECT_EQ(loaded->cf2.start,0xF640);
+    EXPECT_EQ(loaded->cf2.sectors,256u);
     EXPECT_EQ(loaded->mapper.windows[3].end, 0xDFFF);
     EXPECT_EQ(std::filesystem::absolute(loaded->cf.image_path).lexically_normal(), resolved.cf.image_path);
     EXPECT_EQ(std::filesystem::absolute(loaded->logic.signal_logic_path).lexically_normal(), resolved.logic.signal_logic_path);

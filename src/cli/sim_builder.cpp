@@ -129,8 +129,9 @@ Simulator build_sim(
     microlind::devices::CompactFlash** cf_out,
     microlind::devices::W65C22** parallel_out,
     microlind::devices::Vdc8568** vdc_out,
-    std::vector<std::string>* diagnostics_out) {
-    Simulator sim(mode, 1000000);
+    std::vector<std::string>* diagnostics_out,
+    microlind::devices::CompactFlash** cf2_out) {
+    Simulator sim(mode, cfg ? cfg->cpu_hz : 1'000'000);
     using microlind::devices::BankedMemory;
     using microlind::devices::CompactFlash;
     using microlind::devices::InterruptController;
@@ -148,6 +149,7 @@ Simulator build_sim(
     InterruptController* irq_controller_raw = nullptr;
     std::unique_ptr<InterruptController> irq_controller;
     CompactFlash* cf_dev_raw = nullptr;
+    CompactFlash* cf2_dev_raw = nullptr;
     W65C22* parallel_dev_raw = nullptr;
     Vdc8568* vdc_dev_raw = nullptr;
     std::shared_ptr<microlind::logic::BoardLogicDevices> logic_devices;
@@ -331,7 +333,7 @@ Simulator build_sim(
                 irq_controller_raw->clear(irq_level);
             }
         };
-        auto serial_up = std::make_unique<XR88C92>(on_tx, on_irq);
+        auto serial_up = std::make_unique<XR88C92>(on_tx, on_irq, sim.clock().frequency_hz());
         serial_dev_raw = serial_up.get();
         sim.map_device(cfg->serial.start, cfg->serial.end, BusDeviceSelect::Serial, std::move(serial_up));
     }
@@ -358,21 +360,27 @@ Simulator build_sim(
         sim.map_device(cfg->video.start, cfg->video.end, BusDeviceSelect::Video, std::move(vdc_up));
     }
 
-    if (cfg && cfg->cf.present) {
+    if (cfg) {
+      for (const auto* cf : {&cfg->cf, &cfg->cf2}) {
+        if (!cf->present) continue;
         CompactFlash::Options options;
-        options.image_path = cfg->cf.image_path;
-        if (cfg->cf.sectors > 0) {
-            options.sectors = cfg->cf.sectors;
-        } else if (!cfg->cf.image_path.empty()) {
+        options.image_path = cf->image_path;
+        if (cf->sectors > 0) {
+            options.sectors = cf->sectors;
+        } else if (!cf->image_path.empty()) {
             options.sectors = 0;
         }
-        options.read_only = cfg->cf.read_only;
+        options.read_only = cf->read_only;
         auto cf_up = std::make_unique<CompactFlash>(std::move(options));
-        cf_dev_raw = cf_up.get();
-        sim.map_device(cfg->cf.start, cfg->cf.end, BusDeviceSelect::CompactFlash, std::move(cf_up));
+        if (cf == &cfg->cf) cf_dev_raw = cf_up.get();
+        else cf2_dev_raw = cf_up.get();
+        sim.map_device(cf->start, cf->end, BusDeviceSelect::CompactFlash, std::move(cf_up));
+    }
     }
 
     if (cfg && cfg->mapper.present && mapper_state) {
+        // This is the stage-3 motherboard profile, including the fixed F405 latch.
+        sim.bus().enable_privilege_gate(true);
         std::vector<uint16_t> addrs;
         for (int i = 0; i < 4; ++i) {
             if (cfg->mapper.bank_reg[i] != 0) addrs.push_back(cfg->mapper.bank_reg[i]);
@@ -446,6 +454,7 @@ Simulator build_sim(
     if (cf_out) {
         *cf_out = cf_dev_raw;
     }
+    if (cf2_out) *cf2_out = cf2_dev_raw;
     if (parallel_out) {
         *parallel_out = parallel_dev_raw;
     }

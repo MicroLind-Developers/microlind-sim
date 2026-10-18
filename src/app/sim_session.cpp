@@ -102,6 +102,7 @@ SimSession::SimSession(CpuMode mode)
           &cf_dev_,
           &parallel_dev_,
           &vdc_dev_)) {
+    bind_serial_b();
     add_log("Session ready.");
 }
 
@@ -211,6 +212,7 @@ void SimSession::reset() {
 }
 
 CpuTickResult SimSession::step_instruction() {
+    poll_serial_ports();
     const uint16_t pc = sim_.cpu().regs().pc;
     const auto disasm = cli::disassemble(sim_.bus(), sim_.cpu(), pc);
     sim_.bus().clear_access_log();
@@ -220,10 +222,12 @@ CpuTickResult SimSession::step_instruction() {
     for (const auto& diagnostic : sim_.bus().decode_log()) {
         add_log(diagnostic);
     }
+    poll_serial_ports();
     return result;
 }
 
 SimulatorMicrocycleResult SimSession::step_microcycle() {
+    poll_serial_ports();
     const uint16_t pc = sim_.cpu().regs().pc;
     const auto disasm = cli::disassemble(sim_.bus(), sim_.cpu(), pc);
     sim_.bus().clear_access_log();
@@ -241,6 +245,7 @@ SimulatorMicrocycleResult SimSession::step_microcycle() {
     for (const auto& diagnostic : sim_.bus().decode_log()) {
         add_log(diagnostic);
     }
+    poll_serial_ports();
     return result;
 }
 
@@ -284,6 +289,7 @@ RunResult SimSession::run_microcycles(uint32_t count, StepObserver after_step) {
 }
 
 RealtimeRunResult SimSession::run_realtime_cycles(uint64_t cycle_budget, StepObserver after_step) {
+    poll_serial_ports();
     RealtimeRunResult result;
     if (cycle_budget == 0) return result;
 
@@ -293,12 +299,14 @@ RealtimeRunResult SimSession::run_realtime_cycles(uint64_t cycle_budget, StepObs
     while (result.cycles < cycle_budget) {
         const CpuTickResult tick = sim_.tick();
         ++result.instructions;
+        if ((result.instructions % 256) == 0) poll_serial_ports();
         if (after_step) after_step();
         if (tick.cycles == 0) break;
         result.cycles += tick.cycles;
     }
     sim_.bus().clear_access_log();
     sim_.bus().clear_decode_log();
+    poll_serial_ports();
     return result;
 }
 
@@ -393,8 +401,45 @@ bool SimSession::inject_serial_bytes(const std::vector<uint8_t>& bytes) {
     return true;
 }
 
+bool SimSession::set_serial_pty_enabled(bool channel_b, bool enabled) {
+    auto& port = serial_ports_[channel_b ? 1 : 0];
+    const std::string label = channel_b ? "B" : "A";
+    if (!enabled) {
+        port.close();
+        add_log("Serial " + label + " PTY disabled.");
+        return true;
+    }
+    if (!serial_dev_) {
+        add_log("No serial device is mapped.");
+        return false;
+    }
+    if (!port.open()) {
+        add_log("Serial " + label + ": " + port.error());
+        return false;
+    }
+    add_log("Serial " + label + " PTY: " + port.path());
+    return true;
+}
+
+void SimSession::poll_serial_ports() {
+    if (!serial_dev_) return;
+    for (std::size_t channel = 0; channel < serial_ports_.size(); ++channel) {
+        auto& port = serial_ports_[channel];
+        if (!port.is_open()) continue;
+        port.poll([this, channel](uint8_t value) {
+            if (channel == 0) serial_dev_->inject_rx(value);
+            else serial_dev_->inject_rx_b(value);
+        });
+        if (!port.is_open()) add_log(port.error());
+    }
+}
+
 SerialSnapshot SimSession::serial_snapshot() const {
     SerialSnapshot snapshot;
+    for (std::size_t channel = 0; channel < serial_ports_.size(); ++channel) {
+        snapshot.pty_paths[channel] = serial_ports_[channel].path();
+        snapshot.pty_errors[channel] = serial_ports_[channel].error();
+    }
     snapshot.present = serial_dev_ != nullptr;
     if (!serial_dev_) {
         return snapshot;
@@ -848,13 +893,28 @@ void SimSession::rebuild(std::string reason) {
         &parallel_dev_,
         &vdc_dev_,
         &diagnostics);
+    bind_serial_b();
+    if (!serial_dev_) {
+        for (auto& port : serial_ports_) port.close();
+    }
     for (const auto& diagnostic : diagnostics) {
         add_log(diagnostic);
     }
     add_log(std::move(reason));
 }
 
-void SimSession::on_serial_tx(uint8_t value) {
+void SimSession::bind_serial_b() {
+    if (serial_dev_) {
+        serial_dev_->set_tx_b_callback([this](uint8_t value) { on_serial_tx(value, true); });
+    }
+}
+
+void SimSession::on_serial_tx(uint8_t value, bool channel_b) {
+    auto& port = serial_ports_[channel_b ? 1 : 0];
+    const bool was_open = port.is_open();
+    port.transmit(value);
+    if (was_open && !port.is_open()) add_log(port.error());
+    if (channel_b) return;
     serial_tx_.push_back(value);
     if (serial_tx_.size() > 8192) {
         serial_tx_.erase(

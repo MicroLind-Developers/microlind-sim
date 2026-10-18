@@ -187,6 +187,29 @@ void draw_serial(GuiState& state) {
     draw_power_led(serial);
     ImGui::Separator();
 
+    ImGui::BeginDisabled(!snapshot.serial_mapped || !app::SerialPty::supported());
+    for (int channel = 0; channel < 2; ++channel) {
+        ImGui::PushID(channel);
+        const auto& path = serial.pty_paths[channel];
+        bool enabled = !path.empty();
+        if (ImGui::Checkbox(channel == 0 ? "Virtual port A" : "Virtual port B", &enabled)) {
+            state.runtime.set_serial_pty_enabled(channel == 1, enabled);
+        }
+        if (!path.empty()) {
+            ImGui::SameLine();
+            ImGui::TextUnformatted(path.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Copy picocom command")) {
+                ImGui::SetClipboardText(("picocom --baud 115200 --flow n " + path).c_str());
+            }
+        }
+        if (!serial.pty_errors[channel].empty()) ImGui::TextWrapped("%s", serial.pty_errors[channel].c_str());
+        ImGui::PopID();
+    }
+    ImGui::EndDisabled();
+    if (!app::SerialPty::supported()) ImGui::TextDisabled("Virtual serial ports require Unix.");
+    ImGui::Separator();
+
     ImGui::BeginDisabled(!snapshot.serial_mapped);
     ImGui::Checkbox("Hex RX", &state.serial_rx_hex);
     ImGui::SameLine();
@@ -212,7 +235,7 @@ void draw_serial(GuiState& state) {
     ImGui::Checkbox("Hex view", &state.serial_hex_view);
 
     ImGui::Separator();
-    ImGui::TextUnformatted("TX");
+    ImGui::TextUnformatted("TX (channel A)");
     ImGui::BeginChild("serial_tx", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
     const auto& tx = snapshot.serial_tx;
     if (state.serial_hex_view) {

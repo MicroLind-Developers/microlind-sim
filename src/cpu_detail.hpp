@@ -1825,6 +1825,8 @@ BusSignals read_cycle(uint16_t address, BusCycleKind kind) {
     signals.address = address;
     signals.data = 0xFF;
     signals.cycle_kind = kind;
+    signals.ba = false;
+    signals.bs = kind == BusCycleKind::VectorRead;
     signals.apply_read = true;
     signals.log_access = true;
     return signals;
@@ -1832,6 +1834,8 @@ BusSignals read_cycle(uint16_t address, BusCycleKind kind) {
 
 BusSignals write_cycle(uint16_t address, uint8_t value, BusCycleKind kind) {
     BusSignals signals;
+    signals.ba = false;
+    signals.bs = false;
     signals.rw = false;
     signals.memory_enable = true;
     signals.address = address;

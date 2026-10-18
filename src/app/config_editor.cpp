@@ -23,7 +23,7 @@ std::filesystem::path resolve(const std::filesystem::path& value, const std::fil
 }
 
 void relative_paths(cli::HardwareConfig& config, const std::filesystem::path& directory) {
-    for (auto* value : {&config.cf.image_path, &config.logic.signal_logic_path,
+    for (auto* value : {&config.cf.image_path, &config.cf2.image_path, &config.logic.signal_logic_path,
                        &config.logic.memory_logic_path, &config.logic.address_logic_path}) {
         if (!value->empty()) {
             const auto relative = absolute_path(*value).lexically_relative(directory);
@@ -48,12 +48,14 @@ std::string section_name(std::string name) {
 }
 
 const std::map<std::string, std::set<std::string>> known_keys{
+    {"CPU", {"CLOCK_HZ"}},
     {"ROM", {"START", "END"}},
     {"RAM", {"START", "END", "BANK_SIZE", "AVAILABLE"}},
     {"SERIAL", {"IO_START_ADDRESS", "IO_END_ADDRESS", "IRQ_LEVEL"}},
     {"PARALLEL", {"IO_START_ADDRESS", "IO_END_ADDRESS", "IRQ_LEVEL"}},
     {"VIDEO", {"IO_START_ADDRESS", "IO_END_ADDRESS", "VRAM_SIZE"}},
     {"CF", {"IO_START_ADDRESS", "IO_END_ADDRESS", "SECTORS", "IMAGE", "IMAGE_PATH", "READ_ONLY"}},
+    {"CF2", {"IO_START_ADDRESS", "IO_END_ADDRESS", "SECTORS", "IMAGE", "IMAGE_PATH", "READ_ONLY"}},
     {"MEMORY_MAPPER", {"BANK_0_REGISTER", "BANK_1_REGISTER", "BANK_2_REGISTER", "BANK_3_REGISTER",
         "WINDOW_0", "WINDOW_1", "WINDOW_2", "WINDOW_3", "WINDOW_0_START", "WINDOW_0_END",
         "WINDOW_1_START", "WINDOW_1_END", "WINDOW_2_START", "WINDOW_2_END", "WINDOW_3_START", "WINDOW_3_END"}},
@@ -104,6 +106,7 @@ std::vector<ConfigAddressRange> config_address_map(const cli::HardwareConfig& co
     if (config.parallel.present) result.push_back({"PARALLEL", "Parallel I/O", config.parallel.start, config.parallel.end});
     if (config.video.present) result.push_back({"VIDEO", "VDC", config.video.start, config.video.end});
     if (config.cf.present) result.push_back({"CF", "CompactFlash", config.cf.start, config.cf.end});
+    if (config.cf2.present) result.push_back({"CF2", "CompactFlash 2", config.cf2.start, config.cf2.end});
     if (banked) {
         uint16_t first = 0xFFFF, last = 0;
         for (auto address : config.mapper.bank_reg) if (address) {
@@ -142,6 +145,8 @@ std::vector<ConfigIssue> validate_config(const cli::HardwareConfig& config) {
         if (config.video.vram_size != 65536) add("VIDEO", "The VDC currently requires 65536 bytes of VRAM.");
     }
     if (config.cf.present) range("CF", config.cf.start, config.cf.end, 8);
+    if (config.cf2.present) range("CF2", config.cf2.start, config.cf2.end, 8);
+    if (config.cpu_hz < 100000 || config.cpu_hz > 100000000) add("CPU", "Clock must be100 kHz through100 MHz.");
     if (config.mapper.present) {
         if (!config.ram.present || !config.ram.bank_size || !config.ram.available)
             add("MEMORY_MAPPER", "Enable RAM and set bank size and backing size to use the mapper.");
@@ -173,6 +178,7 @@ std::vector<ConfigIssue> validate_config(const cli::HardwareConfig& config) {
     }
     for (const auto& [section, path] : std::vector<std::pair<std::string, std::filesystem::path>>{
             {"CF", config.cf.present ? config.cf.image_path : std::filesystem::path{}},
+            {"CF2", config.cf2.present ? config.cf2.image_path : std::filesystem::path{}},
             {"PLD_LOGIC", config.logic.present ? config.logic.signal_logic_path : std::filesystem::path{}},
             {"PLD_LOGIC", config.logic.present ? config.logic.memory_logic_path : std::filesystem::path{}},
             {"PLD_LOGIC", config.logic.present ? config.logic.address_logic_path : std::filesystem::path{}}}) {
@@ -226,6 +232,7 @@ std::string serialize_config(const cli::HardwareConfig& config, const std::files
         const auto relative = absolute_path(value).lexically_relative(absolute_path(destination).parent_path());
         return (relative.empty() ? value : relative).generic_string();
     };
+    emit("CPU", "CLOCK_HZ=" + std::to_string(config.cpu_hz) + '\n');
     for (std::size_t i = 0; i < config.roms.size(); ++i) emit("ROM",
         "START=" + hex(config.roms[i].start) + "\nEND=" + hex(config.roms[i].end) + '\n', "ROM" + std::to_string(i));
     if (config.ram.present) emit("RAM", "START=" + hex(config.ram.start) + "\nEND=" + hex(config.ram.end) +
@@ -235,6 +242,8 @@ std::string serialize_config(const cli::HardwareConfig& config, const std::files
     if (config.video.present) emit("VIDEO", io(config.video) + "VRAM_SIZE=" + std::to_string(config.video.vram_size) + '\n');
     if (config.cf.present) emit("CF", io(config.cf) + "SECTORS=" + std::to_string(config.cf.sectors) +
         "\nIMAGE=" + file_path(config.cf.image_path) + "\nREAD_ONLY=" + (config.cf.read_only ? "true\n" : "false\n"));
+    if (config.cf2.present) emit("CF2", io(config.cf2) + "SECTORS=" + std::to_string(config.cf2.sectors) +
+        "\nIMAGE=" + file_path(config.cf2.image_path) + "\nREAD_ONLY=" + (config.cf2.read_only ? "true\n" : "false\n"));
     if (config.mapper.present) {
         std::string content;
         for (int i = 0; i < 4; ++i) {
@@ -302,6 +311,7 @@ cli::HardwareConfig ConfigEditor::effective_config() const {
     if (!rom_enabled) result.roms.clear();
     const auto directory = path.empty() ? std::filesystem::current_path() : path.parent_path();
     result.cf.image_path = resolve(result.cf.image_path, directory);
+    result.cf2.image_path = resolve(result.cf2.image_path, directory);
     result.logic.signal_logic_path = resolve(result.logic.signal_logic_path, directory);
     result.logic.memory_logic_path = resolve(result.logic.memory_logic_path, directory);
     result.logic.address_logic_path = resolve(result.logic.address_logic_path, directory);
@@ -347,7 +357,7 @@ bool ConfigEditor::save(const std::filesystem::path& destination, std::string& e
     }
     // Rebase draft paths as well, including values of temporarily disabled devices.
     const auto old_directory = path.empty() ? std::filesystem::current_path() : path.parent_path();
-    for (auto* value : {&config.cf.image_path, &config.logic.signal_logic_path,
+    for (auto* value : {&config.cf.image_path, &config.cf2.image_path, &config.logic.signal_logic_path,
                        &config.logic.memory_logic_path, &config.logic.address_logic_path}) *value = resolve(*value, old_directory);
     relative_paths(config, filename.parent_path());
     path = filename;

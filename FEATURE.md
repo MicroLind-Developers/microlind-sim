@@ -84,6 +84,10 @@ The simulator GUI is an ImGui/SDL application that runs beside the CLI and provi
   non-interlaced eight-pixel cells; scrolling and interlace remain deferred.
 - Serial panel with terminal view, raw hex view, RX text injection, RX hex-byte
   injection, TX clear, output-port byte display, and RGB power LED display.
+- Independent Unix virtual serial ports for XR88C92 channels A and B, with
+  bidirectional binary PTYs, channel B receive/interrupt support, picocom
+  command copying, and port lifetime spanning resets and hardware reloads.
+  CLI `--serial-pty` exposes both channels before guest execution.
 
 ## Diagnostics
 

@@ -51,6 +51,9 @@ public:
     uint8_t read8(uint16_t offset) override;
     uint8_t peek8(uint16_t offset) override;
     void write8(uint16_t offset, uint8_t value) override;
+    void tick(uint32_t cycles) override;
+    // Optional deterministic data-command latency for controller concurrency tests.
+    void set_command_delay_cycles(uint32_t cycles) { command_delay_cycles_ = cycles; }
 
     bool load_disk_image(const std::filesystem::path& path, std::string* error = nullptr);
     bool load_disk_image(const std::filesystem::path& path, uint32_t minimum_sectors, std::string* error = nullptr);
@@ -68,6 +71,7 @@ private:
     void flush_image();
     void reset_registers();
     void execute_command(uint8_t command);
+    void execute_command_now(uint8_t command);
     void set_error(uint8_t error);
     void finish_command();
 
@@ -100,6 +104,8 @@ private:
     std::size_t transfer_index_{0};
     uint32_t write_lba_{0};
     uint32_t write_sector_count_{0};
+    uint32_t command_delay_cycles_{0};
+    uint32_t pending_command_cycles_{0};
 };
 
 } // namespace microlind::devices

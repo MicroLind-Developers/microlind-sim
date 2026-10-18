@@ -40,6 +40,7 @@ add_library(microlind-sim-app
     src/app/config_editor.cpp
     src/app/logic_validation.cpp
     src/app/session_file.cpp
+    src/app/serial_pty.cpp
     src/app/sim_session.cpp
     src/app/vdc_render.cpp
     src/cli/disassembler.cpp
@@ -75,6 +76,7 @@ if(BUILD_TESTING)
 
     add_executable(microlind-sim-tests
         tests/test_bus.cpp
+        tests/test_privilege_gate.cpp
         tests/test_config_editor.cpp
         tests/test_cpu.cpp
         tests/test_integration.cpp
@@ -82,6 +84,7 @@ if(BUILD_TESTING)
         tests/test_gui_runtime.cpp
         tests/test_microcycle.cpp
         tests/test_sim_session.cpp
+        tests/test_serial_pty.cpp
         tests/test_vdc_render.cpp
         tests/test_vdc.cpp
         src/gui/gui_runtime.cpp

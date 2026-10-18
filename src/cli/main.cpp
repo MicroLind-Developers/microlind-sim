@@ -1,4 +1,5 @@
 #include <cctype>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -14,6 +15,7 @@
 #include "microlind/app/hardware_config.hpp"
 #include "microlind/app/image_loader.hpp"
 #include "microlind/app/logic_validation.hpp"
+#include "microlind/app/serial_pty.hpp"
 #include "microlind/app/sim_builder.hpp"
 #include "microlind/app/util.hpp"
 
@@ -111,6 +113,7 @@ int main(int argc, char** argv) {
     std::filesystem::path rom_path;
     std::filesystem::path config_path;
     bool verbose = false;
+    bool use_serial_pty = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg{argv[i]};
@@ -128,6 +131,13 @@ int main(int argc, char** argv) {
             config_path = argv[++i];
         } else if (arg == "--verbose") {
             verbose = true;
+        } else if (arg == "--serial-pty") {
+            use_serial_pty = true;
+        } else if (arg == "--help" || arg == "-h") {
+            std::cout << "Usage: microlind-sim-cli [--6309|--6809] [--rom path] [--ihex|--srec]\n"
+                      << "                         [--config path] [--verbose] [--serial-pty]\n"
+                      << "  --serial-pty creates separate virtual serial ports for UART A and B (Unix).\n";
+            return 0;
         }
     }
 
@@ -166,10 +176,51 @@ int main(int argc, char** argv) {
         &build_diagnostics);
     print_build_diagnostics(build_diagnostics);
 
+    std::array<microlind::app::SerialPty, 2> serial_ports;
+    auto transmit_serial = [&](std::size_t channel, uint8_t value) {
+        auto& port = serial_ports[channel];
+        const bool was_open = port.is_open();
+        port.transmit(value);
+        if (was_open && !port.is_open()) std::cerr << port.error() << '\n';
+    };
+    auto bind_serial_ports = [&] {
+        if (!use_serial_pty || !serial_dev) return;
+        serial_dev->set_tx_a_callback([&](uint8_t value) { transmit_serial(0, value); });
+        serial_dev->set_tx_b_callback([&](uint8_t value) { transmit_serial(1, value); });
+    };
+    auto poll_serial_ports = [&] {
+        if (!serial_dev) return;
+        for (std::size_t channel = 0; channel < serial_ports.size(); ++channel) {
+            auto& port = serial_ports[channel];
+            const bool was_open = port.is_open();
+            port.poll([&, channel](uint8_t value) {
+                if (channel == 0) serial_dev->inject_rx(value);
+                else serial_dev->inject_rx_b(value);
+            });
+            if (was_open && !port.is_open()) std::cerr << port.error() << '\n';
+        }
+    };
+    if (use_serial_pty) {
+        if (!serial_dev) {
+            std::cerr << "--serial-pty requires a hardware config with a SERIAL device.\n";
+            return 1;
+        }
+        for (std::size_t channel = 0; channel < serial_ports.size(); ++channel) {
+            auto& port = serial_ports[channel];
+            if (!port.open()) {
+                std::cerr << port.error() << '\n';
+                return 1;
+            }
+            std::cout << "Serial " << (channel == 0 ? 'A' : 'B') << " PTY: " << port.path() << '\n';
+        }
+        bind_serial_ports();
+    }
+
     std::cout << "Microlind-sim interactive CLI. Type 'help' for commands.\n";
 
     std::string line;
     while (std::cout << "> " && std::getline(std::cin, line)) {
+        poll_serial_ports();
         std::istringstream iss(line);
         std::string cmd;
         if (!(iss >> cmd)) continue;
@@ -204,6 +255,7 @@ int main(int argc, char** argv) {
                 }
             }
             for (int i = 0; i < n; ++i) {
+                if (use_serial_pty && (i % 256 == 0)) poll_serial_ports();
                 if (verbose) {
                     uint16_t pc = sim.cpu().regs().pc;
                     auto dasm = disassemble(sim.bus(), sim.cpu(), pc);
@@ -230,6 +282,7 @@ int main(int argc, char** argv) {
                     sim.tick();
                 }
             }
+            poll_serial_ports();
             if (!verbose) {
                 std::cout << "PC=" << std::hex << std::setw(4) << sim.cpu().regs().pc
                           << " cycles=" << std::dec << sim.clock().total_cycles() << "\n";
@@ -241,9 +294,11 @@ int main(int argc, char** argv) {
                 if (auto v = parse_number(nstr)) n = *v;
             }
             for (uint64_t i = 0; i < n; ++i) {
+                if (use_serial_pty && (i % 256 == 0)) poll_serial_ports();
                 const auto result = sim.tick_microcycle();
                 print_microcycle_result(result, sim);
             }
+            poll_serial_ports();
         } else if (cmd == "tick") {
             uint64_t n = 1;
             std::string nstr;
@@ -307,6 +362,7 @@ int main(int argc, char** argv) {
             if (!current_image) { std::cout << "Failed to load image\n"; continue; }
             build_diagnostics.clear();
             sim = build_sim(mode, &*current_image, hw_cfg ? &*hw_cfg : nullptr, &serial_dev, nullptr, nullptr, nullptr, nullptr, nullptr, &build_diagnostics);
+            bind_serial_ports();
             print_build_diagnostics(build_diagnostics);
             std::cout << "Image loaded and CPU reset.\n";
         } else if (cmd == "loadcfg") {
@@ -321,6 +377,7 @@ int main(int argc, char** argv) {
             hw_cfg = std::move(cfg);
             build_diagnostics.clear();
             sim = build_sim(mode, current_image ? &*current_image : nullptr, hw_cfg ? &*hw_cfg : nullptr, &serial_dev, nullptr, nullptr, nullptr, nullptr, nullptr, &build_diagnostics);
+            bind_serial_ports();
             print_build_diagnostics(build_diagnostics);
             std::cout << "Hardware config loaded and CPU reset.\n";
         } else if (cmd == "loadcf") {
@@ -348,6 +405,7 @@ int main(int argc, char** argv) {
             }
             build_diagnostics.clear();
             sim = build_sim(mode, current_image ? &*current_image : nullptr, hw_cfg ? &*hw_cfg : nullptr, &serial_dev, nullptr, nullptr, nullptr, nullptr, nullptr, &build_diagnostics);
+            bind_serial_ports();
             print_build_diagnostics(build_diagnostics);
             std::cout << "CF disk image loaded and CPU reset.\n";
         } else if (cmd == "pldcfg") {
@@ -418,6 +476,7 @@ int main(int argc, char** argv) {
         } else {
             std::cout << "Unknown command. Type 'help'.\n";
         }
+        poll_serial_ports();
     }
 
     return 0;

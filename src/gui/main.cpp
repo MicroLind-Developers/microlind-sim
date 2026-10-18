@@ -220,6 +220,8 @@ int run_gui() {
             }
         }
 
+        state.runtime.poll_serial_ports();
+
         if (state.true_running()) {
             operation_budget = 0.0;
         } else {

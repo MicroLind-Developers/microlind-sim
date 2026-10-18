@@ -70,6 +70,46 @@ editable memory-mapper registers, instruction trace, mapped-device display,
 CompactFlash state, live PLD/bus decode, and an event log. The trace window is
 updated for both regular stepping and completed micro-stepped instructions.
 
+## Virtual serial consoles (Unix)
+
+Both XR88C92 channels can connect to external terminals through independent
+PTY devices. In the GUI's **Serial** panel, enable **Virtual port A** and/or
+**Virtual port B**. Each shows its device path and a button to copy a picocom
+command. Open the terminals before resetting and starting **True Run** to see
+the guest's boot output from the beginning. The guest firmware determines what
+each channel prints; it must initialize and use that UART channel.
+
+For example, if the panel shows `/dev/pts/7` and `/dev/pts/8`, open separate
+host terminals:
+
+```sh
+picocom --baud 115200 --flow n /dev/pts/7
+picocom --baud 115200 --flow n /dev/pts/8
+```
+
+Linux PuTTY can use the same paths with connection type **Serial**, speed
+115200, 8 data bits, no parity, 1 stop bit, and flow control **None**. PTY baud
+settings do not throttle simulated UART traffic. These are local Unix device
+paths; Windows PuTTY would need a separate network or virtual COM bridge.
+
+The CLI can create both ports at startup with:
+
+```sh
+./build/microlind-sim-cli --config examples/hw.cfg --rom path/to/bios.rom --serial-pty
+```
+
+It prints both device paths before executing any guest instructions. Connect
+your terminals, then use CLI `run <instruction-count>` to execute the guest.
+Input is serviced while the guest executes; the CLI does not execute the guest
+while waiting at its command prompt.
+
+Each port carries raw bytes in both directions, independently of the other
+channel. Ports stay available across guest resets, ROM/config reloads that
+retain the serial device, and terminal disconnect/reconnect. Disable a port or
+exit the simulator to remove it. The GUI continues to display channel A TX.
+Slow or disconnected terminals never block simulation: pending output is
+buffered up to 1 MiB per port, after which the port closes with an error.
+
 ## Hardware config
 `examples/hw.cfg` maps the current microLind memory and I/O layout: ROM, RAM,
 XR88C92 serial, CompactFlash, memory mapper windows, board IRQ register, and

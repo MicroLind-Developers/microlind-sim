@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
@@ -15,6 +16,7 @@
 
 #include "microlind/app/hardware_config.hpp"
 #include "microlind/app/image_loader.hpp"
+#include "microlind/app/serial_pty.hpp"
 #include "microlind/logic.hpp"
 
 namespace microlind::devices {
@@ -124,6 +126,8 @@ struct SerialSnapshot {
     bool led_green{};
     bool led_blue{};
     bool irq_asserted{};
+    std::array<std::string, 2> pty_paths;
+    std::array<std::string, 2> pty_errors;
 };
 
 struct ParallelSnapshot {
@@ -243,6 +247,8 @@ public:
 
     bool inject_serial_text(std::string_view text);
     bool inject_serial_bytes(const std::vector<uint8_t>& bytes);
+    bool set_serial_pty_enabled(bool channel_b, bool enabled);
+    void poll_serial_ports();
 
     bool add_breakpoint(uint16_t address, std::string label = {});
     bool remove_breakpoint(uint16_t address);
@@ -290,7 +296,8 @@ public:
 
 private:
     void rebuild(std::string reason);
-    void on_serial_tx(uint8_t value);
+    void on_serial_tx(uint8_t value, bool channel_b = false);
+    void bind_serial_b();
     void record_trace(uint16_t pc, std::string instruction, CpuTickResult result);
     bool check_breakpoint(uint32_t executed, RunResult& result);
     bool check_target(uint16_t address, uint32_t executed, RunResult& result);
@@ -308,6 +315,7 @@ private:
     std::string logic_error_;
     Simulator sim_;
     std::vector<uint8_t> serial_tx_;
+    std::array<SerialPty, 2> serial_ports_;
     std::vector<Breakpoint> breakpoints_;
     std::vector<Watchpoint> watchpoints_;
     std::vector<InstructionTraceEntry> trace_;
